@@ -493,6 +493,13 @@ CREATE TABLE IF NOT EXISTS `user_token` (
     INDEX `idx_user_token_user` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户Token表';
 
+ALTER TABLE `user`
+    ADD COLUMN `uid` VARCHAR(50) COMMENT '业务用户ID' AFTER `id`,
+    ADD COLUMN `nickname` VARCHAR(100) COMMENT '昵称' AFTER `role`,
+    ADD COLUMN `avatar` VARCHAR(255) COMMENT '头像URL' AFTER `nickname`,
+    CHANGE COLUMN `password` `password_hash` VARCHAR(100) COMMENT '密码（BCrypt加密）',
+    MODIFY COLUMN `username` VARCHAR(50) NULL COMMENT '用户名';
+
 -- ===================================
 -- 插入测试数据（可选）
 -- ===================================
