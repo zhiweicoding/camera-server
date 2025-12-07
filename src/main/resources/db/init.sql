@@ -515,3 +515,8 @@ INSERT INTO `user` (`username`, `password`, `email`, `role`) VALUES
 ('admin', '$2a$10$example_hashed_password', 'admin@example.com', 3),
 ('testuser', '$2a$10$example_hashed_password', 'test@example.com', 1)
 ON DUPLICATE KEY UPDATE `updated_at` = CURRENT_TIMESTAMP;
+
+
+INSERT INTO `user` (`uid`, `username`, `password_hash`, `email`, `role`, `nickname`) VALUES
+    ('user_admin', 'admin', '$2a$10$N9qo8uLOickgx2ZMRZoMy.MqrqZv0dXvqKQHQxJqK7KDQX0vXoHKi', 'admin@example.com', 3, '管理员')
+ON DUPLICATE KEY UPDATE `password_hash` = '$2a$10$N9qo8uLOickgx2ZMRZoMy.MqrqZv0dXvqKQHQxJqK7KDQX0vXoHKi';
