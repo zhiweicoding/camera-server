@@ -18,8 +18,11 @@ import com.pura365.camera.repository.CloudVideoRepository;
 import com.pura365.camera.repository.UserDeviceRepository;
 import com.pura365.camera.service.CloudStorageService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.InputStream;
 import java.math.BigDecimal;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -247,6 +250,57 @@ public class CloudController {
         return ApiResponse.success(response);
     }
     
+    /**
+     * 手动上传视频文件到云存储（用于测试）
+     * - 用 S3 兼容方式直接 PUT 到七牛云 / Vultr
+     * - 使用的 endpoint/region/AK/SK 与下发给摄像头的配置保持一致（不在响应里返回密钥）
+     */
+    @Operation(summary = "手动上传视频文件到云存储", description = "用于联调：通过 S3 兼容接口把文件上传到云存储。bucket/key 可选，不传则使用默认 bucket 并自动生成 key。")
+    @PostMapping(value = "/upload-test", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<ManualUploadResponse> uploadTest(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @RequestParam("device_id") String deviceId,
+            @RequestPart("file") MultipartFile file,
+            @RequestParam(value = "bucket", required = false) String bucket,
+            @RequestParam(value = "key", required = false) String key,
+            @RequestParam(value = "content_type", required = false) String contentType
+    ) {
+        if (deviceId == null || deviceId.isEmpty()) {
+            return ApiResponse.error(400, "device_id 不能为空");
+        }
+        if (file == null || file.isEmpty()) {
+            return ApiResponse.error(400, "file 不能为空");
+        }
+        // 校验设备归属
+        if (!hasUserDevice(currentUserId, deviceId)) {
+            return ApiResponse.error(403, "无权操作该设备");
+        }
+
+        String ct = (contentType != null && !contentType.trim().isEmpty()) ? contentType.trim() : file.getContentType();
+
+        try (InputStream in = file.getInputStream()) {
+            ManualUploadResponse resp = cloudStorageService.uploadObjectForTest(
+                deviceId,
+                bucket,
+                key,
+                file.getOriginalFilename(),
+                ct,
+                file.getSize(),
+                in
+            );
+
+            if (resp == null) {
+                return ApiResponse.error(404, "设备不存在");
+            }
+            if (resp.getUploaded() != null && resp.getUploaded()) {
+                return ApiResponse.success(resp);
+            }
+            return ApiResponse.error(500, "上传失败");
+        } catch (Exception e) {
+            return ApiResponse.error(500, "上传异常: " + e.getMessage());
+        }
+    }
+
     /**
      * 领取免费7天云存储 - POST /cloud/claim-free
      */

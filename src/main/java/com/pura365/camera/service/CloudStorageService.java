@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.config.StorageConfig;
 import com.pura365.camera.domain.CloudVideo;
 import com.pura365.camera.domain.Device;
+import com.pura365.camera.model.cloud.ManualUploadResponse;
 import com.pura365.camera.repository.CloudVideoRepository;
 import com.pura365.camera.repository.DeviceRepository;
 import com.qiniu.util.Auth;
@@ -13,11 +14,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 import software.amazon.awssdk.services.s3.model.S3Object;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
@@ -25,6 +28,7 @@ import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequ
 
 import com.pura365.camera.model.cloud.VideoUploadNotifyRequest;
 
+import java.io.InputStream;
 import java.net.URI;
 import java.text.SimpleDateFormat;
 import java.time.Duration;
@@ -363,10 +367,10 @@ public class CloudStorageService {
      */
     private Map<String, Object> parseVideoFromS3Object(S3Object obj, String deviceId, boolean isQiniu) {
         Map<String, Object> video = new HashMap<>();
-        
+
         String key = obj.key();
         String fileName = key.substring(key.lastIndexOf('/') + 1);
-        
+
         // 生成视频ID（使用key的hash）
         String videoId = "video_" + Math.abs(key.hashCode());
         video.put("id", videoId);
@@ -374,35 +378,64 @@ public class CloudStorageService {
         video.put("key", key);
         video.put("file_name", fileName);
         video.put("file_size", obj.size());
-        
+
         // 构建视频URL
         String videoUrl;
         if (isQiniu) {
-            videoUrl = "https://" + qiniuConfig.getDomain() + "/" + key;
+            videoUrl = buildQiniuSignedDownloadUrl(key);
         } else {
             videoUrl = vultrConfig.getEndpoint() + "/" + vultrConfig.getBucket() + "/" + key;
         }
         video.put("video_url", videoUrl);
-        
+
         // 从文件名解析时间（假设文件名格式：1702012345678_xxx.mp4）
-        Date createdAt = obj.lastModified() != null 
-            ? Date.from(obj.lastModified()) 
+        Date createdAt = obj.lastModified() != null
+            ? Date.from(obj.lastModified())
             : parseTimeFromFileName(fileName);
         video.put("created_at_date", createdAt);
-        
+
         if (createdAt != null) {
             SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'");
             sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
             video.put("created_at", sdf.format(createdAt));
         }
-        
+
         // 默认值
         video.put("type", "recording");
         video.put("title", "云录像");
         video.put("thumbnail_url", null);
         video.put("duration", null);
-        
+
         return video;
+    }
+
+    /**
+     * 七牛云下载链接（私有空间需要带 token；公开空间带了也能用）
+     */
+    private String buildQiniuSignedDownloadUrl(String key) {
+        String domain = qiniuConfig.getDomain();
+        if (domain == null || domain.trim().isEmpty()) {
+            return key;
+        }
+
+        String base;
+        String d = domain.trim();
+        if (d.startsWith("http://") || d.startsWith("https://")) {
+            base = d.replaceAll("/$", "");
+        } else {
+            base = ("https://" + d).replaceAll("/$", "");
+        }
+
+        String publicUrl = base + "/" + key;
+
+        try {
+            Auth auth = Auth.create(qiniuConfig.getAccessKey(), qiniuConfig.getSecretKey());
+            // 1小时有效期（秒）
+            return auth.privateDownloadUrl(publicUrl, 3600);
+        } catch (Exception e) {
+            log.warn("生成七牛云下载链接失败，回退为原始URL - key: {}", key, e);
+            return publicUrl;
+        }
     }
     
     /**
@@ -447,5 +480,120 @@ public class CloudStorageService {
         }
         
         return String.format("videos/%s/%s/%s_%s", deviceId, date, timestamp, fileName);
+    }
+
+    /**
+     * 手动上传对象到云存储（用于测试）
+     * - 国内：七牛云 S3 兼容接口
+     * - 国外：Vultr S3 兼容接口
+     *
+     * 注意：不要在返回或日志中输出 accessKey/secretKey。
+     */
+    public ManualUploadResponse uploadObjectForTest(String deviceId,
+                                                   String bucket,
+                                                   String key,
+                                                   String originalFileName,
+                                                   String contentType,
+                                                   long size,
+                                                   InputStream inputStream) {
+        Device device = deviceRepository.selectById(deviceId);
+        if (device == null) {
+            return null;
+        }
+
+        boolean china = isChina(device.getRegion());
+
+        String provider;
+        String endpoint;
+        String region;
+        String accessKey;
+        String secretKey;
+        String defaultBucket;
+
+        if (china) {
+            provider = "qiniu";
+            endpoint = "https://s3.cn-south-1.qiniucs.com";
+            region = "cn-south-1";
+            accessKey = qiniuConfig.getAccessKey();
+            secretKey = qiniuConfig.getSecretKey();
+            defaultBucket = qiniuConfig.getBucket();
+        } else {
+            provider = "s3";
+            endpoint = vultrConfig.getEndpoint();
+            region = vultrConfig.getRegion();
+            accessKey = vultrConfig.getAccessKey();
+            secretKey = vultrConfig.getSecretKey();
+            defaultBucket = vultrConfig.getBucket();
+        }
+
+        String bucketToUse = (bucket != null && !bucket.trim().isEmpty()) ? bucket.trim() : defaultBucket;
+        String keyToUse = (key != null && !key.trim().isEmpty()) ? key.trim() : generateVideoKey(deviceId, originalFileName);
+
+        AwsBasicCredentials credentials = AwsBasicCredentials.create(accessKey, secretKey);
+        S3Client s3Client = null;
+
+        try {
+            s3Client = S3Client.builder()
+                .region(Region.of(region))
+                .endpointOverride(URI.create(endpoint))
+                .credentialsProvider(StaticCredentialsProvider.create(credentials))
+                .build();
+
+            PutObjectRequest.Builder reqBuilder = PutObjectRequest.builder()
+                .bucket(bucketToUse)
+                .key(keyToUse);
+
+            if (contentType != null && !contentType.trim().isEmpty()) {
+                reqBuilder.contentType(contentType);
+            }
+
+            PutObjectResponse putResp = s3Client.putObject(reqBuilder.build(), RequestBody.fromInputStream(inputStream, size));
+
+            ManualUploadResponse resp = new ManualUploadResponse();
+            resp.setUploaded(true);
+            resp.setProvider(provider);
+            resp.setEndpoint(endpoint);
+            resp.setRegion(region);
+            resp.setBucket(bucketToUse);
+            resp.setKey(keyToUse);
+            resp.setEtag(putResp != null ? putResp.eTag() : null);
+            resp.setContentType(contentType);
+            resp.setSize(size);
+
+            // 推断可访问 URL（仅供测试）
+            String url = null;
+            if (china) {
+                if (qiniuConfig.getDomain() != null && !qiniuConfig.getDomain().trim().isEmpty()) {
+                    url = "https://" + qiniuConfig.getDomain().trim() + "/" + keyToUse;
+                }
+            } else {
+                if (endpoint != null && !endpoint.trim().isEmpty()) {
+                    url = endpoint.replaceAll("/$", "") + "/" + bucketToUse + "/" + keyToUse;
+                }
+            }
+            resp.setUrl(url);
+
+            log.info("手动上传对象成功 - deviceId: {}, provider: {}, bucket: {}, key: {}", deviceId, provider, bucketToUse, keyToUse);
+            return resp;
+        } catch (Exception e) {
+            log.error("手动上传对象失败 - deviceId: {}, bucket: {}, key: {}", deviceId, bucketToUse, keyToUse, e);
+            ManualUploadResponse resp = new ManualUploadResponse();
+            resp.setUploaded(false);
+            resp.setProvider(provider);
+            resp.setEndpoint(endpoint);
+            resp.setRegion(region);
+            resp.setBucket(bucketToUse);
+            resp.setKey(keyToUse);
+            resp.setContentType(contentType);
+            resp.setSize(size);
+            return resp;
+        } finally {
+            if (s3Client != null) {
+                try {
+                    s3Client.close();
+                } catch (Exception ignore) {
+                }
+            }
+        }
     }
 }
