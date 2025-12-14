@@ -281,8 +281,8 @@ public class CloudStorageService {
             );
             
             S3Client s3Client = S3Client.builder()
-                .region(Region.of("cn-east-1"))
-                .endpointOverride(URI.create("https://s3-cn-east-1.qiniucs.com"))
+                .region(Region.of("cn-south-1"))
+                .endpointOverride(URI.create("https://s3.cn-south-1.qiniucs.com"))
                 .credentialsProvider(StaticCredentialsProvider.create(credentials))
                 .build();
             

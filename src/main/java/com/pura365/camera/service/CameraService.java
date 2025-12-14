@@ -211,14 +211,14 @@ public class CameraService {
         boolean isChina = isChina(device.getRegion());
         
         if (isChina) {
-            // 国内：使用七牛云S3兼容配置
+            // 国内：使用七牛云S3兼容配置（当前先写死华南-广东）
             // 七牛云S3兼容域名：https://developer.qiniu.com/kodo/4088/s3-access-domainname
             // Bucket固定为 cloud-storage，摄像头默认使用
-            response.setS3Hostname("s3-cn-east-1.qiniucs.com"); // 华东区域，根据实际bucket区域调整
-            response.setS3Region("cn-east-1");
+            response.setS3Hostname("s3.cn-south-1.qiniucs.com");
+            response.setS3Region("cn-south-1");
             response.setS3AccessKey(qiniuConfig.getAccessKey());
             response.setS3SecretKey(qiniuConfig.getSecretKey());
-            
+
             log.info("配置七牛云S3凭证 - deviceId: {}", device.getId());
         } else {
             // 国外：使用Vultr S3配置
