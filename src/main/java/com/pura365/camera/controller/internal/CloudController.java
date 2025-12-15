@@ -182,25 +182,48 @@ public class CloudController {
         if (pageSize <= 0) pageSize = 20;
 
         // 直接从云存储查询视频列表
-        List<Map<String, Object>> allVideos = cloudStorageService.listVideosFromCloud(deviceId, date);
-        
+        List<Map<String, Object>> allObjects = cloudStorageService.listVideosFromCloud(deviceId, date);
+
+        // 只保留文件名中带有 "M" 的视频文件，并为其匹配对应的 jpg 缩略图
+        List<Map<String, Object>> filteredVideos = filterVideosWithThumbnails(allObjects);
+
         // 手动分页
-        int total = allVideos.size();
+        int total = filteredVideos.size();
         int fromIndex = (page - 1) * pageSize;
         int toIndex = Math.min(fromIndex + pageSize, total);
-        
+
         List<CloudVideoVO> videoList = new ArrayList<>();
         if (fromIndex < total) {
-            List<Map<String, Object>> subList = allVideos.subList(fromIndex, toIndex);
+            List<Map<String, Object>> subList = filteredVideos.subList(fromIndex, toIndex);
             for (Map<String, Object> video : subList) {
                 CloudVideoVO vo = new CloudVideoVO();
-                vo.setVideoId((String) video.get("video_id"));
+
+                // video_id 兼容 old key "id"
+                Object videoIdObj = video.get("video_id");
+                if (videoIdObj == null) {
+                    videoIdObj = video.get("id");
+                }
+                vo.setVideoId(videoIdObj != null ? String.valueOf(videoIdObj) : null);
+
                 vo.setDeviceId((String) video.get("device_id"));
                 vo.setType((String) video.get("type"));
                 vo.setTitle((String) video.get("title"));
-                vo.setThumbnail((String) video.get("thumbnail"));
+
+                Object thumbObj = video.get("thumbnail");
+                if (thumbObj == null) {
+                    thumbObj = video.get("thumbnail_url");
+                }
+                vo.setThumbnail(thumbObj != null ? String.valueOf(thumbObj) : null);
+
                 vo.setVideoUrl((String) video.get("video_url"));
-                vo.setDuration((Integer) video.get("duration"));
+
+                Object durationObj = video.get("duration");
+                if (durationObj instanceof Number) {
+                    vo.setDuration(((Number) durationObj).intValue());
+                } else {
+                    vo.setDuration(null);
+                }
+
                 vo.setCreatedAt((String) video.get("created_at"));
                 videoList.add(vo);
             }
@@ -371,6 +394,83 @@ public class CloudController {
             }
         }
         return plan;
+    }
+
+    /**
+     * 过滤出文件名带 "M" 的视频，并根据规则绑定对应的 jpg 缩略图。
+     *
+     * 约定：
+     *   - 视频文件：095337M0021.mp4、095358M0021.mp4（格式：6位数字+M+4位数字.mp4）
+     *   - 对应缩略图：095337.jpg、095358.jpg（M前面的部分）
+     */
+    private List<Map<String, Object>> filterVideosWithThumbnails(List<Map<String, Object>> allObjects) {
+        if (allObjects == null || allObjects.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        // 第一步：收集所有 jpg 缩略图 -> Map<文件名(不带扩展名), URL>
+        // 例如："095337.jpg" -> jpgUrlMap.put("095337", "https://...")
+        Map<String, String> jpgUrlMap = new HashMap<>();
+        for (Map<String, Object> obj : allObjects) {
+            Object fileNameObj = obj.get("file_name");
+            if (!(fileNameObj instanceof String)) {
+                continue;
+            }
+            String fileName = (String) fileNameObj;
+            String lower = fileName.toLowerCase(Locale.ROOT);
+            
+            if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+                // 095337.jpg -> 去掉 .jpg 后 -> "095337"
+                int dot = fileName.lastIndexOf('.');
+                String baseName = (dot > 0) ? fileName.substring(0, dot) : fileName;
+                
+                // 取URL，优先用 video_url（CloudStorageService 把 URL 放在这里）
+                Object urlObj = obj.get("video_url");
+                if (urlObj != null) {
+                    jpgUrlMap.put(baseName, String.valueOf(urlObj));
+                }
+            }
+        }
+
+        // 第二步：过滤出文件名带M的视频，并给它匹配jpg
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Map<String, Object> obj : allObjects) {
+            Object fileNameObj = obj.get("file_name");
+            if (!(fileNameObj instanceof String)) {
+                continue;
+            }
+            String fileName = (String) fileNameObj;
+            String lower = fileName.toLowerCase(Locale.ROOT);
+
+            // 必须是视频文件
+            if (!(lower.endsWith(".mp4") || lower.endsWith(".h264") || lower.endsWith(".avi")
+                    || lower.endsWith(".mkv") || lower.endsWith(".mov") || lower.endsWith(".ts"))) {
+                continue;
+            }
+
+            // 必须包含M
+            int mIndex = fileName.indexOf('M');
+            if (mIndex <= 0) {
+                continue;
+            }
+
+            // 取M之前的部分作为缩略图的基名
+            // 例：095337M0021.mp4 -> "095337"
+            String jpgBaseName = fileName.substring(0, mIndex);
+            String thumbnailUrl = jpgUrlMap.get(jpgBaseName);
+
+            // 拷贝原数据
+            Map<String, Object> copy = new HashMap<>(obj);
+            if (thumbnailUrl != null) {
+                copy.put("thumbnail", thumbnailUrl);
+            } else {
+                copy.put("thumbnail", null);
+            }
+
+            result.add(copy);
+        }
+
+        return result;
     }
 
     private boolean hasUserDevice(Long userId, String deviceId) {

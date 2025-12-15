@@ -240,12 +240,12 @@ public class CloudStorageService {
         
         List<Map<String, Object>> videos = new ArrayList<>();
         
-        // 构建前缀：videos/{deviceId}/ 或 videos/{deviceId}/{date}/
-        String prefix = "videos/" + deviceId + "/";
+        // 构建前缀：{deviceId}/{date}/
+        // 例如：A111-bbc1234/2025-12-15/
+        String prefix = deviceId + "/";
         if (date != null && !date.isEmpty()) {
-            // 将 YYYY-MM-DD 转换为 YYYYMMDD
-            String dateFormatted = date.replace("-", "");
-            prefix = prefix + dateFormatted + "/";
+            // date 格式已经是 YYYY-MM-DD，直接拼接
+            prefix = prefix + date + "/";
         }
         
         try {
@@ -299,9 +299,7 @@ public class CloudStorageService {
             ListObjectsV2Response response = s3Client.listObjectsV2(listRequest);
             
             for (S3Object obj : response.contents()) {
-                // 过滤非视频文件
-                if (!isVideoFile(obj.key())) continue;
-                
+                // 返回所有文件（视频和jpg），在Controller层再过滤
                 Map<String, Object> video = parseVideoFromS3Object(obj, deviceId, true);
                 if (video != null) {
                     videos.add(video);
@@ -344,9 +342,7 @@ public class CloudStorageService {
             ListObjectsV2Response response = s3Client.listObjectsV2(listRequest);
             
             for (S3Object obj : response.contents()) {
-                // 过滤非视频文件
-                if (!isVideoFile(obj.key())) continue;
-                
+                // 返回所有文件（视频和jpg），在Controller层再过滤
                 Map<String, Object> video = parseVideoFromS3Object(obj, deviceId, false);
                 if (video != null) {
                     videos.add(video);
@@ -468,18 +464,19 @@ public class CloudStorageService {
     
     /**
      * 生成视频存储路径key
-     * 格式: videos/{deviceId}/{date}/{timestamp}_{filename}
+     * 格式: {deviceId}/{date}/{filename}
+     * 例如: A111-bbc1234/2025-12-15/095337M0021.mp4
      */
     private String generateVideoKey(String deviceId, String fileName) {
-        String date = new SimpleDateFormat("yyyyMMdd").format(new Date());
-        String timestamp = String.valueOf(System.currentTimeMillis());
+        String date = new SimpleDateFormat("yyyy-MM-dd").format(new Date());
         
         // 如果没有提供文件名，生成一个
         if (fileName == null || fileName.isEmpty()) {
+            String timestamp = String.valueOf(System.currentTimeMillis());
             fileName = timestamp + ".mp4";
         }
         
-        return String.format("videos/%s/%s/%s_%s", deviceId, date, timestamp, fileName);
+        return String.format("%s/%s/%s", deviceId, date, fileName);
     }
 
     /**
