@@ -9,6 +9,7 @@ import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import com.pura365.camera.config.OAuthConfig;
+import com.pura365.camera.model.auth.WechatUserInfo;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -57,9 +58,10 @@ public class OAuthService {
      * 微信登录：使用 code 换取 access_token 和 openid
      *
      * @param code 客户端通过微信 SDK 获取的授权码
-     * @return 包含 openId, unionId, nickname, avatar 等信息
+     * @return 微信用户信息
+     * @throws Exception 验证失败或网络异常
      */
-    public Map<String, String> verifyWeChatCode(String code) throws Exception {
+    public WechatUserInfo verifyWeChatCode(String code) throws Exception {
         String appId = oAuthConfig.getWechat().getAppId();
         String appSecret = oAuthConfig.getWechat().getAppSecret();
 
@@ -114,14 +116,19 @@ public class OAuthService {
             // 即使获取用户信息失败，也可以用 openid 登录
         }
 
-        Map<String, String> result = new HashMap<>();
-        result.put("openId", openId);
-        result.put("unionId", unionId);
-        result.put("nickname", userInfoJson.has("nickname") ? userInfoJson.get("nickname").asText() : null);
-        result.put("avatar", userInfoJson.has("headimgurl") ? userInfoJson.get("headimgurl").asText() : null);
-        result.put("extraInfo", userInfoResp);
+        // 封装为标准的用户信息对象
+        WechatUserInfo userInfo = new WechatUserInfo();
+        userInfo.setOpenId(openId);
+        userInfo.setUnionId(unionId);
+        userInfo.setNickname(userInfoJson.has("nickname") ? userInfoJson.get("nickname").asText() : null);
+        userInfo.setAvatar(userInfoJson.has("headimgurl") ? userInfoJson.get("headimgurl").asText() : null);
+        userInfo.setGender(userInfoJson.has("sex") ? userInfoJson.get("sex").asInt() : null);
+        userInfo.setCountry(userInfoJson.has("country") ? userInfoJson.get("country").asText() : null);
+        userInfo.setProvince(userInfoJson.has("province") ? userInfoJson.get("province").asText() : null);
+        userInfo.setCity(userInfoJson.has("city") ? userInfoJson.get("city").asText() : null);
+        userInfo.setRawResponse(userInfoResp);
 
-        return result;
+        return userInfo;
     }
 
     /**

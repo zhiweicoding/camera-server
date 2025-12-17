@@ -242,15 +242,18 @@ public class AuthService {
     public Map<String, Object> loginByWeChat(String code) {
         try {
             // 验证微信 code 并获取用户信息
-            Map<String, String> wechatUser = oAuthService.verifyWeChatCode(code);
-            String openId = wechatUser.get("openId");
-            String unionId = wechatUser.get("unionId");
-            String nickname = wechatUser.get("nickname");
-            String avatar = wechatUser.get("avatar");
-            String extraInfo = wechatUser.get("extraInfo");
-
+            com.pura365.camera.model.auth.WechatUserInfo wechatUser = oAuthService.verifyWeChatCode(code);
+            
             // 查找或创建用户
-            User user = findOrCreateUserByOAuth(AUTH_TYPE_WECHAT, openId, unionId, nickname, avatar, null, extraInfo);
+            User user = findOrCreateUserByOAuth(
+                AUTH_TYPE_WECHAT, 
+                wechatUser.getOpenId(), 
+                wechatUser.getUnionId(), 
+                wechatUser.getNickname(), 
+                wechatUser.getAvatar(), 
+                null, 
+                wechatUser.getRawResponse()
+            );
 
             return buildLoginResult(user);
         } catch (RuntimeException e) {

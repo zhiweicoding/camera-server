@@ -1,10 +1,12 @@
 package com.pura365.camera.controller.app;
 
 import com.pura365.camera.model.ApiResponse;
+import com.pura365.camera.model.auth.WechatLoginRequest;
 import com.pura365.camera.service.AuthService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -110,15 +112,17 @@ public class AuthController {
     /**
      * 微信登录
      */
-    @Operation(summary = "微信登录", description = "使用微信授权码登录")
+    @Operation(summary = "微信登录", description = "使用微信授权码登录，客户端通过微信SDK获取code后调用此接口")
     @PostMapping("/login/wechat")
-    public ApiResponse<?> loginByWechat(@RequestBody Map<String, String> body) {
+    public ApiResponse<?> loginByWechat(@RequestBody WechatLoginRequest request) {
         try {
-            String code = body.get("code");
-            if (code == null) {
+            // 参数校验
+            if (!StringUtils.hasText(request.getCode())) {
                 return ApiResponse.error(400, "code 不能为空");
             }
-            Map<String, Object> data = authService.loginByWeChat(code);
+            
+            // 调用服务层处理登录
+            Map<String, Object> data = authService.loginByWeChat(request.getCode());
             return ApiResponse.success(data);
         } catch (RuntimeException e) {
             return ApiResponse.error(401, e.getMessage());
