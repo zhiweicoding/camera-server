@@ -51,6 +51,10 @@ public class User {
     @TableField("avatar")
     private String avatar;
 
+    /** 是否启用: 0-禁用 1-启用 */
+    @TableField("enabled")
+    private Integer enabled;
+
     /** 创建时间 */
     @TableField("created_at")
     private Date createdAt;

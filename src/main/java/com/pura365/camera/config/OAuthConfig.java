@@ -120,6 +120,10 @@ public class OAuthConfig {
         private String clientIdAndroid;
         /** Google OAuth Client ID (Web) */
         private String clientIdWeb;
+        /** Google OAuth Client Secret (Web) */
+        private String clientSecretWeb;
+        /** Google OAuth 回调地址 */
+        private String redirectUri;
 
         public String getClientIdIos() {
             return clientIdIos;
@@ -143,6 +147,22 @@ public class OAuthConfig {
 
         public void setClientIdWeb(String clientIdWeb) {
             this.clientIdWeb = clientIdWeb;
+        }
+
+        public String getClientSecretWeb() {
+            return clientSecretWeb;
+        }
+
+        public void setClientSecretWeb(String clientSecretWeb) {
+            this.clientSecretWeb = clientSecretWeb;
+        }
+
+        public String getRedirectUri() {
+            return redirectUri;
+        }
+
+        public void setRedirectUri(String redirectUri) {
+            this.redirectUri = redirectUri;
         }
     }
 }

@@ -329,4 +329,70 @@ public class OAuthService {
         }
         return false;
     }
+
+    /**
+     * Google OAuth Web端：使用授权码换取 ID Token
+     *
+     * @param code Google 回调返回的授权码
+     * @return 包含 openId, email, nickname, avatar 等信息
+     */
+    public Map<String, String> exchangeGoogleCodeForToken(String code) throws Exception {
+        OAuthConfig.GoogleConfig gc = oAuthConfig.getGoogle();
+        String clientId = gc.getClientIdWeb();
+        String clientSecret = gc.getClientSecretWeb();
+        String redirectUri = gc.getRedirectUri();
+
+        if (clientId == null || clientId.startsWith("YOUR_")) {
+            throw new RuntimeException("Google Web Client ID 未配置");
+        }
+        if (clientSecret == null || clientSecret.startsWith("YOUR_")) {
+            throw new RuntimeException("Google Web Client Secret 未配置");
+        }
+        if (redirectUri == null || redirectUri.isEmpty()) {
+            throw new RuntimeException("Google Redirect URI 未配置");
+        }
+
+        // 构建请求体
+        String requestBody = String.format(
+                "code=%s&client_id=%s&client_secret=%s&redirect_uri=%s&grant_type=authorization_code",
+                java.net.URLEncoder.encode(code, "UTF-8"),
+                java.net.URLEncoder.encode(clientId, "UTF-8"),
+                java.net.URLEncoder.encode(clientSecret, "UTF-8"),
+                java.net.URLEncoder.encode(redirectUri, "UTF-8")
+        );
+
+        okhttp3.RequestBody body = okhttp3.RequestBody.create(
+                requestBody,
+                okhttp3.MediaType.parse("application/x-www-form-urlencoded")
+        );
+
+        Request request = new Request.Builder()
+                .url("https://oauth2.googleapis.com/token")
+                .post(body)
+                .build();
+
+        String tokenResp;
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                log.error("Google token exchange failed: {}", response.code());
+                throw new RuntimeException("Google 授权请求失败");
+            }
+            tokenResp = response.body().string();
+        }
+
+        JsonNode tokenJson = objectMapper.readTree(tokenResp);
+        if (tokenJson.has("error")) {
+            String error = tokenJson.get("error").asText();
+            String errorDesc = tokenJson.has("error_description") 
+                    ? tokenJson.get("error_description").asText() 
+                    : "未知错误";
+            log.warn("Google token exchange error: {} - {}", error, errorDesc);
+            throw new RuntimeException("Google 授权失败: " + errorDesc);
+        }
+
+        String idToken = tokenJson.get("id_token").asText();
+        
+        // 验证并解析 ID Token
+        return verifyGoogleIdToken(idToken, "web");
+    }
 }

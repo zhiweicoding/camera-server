@@ -47,6 +47,10 @@ public class ManufacturedDevice {
     @TableField("vendor_code")
     private String vendorCode;
 
+    /** 业务员ID */
+    @TableField("salesman_id")
+    private Long salesmanId;
+
     /** 序列号(第9-16位) */
     @TableField("serial_no")
     private String serialNo;

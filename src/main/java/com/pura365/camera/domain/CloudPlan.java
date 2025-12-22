@@ -7,6 +7,7 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.util.Date;
 
 /**
  * 云存储套餐实体，对应表 cloud_plan
@@ -58,4 +59,16 @@ public class CloudPlan {
     /** 排序序号 */
     @TableField("sort_order")
     private Integer sortOrder;
+
+    /** 状态: 1-启用, 0-禁用 */
+    @TableField("status")
+    private Integer status;
+
+    /** 创建时间 */
+    @TableField("created_at")
+    private Date createdAt;
+
+    /** 更新时间 */
+    @TableField("updated_at")
+    private Date updatedAt;
 }

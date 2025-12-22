@@ -85,6 +85,32 @@ public class AuthController {
     }
 
     /**
+     * 修改密码
+     */
+    @Operation(summary = "修改密码", description = "用户修改密码，需验证旧密码")
+    @PostMapping("/password/change")
+    public ApiResponse<?> changePassword(
+            @RequestHeader(value = "X-User-Id", required = true) String userId,
+            @RequestBody Map<String, String> body) {
+        try {
+            String oldPassword = body.get("old_password");
+            String newPassword = body.get("new_password");
+            if (userId == null || userId.isEmpty()) {
+                return ApiResponse.error(401, "未登录");
+            }
+            Long uid = Long.parseLong(userId);
+            authService.changePassword(uid, oldPassword, newPassword);
+            return ApiResponse.success(null);
+        } catch (NumberFormatException e) {
+            return ApiResponse.error(400, "无效的用户ID");
+        } catch (RuntimeException e) {
+            return ApiResponse.error(400, e.getMessage());
+        } catch (Exception e) {
+            return ApiResponse.error(500, "服务器错误");
+        }
+    }
+
+    /**
      * 登出
      */
     @Operation(summary = "登出", description = "用户登出，失效token")
@@ -179,6 +205,32 @@ public class AuthController {
             }
             String platform = body.getOrDefault("platform", "web");
             Map<String, Object> data = authService.loginByGoogle(idToken, platform);
+            return ApiResponse.success(data);
+        } catch (RuntimeException e) {
+            return ApiResponse.error(401, e.getMessage());
+        } catch (Exception e) {
+            return ApiResponse.error(500, "服务器错误");
+        }
+    }
+
+    /**
+     * Google OAuth 回调接口
+     * 用于Web端Google登录的回调处理
+     */
+    @Operation(summary = "Google OAuth回调", description = "Google授权登录回调接口，用于接收授权码并完成登录")
+    @GetMapping("/callback/google")
+    public ApiResponse<?> googleOAuthCallback(
+            @RequestParam(value = "code", required = false) String code,
+            @RequestParam(value = "error", required = false) String error,
+            @RequestParam(value = "state", required = false) String state) {
+        try {
+            if (error != null) {
+                return ApiResponse.error(401, "Google授权被拒绝: " + error);
+            }
+            if (code == null || code.isEmpty()) {
+                return ApiResponse.error(400, "授权码不能为空");
+            }
+            Map<String, Object> data = authService.loginByGoogleCode(code);
             return ApiResponse.success(data);
         } catch (RuntimeException e) {
             return ApiResponse.error(401, e.getMessage());

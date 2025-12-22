@@ -32,6 +32,30 @@ public class PaymentOrder {
     @TableField("device_id")
     private String deviceId;
 
+    /** 经销商代码 */
+    @TableField("vendor_code")
+    private String vendorCode;
+
+    /** 业务员ID */
+    @TableField("salesman_id")
+    private Long salesmanId;
+
+    /** 业务员姓名(快照) */
+    @TableField("salesman_name")
+    private String salesmanName;
+
+    /** 佣金比例(快照) */
+    @TableField("commission_rate")
+    private BigDecimal commissionRate;
+
+    /** 业务员应得金额 */
+    @TableField("salesman_amount")
+    private BigDecimal salesmanAmount;
+
+    /** 经销商应得金额 */
+    @TableField("vendor_amount")
+    private BigDecimal vendorAmount;
+
     /** 产品类型 */
     @TableField("product_type")
     private String productType;
@@ -71,4 +95,12 @@ public class PaymentOrder {
     /** 更新时间 */
     @TableField("updated_at")
     private Date updatedAt;
+
+    /** 退款时间 */
+    @TableField("refund_at")
+    private Date refundAt;
+
+    /** 退款原因 */
+    @TableField("refund_reason")
+    private String refundReason;
 }

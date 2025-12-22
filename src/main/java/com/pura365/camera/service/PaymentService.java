@@ -2,13 +2,17 @@ package com.pura365.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.pura365.camera.domain.CloudPlan;
+import com.pura365.camera.domain.ManufacturedDevice;
 import com.pura365.camera.domain.PaymentOrder;
 import com.pura365.camera.domain.PaymentWechat;
+import com.pura365.camera.domain.Salesman;
 import com.pura365.camera.domain.UserDevice;
 import com.pura365.camera.model.payment.*;
 import com.pura365.camera.repository.CloudPlanRepository;
+import com.pura365.camera.repository.ManufacturedDeviceRepository;
 import com.pura365.camera.repository.PaymentOrderRepository;
 import com.pura365.camera.repository.PaymentWechatRepository;
+import com.pura365.camera.repository.SalesmanRepository;
 import com.pura365.camera.repository.UserDeviceRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -51,6 +55,12 @@ public class PaymentService {
 
     @Autowired
     private UserDeviceRepository userDeviceRepository;
+
+    @Autowired
+    private ManufacturedDeviceRepository manufacturedDeviceRepository;
+
+    @Autowired
+    private SalesmanRepository salesmanRepository;
 
     /**
      * 创建支付订单
@@ -112,6 +122,10 @@ public class PaymentService {
         order.setStatus("pending");
         order.setPaymentMethod(paymentMethod);
         order.setCreatedAt(new Date());
+
+        // 快照经销商/业务员信息
+        snapshotVendorAndSalesmanInfo(order, request.getDeviceId());
+
         paymentOrderRepository.insert(order);
 
         // 构建响应
@@ -284,6 +298,49 @@ public class PaymentService {
      */
     private String generateOrderId() {
         return "order_" + System.currentTimeMillis();
+    }
+
+    /**
+     * 快照经销商/业务员信息到订单
+     * 修改分成比例不影响历史订单，改绑后历史单子不变
+     */
+    private void snapshotVendorAndSalesmanInfo(PaymentOrder order, String deviceId) {
+        // 根据设备ID获取生产设备信息
+        LambdaQueryWrapper<ManufacturedDevice> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(ManufacturedDevice::getDeviceId, deviceId).last("LIMIT 1");
+        ManufacturedDevice device = manufacturedDeviceRepository.selectOne(wrapper);
+        
+        if (device == null) {
+            return;
+        }
+
+        // 快照经销商代码
+        order.setVendorCode(device.getVendorCode());
+        
+        // 如果设备有分配业务员，快照业务员信息
+        if (device.getSalesmanId() != null) {
+            Salesman salesman = salesmanRepository.selectById(device.getSalesmanId());
+            if (salesman != null) {
+                order.setSalesmanId(salesman.getId());
+                order.setSalesmanName(salesman.getName());
+                order.setCommissionRate(salesman.getCommissionRate());
+                
+                // 计算业务员应得金额和经销商应得金额
+                if (order.getAmount() != null && salesman.getCommissionRate() != null) {
+                    BigDecimal salesmanAmount = order.getAmount()
+                            .multiply(salesman.getCommissionRate())
+                            .divide(new BigDecimal("100"), 2, BigDecimal.ROUND_HALF_UP);
+                    order.setSalesmanAmount(salesmanAmount);
+                    order.setVendorAmount(order.getAmount().subtract(salesmanAmount));
+                } else {
+                    order.setSalesmanAmount(BigDecimal.ZERO);
+                    order.setVendorAmount(order.getAmount());
+                }
+            }
+        } else {
+            // 没有业务员，全部归经销商
+            order.setVendorAmount(order.getAmount());
+        }
     }
 
     /**
