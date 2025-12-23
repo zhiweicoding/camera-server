@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.*;
 
 /**
  * PayPal 支付回调接口
- * 
+ *
  * 这些接口不需要用户登录验证
  */
 @Tag(name = "PayPal 回调", description = "PayPal 支付回调接口（无需登录）")
@@ -78,7 +78,7 @@ public class PaypalCallbackController {
 
     /**
      * PayPal Webhook 通知
-     * 
+     *
      * PayPal 服务器主动推送支付状态变更通知
      * 需要在 PayPal Developer Portal 配置 Webhook URL
      */
@@ -99,11 +99,11 @@ public class PaypalCallbackController {
             // 解析事件
             JsonNode event = objectMapper.readTree(payload);
             String eventType = event.path("event_type").asText();
-            
+
             // 获取 PayPal 订单ID
             String paypalOrderId = null;
             JsonNode resource = event.path("resource");
-            
+
             if (resource.has("id")) {
                 // CHECKOUT.ORDER.* 事件
                 paypalOrderId = resource.path("id").asText();
