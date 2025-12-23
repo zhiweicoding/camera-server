@@ -566,18 +566,3 @@ CREATE TABLE IF NOT EXISTS `user_token` (
     INDEX `idx_user_token_user` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户Token表';
 
--- ===================================
--- 插入测试数据（可选）
--- ===================================
-
--- 测试设备
-INSERT INTO `device` (`id`, `mac`, `ssid`, `region`, `name`, `enabled`) VALUES
-('test001', '00:11:22:33:44:55', 'AOCCX', 'cn', '测试摄像头1', 1),
-('test002', 'AA:BB:CC:DD:EE:FF', 'TestWiFi', 'cn', '测试摄像头2', 1)
-ON DUPLICATE KEY UPDATE `updated_at` = CURRENT_TIMESTAMP;
-
--- 测试用户
-INSERT INTO `user` (`username`, `password`, `email`, `role`) VALUES
-('admin', '$2a$10$example_hashed_password', 'admin@example.com', 3),
-('testuser', '$2a$10$example_hashed_password', 'test@example.com', 1)
-ON DUPLICATE KEY UPDATE `updated_at` = CURRENT_TIMESTAMP;
