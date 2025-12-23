@@ -319,6 +319,9 @@ public class OAuthService {
         if (gc.getClientIdAndroid() != null && !gc.getClientIdAndroid().startsWith("YOUR_")) {
             validIds.add(gc.getClientIdAndroid());
         }
+        if (gc.getClientIdAndroidDebug() != null && !gc.getClientIdAndroidDebug().startsWith("YOUR_")) {
+            validIds.add(gc.getClientIdAndroidDebug());
+        }
         if (gc.getClientIdWeb() != null && !gc.getClientIdWeb().startsWith("YOUR_")) {
             validIds.add(gc.getClientIdWeb());
         }

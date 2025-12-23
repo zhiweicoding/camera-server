@@ -116,8 +116,10 @@ public class OAuthConfig {
     public static class GoogleConfig {
         /** Google OAuth Client ID (iOS) */
         private String clientIdIos;
-        /** Google OAuth Client ID (Android) */
+        /** Google OAuth Client ID (Android Release) */
         private String clientIdAndroid;
+        /** Google OAuth Client ID (Android Debug) */
+        private String clientIdAndroidDebug;
         /** Google OAuth Client ID (Web) */
         private String clientIdWeb;
         /** Google OAuth Client Secret (Web) */
@@ -139,6 +141,14 @@ public class OAuthConfig {
 
         public void setClientIdAndroid(String clientIdAndroid) {
             this.clientIdAndroid = clientIdAndroid;
+        }
+
+        public String getClientIdAndroidDebug() {
+            return clientIdAndroidDebug;
+        }
+
+        public void setClientIdAndroidDebug(String clientIdAndroidDebug) {
+            this.clientIdAndroidDebug = clientIdAndroidDebug;
         }
 
         public String getClientIdWeb() {

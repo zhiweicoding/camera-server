@@ -34,7 +34,7 @@ import java.util.UUID;
 @Service
 public class PaymentService {
 
-    private static final Logger logger = LoggerFactory.getLogger(PaymentService.class);
+    private static final Logger log = LoggerFactory.getLogger(PaymentService.class);
 
     private static final DateTimeFormatter ISO_FORMATTER =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC);
@@ -67,19 +67,7 @@ public class PaymentService {
     private SalesmanRepository salesmanRepository;
 
     @Autowired
-    private WechatPayService wechatPayService;
-
-    @Autowired
-    private ApplePayService applePayService;
-
-    @Autowired
-    private GooglePayService googlePayService;
-
-    @Autowired
-    private PaymentCallbackService paymentCallbackService;
-
-    @Autowired
-    private PayPalService payPalService;
+    private PaypalService paypalService;
 
     /**
      * 创建支付订单
@@ -193,25 +181,24 @@ public class PaymentService {
             return null;
         }
 
-        try {
-            // 调用微信支付服务创建订单
-            WechatPayVO vo = wechatPayService.createAppOrder(order);
+        // 创建微信预支付记录 (mock)
+        PaymentWechat pw = new PaymentWechat();
+        pw.setOrderId(order.getOrderId());
+        pw.setPrepayId("mock_prepay_" + order.getOrderId());
+        pw.setRawResponse("{}");
+        pw.setCreatedAt(new Date());
+        paymentWechatRepository.insert(pw);
 
-            // 保存微信预支付记录
-            PaymentWechat pw = new PaymentWechat();
-            pw.setOrderId(order.getOrderId());
-            pw.setPrepayId(vo.getPrepayid());
-            pw.setRawResponse("");
-            pw.setCreatedAt(new Date());
-            paymentWechatRepository.insert(pw);
-
-            return vo;
-        } catch (Exception e) {
-            // 记录错误日志
-            org.slf4j.LoggerFactory.getLogger(PaymentService.class)
-                .error("创建微信支付订单失败: orderId={}", orderId, e);
-            return null;
-        }
+        // 返回支付参数
+        WechatPayVO vo = new WechatPayVO();
+        vo.setAppid("wx_app_id_mock");
+        vo.setPartnerid("partner_mock");
+        vo.setPrepayid(pw.getPrepayId());
+        vo.setPackageValue("Sign=WXPay");
+        vo.setNoncestr(UUID.randomUUID().toString().replace("-", ""));
+        vo.setTimestamp(String.valueOf(System.currentTimeMillis() / 1000));
+        vo.setSign("mock_sign_" + order.getOrderId());
+        return vo;
     }
 
     /**
@@ -227,26 +214,161 @@ public class PaymentService {
             return null;
         }
 
-        try {
-            // 调用PayPal服务创建支付
-            com.paypal.api.payments.Payment payment = payPalService.createPayment(order);
-            String approvalUrl = payPalService.getApprovalUrl(payment);
-
-            if (approvalUrl == null) {
-                logger.error("PayPal支付创建失败: 无法获取approval_url, orderId={}", orderId);
-                return null;
+        // 如果已有 PayPal 订单ID，直接返回
+        if (StringUtils.hasText(order.getThirdOrderId()) && order.getThirdOrderId().startsWith("paypal_")) {
+            String paypalOrderId = order.getThirdOrderId().substring(7);
+            String status = paypalService.getOrderStatus(paypalOrderId);
+            if ("CREATED".equals(status) || "APPROVED".equals(status)) {
+                PaypalPayVO vo = new PaypalPayVO();
+                vo.setPaypalOrderId(paypalOrderId);
+                vo.setApprovalUrl("https://www.sandbox.paypal.com/checkoutnow?token=" + paypalOrderId);
+                return vo;
             }
+        }
 
-            PaypalPayVO vo = new PaypalPayVO();
-            vo.setApprovalUrl(approvalUrl);
-            vo.setPaypalOrderId(payment.getId());
+        // 获取商品描述
+        String description = "Pura365 云存储服务";
+        if (PRODUCT_TYPE_CLOUD_STORAGE.equals(order.getProductType())) {
+            CloudPlan plan = findPlanByPlanId(order.getProductId());
+            if (plan != null) {
+                description = plan.getName();
+            }
+        }
 
-            logger.info("PayPal支付创建成功: orderId={}, paymentId={}", orderId, payment.getId());
-            return vo;
-        } catch (Exception e) {
-            logger.error("创建 PayPal 支付失败: orderId={}", orderId, e);
+        // 创建 PayPal 订单，使用 USD 货币
+        BigDecimal usdAmount = convertToUsd(order.getAmount(), order.getCurrency());
+        PaypalService.CreateOrderResult result = paypalService.createOrder(
+                order.getOrderId(),
+                usdAmount,
+                "USD",
+                description
+        );
+
+        if (!result.isSuccess()) {
+            log.error("Failed to create PayPal order for {}: {}", orderId, result.getErrorMessage());
             return null;
         }
+
+        // 保存 PayPal 订单ID
+        order.setThirdOrderId("paypal_" + result.getPaypalOrderId());
+        order.setUpdatedAt(new Date());
+        paymentOrderRepository.updateById(order);
+
+        PaypalPayVO vo = new PaypalPayVO();
+        vo.setPaypalOrderId(result.getPaypalOrderId());
+        vo.setApprovalUrl(result.getApprovalUrl());
+        return vo;
+    }
+
+    /**
+     * 处理 PayPal 支付回调（用户授权后）
+     *
+     * @param orderId       业务订单ID
+     * @param paypalOrderId PayPal 订单ID
+     * @return 处理结果
+     */
+    public boolean handlePaypalReturn(String orderId, String paypalOrderId) {
+        PaymentOrder order = findOrderByOrderId(orderId);
+        if (order == null) {
+            log.warn("PayPal return: order not found: {}", orderId);
+            return false;
+        }
+
+        // 验证 PayPal 订单ID 匹配
+        if (!StringUtils.hasText(order.getThirdOrderId()) 
+                || !order.getThirdOrderId().equals("paypal_" + paypalOrderId)) {
+            log.warn("PayPal return: order id mismatch, expected: {}, got: {}", 
+                    order.getThirdOrderId(), "paypal_" + paypalOrderId);
+            return false;
+        }
+
+        // 捕获订单（完成扣款）
+        PaypalService.CaptureResult captureResult = paypalService.captureOrder(paypalOrderId);
+        if (!captureResult.isSuccess()) {
+            log.error("Failed to capture PayPal order {}: {}", paypalOrderId, captureResult.getErrorMessage());
+            return false;
+        }
+
+        // 更新订单状态
+        if ("COMPLETED".equals(captureResult.getStatus())) {
+            order.setStatus("paid");
+            order.setPaidAt(new Date());
+            order.setUpdatedAt(new Date());
+            paymentOrderRepository.updateById(order);
+
+            // 激活云存储服务
+            activateCloudService(order);
+
+            log.info("PayPal payment completed for order: {}", orderId);
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 处理 PayPal Webhook 通知
+     *
+     * @param paypalOrderId PayPal 订单ID
+     * @param eventType     事件类型
+     */
+    public void handlePaypalWebhook(String paypalOrderId, String eventType) {
+        log.info("Received PayPal webhook: {}, event: {}", paypalOrderId, eventType);
+
+        if (!"PAYMENT.CAPTURE.COMPLETED".equals(eventType)) {
+            return;
+        }
+
+        // 根据 PayPal 订单ID 查找业务订单
+        LambdaQueryWrapper<PaymentOrder> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(PaymentOrder::getThirdOrderId, "paypal_" + paypalOrderId).last("LIMIT 1");
+        PaymentOrder order = paymentOrderRepository.selectOne(wrapper);
+
+        if (order == null) {
+            log.warn("PayPal webhook: order not found for PayPal order: {}", paypalOrderId);
+            return;
+        }
+
+        if ("paid".equals(order.getStatus())) {
+            log.info("Order {} already paid, skip webhook", order.getOrderId());
+            return;
+        }
+
+        // 更新订单状态
+        order.setStatus("paid");
+        order.setPaidAt(new Date());
+        order.setUpdatedAt(new Date());
+        paymentOrderRepository.updateById(order);
+
+        // 激活云存储服务
+        activateCloudService(order);
+
+        log.info("Order {} marked as paid via webhook", order.getOrderId());
+    }
+
+    /**
+     * 激活云存储服务
+     */
+    private void activateCloudService(PaymentOrder order) {
+        // TODO: 实现云存储套餐激活逻辑
+        // 1. 根据 order.getProductId() 获取套餐信息
+        // 2. 为 order.getDeviceId() 创建或延长云存储订阅
+        log.info("Activating cloud service for device: {}, plan: {}", 
+                order.getDeviceId(), order.getProductId());
+    }
+
+    /**
+     * CNY 转 USD（简单汇率转换）
+     */
+    private BigDecimal convertToUsd(BigDecimal amount, String currency) {
+        if ("USD".equalsIgnoreCase(currency)) {
+            return amount;
+        }
+        // 简单汇率：1 USD = 7.2 CNY
+        if ("CNY".equalsIgnoreCase(currency)) {
+            return amount.divide(new BigDecimal("7.2"), 2, BigDecimal.ROUND_HALF_UP);
+        }
+        return amount;
     }
 
     /**
@@ -262,60 +384,16 @@ public class PaymentService {
             return null;
         }
 
-        // 验证Apple收据
-        ApplePayService.AppleReceiptVerifyResult verifyResult = 
-                applePayService.verifyReceipt(request.getReceiptData());
-        
-        if (!verifyResult.isSuccess()) {
-            ApplePayVO vo = new ApplePayVO();
-            vo.setStatus("failed");
-            vo.setTransactionId(null);
-            return vo;
-        }
-
-        // 调用统一回调处理服务
-        boolean callbackSuccess = paymentCallbackService.handlePaymentSuccess(
-                order.getOrderId(), "apple", verifyResult.getTransactionId());
+        // 模拟支付成功，更新订单状态
+        order.setStatus("paid");
+        order.setThirdOrderId("apple_" + order.getOrderId());
+        order.setPaidAt(new Date());
+        order.setUpdatedAt(new Date());
+        paymentOrderRepository.updateById(order);
 
         ApplePayVO vo = new ApplePayVO();
-        vo.setTransactionId(verifyResult.getTransactionId());
-        vo.setStatus(callbackSuccess ? "completed" : "failed");
-        return vo;
-    }
-
-    /**
-     * Google Play支付
-     *
-     * @param userId  用户ID
-     * @param request Google Pay请求
-     * @return 支付结果
-     */
-    public GooglePayVO googlePay(Long userId, GooglePayRequest request) {
-        PaymentOrder order = getOrderByIdAndUser(request.getOrderId(), userId);
-        if (order == null) {
-            return null;
-        }
-
-        // 验证Google Play购买
-        GooglePayService.GooglePurchaseVerifyResult verifyResult = 
-                googlePayService.verifyPurchase(request.getProductId(), request.getPurchaseToken());
-
-        if (!verifyResult.isSuccess()) {
-            GooglePayVO vo = new GooglePayVO();
-            vo.setOrderId(order.getOrderId());
-            vo.setStatus("failed");
-            vo.setGoogleOrderId(null);
-            return vo;
-        }
-
-        // 调用统一回调处理服务
-        boolean callbackSuccess = paymentCallbackService.handlePaymentSuccess(
-                order.getOrderId(), "google", verifyResult.getOrderId());
-
-        GooglePayVO vo = new GooglePayVO();
-        vo.setOrderId(order.getOrderId());
-        vo.setStatus(callbackSuccess ? "completed" : "failed");
-        vo.setGoogleOrderId(verifyResult.getOrderId());
+        vo.setTransactionId(order.getThirdOrderId());
+        vo.setStatus("completed");
         return vo;
     }
 
