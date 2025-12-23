@@ -271,6 +271,95 @@ public class MqttControlController {
     }
 
     /**
+     * 设置灯泡参数（CODE 29）
+     */
+    @Operation(summary = "设置灯泡参数", description = "配置灯泡工作模式、亮度、定时等参数")
+    @PostMapping("/device/{deviceId}/bulb/config")
+    public ResponseEntity<Map<String, Object>> setBulbConfig(
+            @PathVariable String deviceId,
+            @RequestParam Integer detect, // 0:手动 1:环境光自动 2:定时
+            @RequestParam(required = false) Integer brightness, // 亮度 1-100
+            @RequestParam(required = false) Integer enable, // 手动模式: 0关闭 1开启
+            @RequestParam(required = false) String timeOn1, // 定时一开启时间 hh:mm
+            @RequestParam(required = false) String timeOff1, // 定时一关闭时间 hh:mm
+            @RequestParam(required = false) String timeOn2, // 定时二开启时间 hh:mm
+            @RequestParam(required = false) String timeOff2) { // 定时二关闭时间 hh:mm
+
+        log.info("设置设备 {} 灯泡参数: detect={}", deviceId, detect);
+
+        try {
+            Map<String, Object> msg = new HashMap<>();
+            msg.put("code", 29);
+            msg.put("time", TimeValidator.getCurrentTimestamp());
+            msg.put("detect", detect);
+
+            if (brightness != null) {
+                msg.put("brightness", brightness);
+            }
+            if (enable != null) {
+                msg.put("enable", enable);
+            }
+            if (timeOn1 != null) {
+                msg.put("time_on1", timeOn1);
+            }
+            if (timeOff1 != null) {
+                msg.put("time_off1", timeOff1);
+            }
+            if (timeOn2 != null) {
+                msg.put("time_o2", timeOn2);
+            }
+            if (timeOff2 != null) {
+                msg.put("time_off2", timeOff2);
+            }
+
+            mqttMessageService.sendToDevice(deviceId, msg, null);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("message", "已发送灯泡配置");
+            return ResponseEntity.ok(result);
+
+        } catch (Exception e) {
+            log.error("设置灯泡参数失败", e);
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", false);
+            result.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(result);
+        }
+    }
+
+    /**
+     * 获取灯泡配置参数（CODE 30）
+     */
+    @Operation(summary = "获取灯泡配置", description = "获取灯泡当前的配置参数")
+    @PostMapping("/device/{deviceId}/bulb/info")
+    public ResponseEntity<Map<String, Object>> getBulbConfig(
+            @PathVariable String deviceId) {
+
+        log.info("获取设备 {} 灯泡配置", deviceId);
+
+        try {
+            Map<String, Object> msg = new HashMap<>();
+            msg.put("code", 30);
+            msg.put("time", TimeValidator.getCurrentTimestamp());
+
+            mqttMessageService.sendToDevice(deviceId, msg, null);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("message", "已发送获取灯泡配置请求");
+            return ResponseEntity.ok(result);
+
+        } catch (Exception e) {
+            log.error("获取灯泡配置失败", e);
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", false);
+            result.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(result);
+        }
+    }
+
+    /**
      * 注册设备 SSID（用于测试）
      */
     @Operation(summary = "注册设备 SSID", description = "在服务器侧记录设备 SSID（测试用途）")
