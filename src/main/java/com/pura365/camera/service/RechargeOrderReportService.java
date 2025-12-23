@@ -19,10 +19,14 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * 充值订单报表服务
  * 提供订单查询和Excel导出功能
+ * 
+ * 核心逻辑：订单表快照了经销商/业务员信息，直接使用订单表的字段查询
+ * 设备表 ManufacturedDevice 作为补充（用于获取装机商代码等订单未快照的字段）
  */
 @Service
 public class RechargeOrderReportService {
@@ -42,6 +46,12 @@ public class RechargeOrderReportService {
     private VendorRepository vendorRepository;
 
     @Autowired
+    private ManufacturedDeviceRepository deviceRepository;
+
+    @Autowired
+    private SalesmanRepository salesmanRepository;
+
+    @Autowired
     private PlanCommissionService commissionService;
 
     // 报表Excel列标题
@@ -57,10 +67,14 @@ public class RechargeOrderReportService {
 
     /**
      * 分页查询充值订单报表
+     * 
+     * 查询逻辑：直接使用订单表的快照字段进行筛选
      */
     public PageResult<RechargeOrderReportVO> queryOrders(RechargeOrderQueryRequest request) {
-        log.info("查询充值订单报表: page={}, size={}", request.getPage(), request.getSize());
+        log.info("查询充值订单报表: page={}, size={}, vendorCode={}, salesmanId={}", 
+                request.getPage(), request.getSize(), request.getVendorCode(), request.getSalesmanId());
 
+        // 直接使用订单表的快照字段查询
         QueryWrapper<PaymentOrder> qw = buildQueryWrapper(request);
 
         // 分页查询
@@ -88,6 +102,7 @@ public class RechargeOrderReportService {
     public List<RechargeOrderReportVO> queryAllOrders(RechargeOrderQueryRequest request) {
         log.info("查询充值订单用于导出");
 
+        // 直接使用订单表的快照字段查询
         QueryWrapper<PaymentOrder> qw = buildQueryWrapper(request);
         qw.lambda().orderByDesc(PaymentOrder::getCreatedAt);
 
@@ -221,6 +236,7 @@ public class RechargeOrderReportService {
 
     /**
      * 构建查询条件
+     * 直接使用订单表的快照字段进行筛选
      */
     private QueryWrapper<PaymentOrder> buildQueryWrapper(RechargeOrderQueryRequest request) {
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
@@ -231,9 +247,15 @@ public class RechargeOrderReportService {
         if (request.getDeviceId() != null && !request.getDeviceId().trim().isEmpty()) {
             qw.lambda().like(PaymentOrder::getDeviceId, request.getDeviceId());
         }
+        
+        // 直接使用订单表的快照字段查询
         if (request.getVendorCode() != null && !request.getVendorCode().trim().isEmpty()) {
             qw.lambda().eq(PaymentOrder::getVendorCode, request.getVendorCode());
         }
+        if (request.getSalesmanId() != null) {
+            qw.lambda().eq(PaymentOrder::getSalesmanId, request.getSalesmanId());
+        }
+        
         if (request.getPlanId() != null && !request.getPlanId().trim().isEmpty()) {
             qw.lambda().eq(PaymentOrder::getProductId, request.getPlanId());
         }
@@ -269,6 +291,7 @@ public class RechargeOrderReportService {
 
     /**
      * 将订单转换为报表VO
+     * 优先使用订单表的快照字段，设备表作为补充
      */
     private RechargeOrderReportVO convertToReportVO(PaymentOrder order) {
         RechargeOrderReportVO vo = new RechargeOrderReportVO();
@@ -277,13 +300,12 @@ public class RechargeOrderReportService {
         vo.setOrderId(order.getOrderId());
         vo.setCreatedAt(order.getCreatedAt());
         vo.setDeviceId(order.getDeviceId());
-        vo.setVendorCode(order.getVendorCode());
         vo.setStatus(order.getStatus());
         vo.setStatusName(getStatusName(order.getStatus()));
 
-        // 用户身份（根据业务逻辑确定）
-        vo.setUserRole(determineUserRole(order));
-
+        // 优先使用订单表的快照字段
+        vo.setVendorCode(order.getVendorCode());
+        
         // 经销商名称
         if (order.getVendorCode() != null && !order.getVendorCode().trim().isEmpty()) {
             QueryWrapper<Vendor> vendorQw = new QueryWrapper<>();
@@ -291,6 +313,10 @@ public class RechargeOrderReportService {
             Vendor vendor = vendorRepository.selectOne(vendorQw);
             vo.setVendorName(vendor != null ? vendor.getVendorName() : "");
         }
+
+        // 通过设备表获取装机商代码（订单表未快照此字段）
+        ManufacturedDevice device = getDeviceByDeviceId(order.getDeviceId());
+        vo.setUserRole(determineUserRole(order, device));
 
         // 套餐信息
         vo.setPlanId(order.getProductId());
@@ -419,22 +445,34 @@ public class RechargeOrderReportService {
     }
 
     /**
-     * 确定用户身份
+     * 根据订单快照和设备信息确定用户身份
      */
-    private String determineUserRole(PaymentOrder order) {
+    private String determineUserRole(PaymentOrder order, ManufacturedDevice device) {
         List<String> roles = new ArrayList<>();
 
-        // 有业务员说明是装机商
-        if (order.getSalesmanId() != null) {
+        // 有装机商代码（从设备表获取）
+        if (device != null && device.getAssemblerCode() != null && !device.getAssemblerCode().trim().isEmpty()) {
             roles.add("装机商");
         }
 
-        // 有经销商
+        // 有经销商代码（从订单快照获取）
         if (order.getVendorCode() != null && !order.getVendorCode().trim().isEmpty()) {
             roles.add("经销商");
         }
 
         return roles.isEmpty() ? "普通用户" : String.join("+", roles);
+    }
+
+    /**
+     * 根据设备ID获取设备信息
+     */
+    private ManufacturedDevice getDeviceByDeviceId(String deviceId) {
+        if (deviceId == null || deviceId.trim().isEmpty()) {
+            return null;
+        }
+        QueryWrapper<ManufacturedDevice> qw = new QueryWrapper<>();
+        qw.lambda().eq(ManufacturedDevice::getDeviceId, deviceId);
+        return deviceRepository.selectOne(qw);
     }
 
     /**

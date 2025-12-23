@@ -28,6 +28,9 @@ public class RechargeOrderQueryRequest {
     @Schema(description = "经销商代码")
     private String vendorCode;
 
+    @Schema(description = "业务员ID")
+    private Long salesmanId;
+
     @Schema(description = "套餐ID")
     private String planId;
 
