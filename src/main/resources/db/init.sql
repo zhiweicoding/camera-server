@@ -264,6 +264,7 @@ CREATE TABLE IF NOT EXISTS `manufactured_device` (
     `special_req` VARCHAR(4) COMMENT '特殊要求',
     `assembler_code` VARCHAR(8) COMMENT '装机商代码',
     `vendor_code` VARCHAR(8) COMMENT '销售商代码',
+    `salesman_id` BIGINT COMMENT '业务员ID',
     `serial_no` VARCHAR(16) COMMENT '序列号(第9-16位)',
     `mac_address` VARCHAR(32) COMMENT 'MAC地址',
     `status` VARCHAR(20) DEFAULT 'manufactured' COMMENT '状态: manufactured/activated/bound',
@@ -276,6 +277,51 @@ CREATE TABLE IF NOT EXISTS `manufactured_device` (
     INDEX `idx_manufactured_batch` (`batch_id`),
     INDEX `idx_manufactured_mac` (`mac_address`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='生产设备表';
+
+CREATE TABLE IF NOT EXISTS `sys_dict` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    `category` VARCHAR(50) NOT NULL COMMENT '分类: network_lens/device_form/special_req/reserved/assembler_code',
+    `code` VARCHAR(20) NOT NULL COMMENT '字典代码',
+    `name` VARCHAR(100) NOT NULL COMMENT '显示名称',
+    `sort_order` INT DEFAULT 0 COMMENT '排序',
+    `status` TINYINT DEFAULT 1 COMMENT '状态: 0-禁用 1-启用',
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    
+    UNIQUE KEY `uk_category_code` (`category`, `code`),
+    INDEX `idx_dict_category` (`category`),
+    INDEX `idx_dict_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统字典表';
+
+-- 网络+镜头配置
+INSERT INTO `sys_dict` (`category`, `code`, `name`, `sort_order`) VALUES
+('network_lens', 'A1', 'WiFi + 2.8mm', 1),
+('network_lens', 'A2', 'WiFi + 3.6mm', 2),
+('network_lens', 'A3', 'WiFi + 4mm', 3),
+('network_lens', 'B1', '4G + 2.8mm', 4),
+('network_lens', 'B2', '4G + 3.6mm', 5),
+('network_lens', 'B3', '4G + 4mm', 6);
+
+-- 设备形态
+INSERT INTO `sys_dict` (`category`, `code`, `name`, `sort_order`) VALUES
+('device_form', '1', '枪机', 1),
+('device_form', '2', '球机', 2),
+('device_form', '3', '半球', 3);
+
+-- 特殊要求
+INSERT INTO `sys_dict` (`category`, `code`, `name`, `sort_order`) VALUES
+('special_req', '0', '无', 1),
+('special_req', '1', '防水', 2),
+('special_req', '2', '防爆', 3);
+
+-- 预留位
+INSERT INTO `sys_dict` (`category`, `code`, `name`, `sort_order`) VALUES
+('reserved', '0', '默认', 1);
+
+-- 装机商代码
+INSERT INTO `sys_dict` (`category`, `code`, `name`, `sort_order`) VALUES
+('assembler_code', '1', '装机商A', 1),
+('assembler_code', '2', '装机商B', 2);
 
 -- ===================================
 -- 10. 云存储与录像相关表
