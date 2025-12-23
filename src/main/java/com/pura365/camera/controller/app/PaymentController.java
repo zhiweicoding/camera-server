@@ -2,6 +2,7 @@ package com.pura365.camera.controller.app;
 
 import com.pura365.camera.model.ApiResponse;
 import com.pura365.camera.model.payment.*;
+import com.pura365.camera.service.GooglePayService;
 import com.pura365.camera.service.PaymentService;
 import com.pura365.camera.service.PaymentService.CreateOrderResult;
 import io.swagger.v3.oas.annotations.Operation;
@@ -121,6 +122,31 @@ public class PaymentController {
         }
 
         ApplePayVO result = paymentService.applePay(currentUserId, request);
+        if (result == null) {
+            return ApiResponse.error(404, "订单不存在");
+        }
+        return ApiResponse.success(result);
+    }
+
+    /**
+     * Google Play 支付
+     * 
+     * 客户端传入Google Play Billing返回的purchase token，服务端验证并完成支付
+     */
+    @Operation(summary = "Google Play 支付", description = "使用 Google Play 完成支付")
+    @PostMapping("/google")
+    public ApiResponse<GooglePayVO> googlePay(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @RequestBody GooglePayRequest request) {
+
+        if (!StringUtils.hasText(request.getOrderId())) {
+            return ApiResponse.error(400, "order_id 不能为空");
+        }
+        if (!StringUtils.hasText(request.getPurchaseToken())) {
+            return ApiResponse.error(400, "purchase_token 不能为空");
+        }
+
+        GooglePayVO result = paymentService.googlePay(currentUserId, request);
         if (result == null) {
             return ApiResponse.error(404, "订单不存在");
         }

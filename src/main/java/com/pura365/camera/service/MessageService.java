@@ -26,11 +26,17 @@ public class MessageService {
     private static final DateTimeFormatter ISO_FORMATTER = 
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC);
 
-    @Autowired
-    private AppMessageRepository appMessageRepository;
+    private final AppMessageRepository appMessageRepository;
+    private final DeviceRepository deviceRepository;
+    private final JPushService jPushService;
 
-    @Autowired
-    private DeviceRepository deviceRepository;
+    public MessageService(AppMessageRepository appMessageRepository,
+                          DeviceRepository deviceRepository,
+                          JPushService jPushService) {
+        this.appMessageRepository = appMessageRepository;
+        this.deviceRepository = deviceRepository;
+        this.jPushService = jPushService;
+    }
 
     /**
      * 分页查询消息列表
@@ -167,5 +173,68 @@ public class MessageService {
             vo.setCreatedAt(ISO_FORMATTER.format(message.getCreatedAt().toInstant()));
         }
         return vo;
+    }
+
+    /**
+     * 创建消息并推送给用户
+     * 
+     * @param userId       用户ID
+     * @param deviceId     设备ID
+     * @param type         消息类型
+     * @param title        消息标题
+     * @param content      消息内容
+     * @param thumbnailUrl 缩略图URL
+     * @param videoUrl     视频URL
+     * @return 创建的消息ID
+     */
+    public Long createMessageAndPush(Long userId, String deviceId, String type, 
+                                      String title, String content, 
+                                      String thumbnailUrl, String videoUrl) {
+        // 创建消息记录
+        AppMessage message = new AppMessage();
+        message.setUserId(userId);
+        message.setDeviceId(deviceId);
+        message.setType(type);
+        message.setTitle(title);
+        message.setContent(content);
+        message.setThumbnailUrl(thumbnailUrl);
+        message.setVideoUrl(videoUrl);
+        message.setIsRead(0);
+        message.setCreatedAt(new Date());
+        
+        appMessageRepository.insert(message);
+        
+        // 触发极光推送
+        pushMessageToUser(userId, deviceId, title, content, thumbnailUrl, videoUrl);
+        
+        return message.getId();
+    }
+
+    /**
+     * 推送消息给用户
+     */
+    private void pushMessageToUser(Long userId, String deviceId, String title, 
+                                    String content, String thumbnailUrl, String videoUrl) {
+        try {
+            Map<String, String> extras = new java.util.HashMap<>();
+            if (deviceId != null) {
+                extras.put("device_id", deviceId);
+            }
+            if (thumbnailUrl != null) {
+                extras.put("thumbnail_url", thumbnailUrl);
+            }
+            if (videoUrl != null) {
+                extras.put("video_url", videoUrl);
+            }
+            
+            boolean success = jPushService.pushToUser(userId, title, content, extras);
+            if (success) {
+                org.slf4j.LoggerFactory.getLogger(MessageService.class)
+                    .info("已向用户 {} 推送消息: {}", userId, title);
+            }
+        } catch (Exception e) {
+            org.slf4j.LoggerFactory.getLogger(MessageService.class)
+                .error("推送消息给用户 {} 失败", userId, e);
+        }
     }
 }

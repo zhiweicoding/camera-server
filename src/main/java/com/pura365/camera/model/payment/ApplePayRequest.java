@@ -17,12 +17,12 @@ public class ApplePayRequest {
     private String orderId;
 
     /**
-     * Apple 支付凭证
-     * 客户端从 Apple Pay SDK 获取的支付令牌
+     * Apple IAP收据数据 (Base64编码)
+     * 客户端从Apple IAP SDK获取的收据数据
      */
-    @Schema(description = "Apple 支付凭证，从 Apple Pay SDK 获取")
-    @JsonProperty("payment_token")
-    private String paymentToken;
+    @Schema(description = "Apple IAP收据数据(Base64编码)", required = true)
+    @JsonProperty("receipt_data")
+    private String receiptData;
 
     public String getOrderId() {
         return orderId;
@@ -32,11 +32,11 @@ public class ApplePayRequest {
         this.orderId = orderId;
     }
 
-    public String getPaymentToken() {
-        return paymentToken;
+    public String getReceiptData() {
+        return receiptData;
     }
 
-    public void setPaymentToken(String paymentToken) {
-        this.paymentToken = paymentToken;
+    public void setReceiptData(String receiptData) {
+        this.receiptData = receiptData;
     }
 }

@@ -14,6 +14,8 @@ import com.pura365.camera.repository.PaymentOrderRepository;
 import com.pura365.camera.repository.PaymentWechatRepository;
 import com.pura365.camera.repository.SalesmanRepository;
 import com.pura365.camera.repository.UserDeviceRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -31,6 +33,8 @@ import java.util.UUID;
  */
 @Service
 public class PaymentService {
+
+    private static final Logger logger = LoggerFactory.getLogger(PaymentService.class);
 
     private static final DateTimeFormatter ISO_FORMATTER =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC);
@@ -61,6 +65,21 @@ public class PaymentService {
 
     @Autowired
     private SalesmanRepository salesmanRepository;
+
+    @Autowired
+    private WechatPayService wechatPayService;
+
+    @Autowired
+    private ApplePayService applePayService;
+
+    @Autowired
+    private GooglePayService googlePayService;
+
+    @Autowired
+    private PaymentCallbackService paymentCallbackService;
+
+    @Autowired
+    private PayPalService payPalService;
 
     /**
      * 创建支付订单
@@ -174,24 +193,25 @@ public class PaymentService {
             return null;
         }
 
-        // 创建微信预支付记录 (mock)
-        PaymentWechat pw = new PaymentWechat();
-        pw.setOrderId(order.getOrderId());
-        pw.setPrepayId("mock_prepay_" + order.getOrderId());
-        pw.setRawResponse("{}");
-        pw.setCreatedAt(new Date());
-        paymentWechatRepository.insert(pw);
+        try {
+            // 调用微信支付服务创建订单
+            WechatPayVO vo = wechatPayService.createAppOrder(order);
 
-        // 返回支付参数
-        WechatPayVO vo = new WechatPayVO();
-        vo.setAppid("wx_app_id_mock");
-        vo.setPartnerid("partner_mock");
-        vo.setPrepayid(pw.getPrepayId());
-        vo.setPackageValue("Sign=WXPay");
-        vo.setNoncestr(UUID.randomUUID().toString().replace("-", ""));
-        vo.setTimestamp(String.valueOf(System.currentTimeMillis() / 1000));
-        vo.setSign("mock_sign_" + order.getOrderId());
-        return vo;
+            // 保存微信预支付记录
+            PaymentWechat pw = new PaymentWechat();
+            pw.setOrderId(order.getOrderId());
+            pw.setPrepayId(vo.getPrepayid());
+            pw.setRawResponse("");
+            pw.setCreatedAt(new Date());
+            paymentWechatRepository.insert(pw);
+
+            return vo;
+        } catch (Exception e) {
+            // 记录错误日志
+            org.slf4j.LoggerFactory.getLogger(PaymentService.class)
+                .error("创建微信支付订单失败: orderId={}", orderId, e);
+            return null;
+        }
     }
 
     /**
@@ -207,10 +227,26 @@ public class PaymentService {
             return null;
         }
 
-        PaypalPayVO vo = new PaypalPayVO();
-        vo.setApprovalUrl("https://www.paypal.com/checkout?token=" + order.getOrderId());
-        vo.setPaypalOrderId("paypal_" + order.getOrderId());
-        return vo;
+        try {
+            // 调用PayPal服务创建支付
+            com.paypal.api.payments.Payment payment = payPalService.createPayment(order);
+            String approvalUrl = payPalService.getApprovalUrl(payment);
+
+            if (approvalUrl == null) {
+                logger.error("PayPal支付创建失败: 无法获取approval_url, orderId={}", orderId);
+                return null;
+            }
+
+            PaypalPayVO vo = new PaypalPayVO();
+            vo.setApprovalUrl(approvalUrl);
+            vo.setPaypalOrderId(payment.getId());
+
+            logger.info("PayPal支付创建成功: orderId={}, paymentId={}", orderId, payment.getId());
+            return vo;
+        } catch (Exception e) {
+            logger.error("创建 PayPal 支付失败: orderId={}", orderId, e);
+            return null;
+        }
     }
 
     /**
@@ -226,16 +262,60 @@ public class PaymentService {
             return null;
         }
 
-        // 模拟支付成功，更新订单状态
-        order.setStatus("paid");
-        order.setThirdOrderId("apple_" + order.getOrderId());
-        order.setPaidAt(new Date());
-        order.setUpdatedAt(new Date());
-        paymentOrderRepository.updateById(order);
+        // 验证Apple收据
+        ApplePayService.AppleReceiptVerifyResult verifyResult = 
+                applePayService.verifyReceipt(request.getReceiptData());
+        
+        if (!verifyResult.isSuccess()) {
+            ApplePayVO vo = new ApplePayVO();
+            vo.setStatus("failed");
+            vo.setTransactionId(null);
+            return vo;
+        }
+
+        // 调用统一回调处理服务
+        boolean callbackSuccess = paymentCallbackService.handlePaymentSuccess(
+                order.getOrderId(), "apple", verifyResult.getTransactionId());
 
         ApplePayVO vo = new ApplePayVO();
-        vo.setTransactionId(order.getThirdOrderId());
-        vo.setStatus("completed");
+        vo.setTransactionId(verifyResult.getTransactionId());
+        vo.setStatus(callbackSuccess ? "completed" : "failed");
+        return vo;
+    }
+
+    /**
+     * Google Play支付
+     *
+     * @param userId  用户ID
+     * @param request Google Pay请求
+     * @return 支付结果
+     */
+    public GooglePayVO googlePay(Long userId, GooglePayRequest request) {
+        PaymentOrder order = getOrderByIdAndUser(request.getOrderId(), userId);
+        if (order == null) {
+            return null;
+        }
+
+        // 验证Google Play购买
+        GooglePayService.GooglePurchaseVerifyResult verifyResult = 
+                googlePayService.verifyPurchase(request.getProductId(), request.getPurchaseToken());
+
+        if (!verifyResult.isSuccess()) {
+            GooglePayVO vo = new GooglePayVO();
+            vo.setOrderId(order.getOrderId());
+            vo.setStatus("failed");
+            vo.setGoogleOrderId(null);
+            return vo;
+        }
+
+        // 调用统一回调处理服务
+        boolean callbackSuccess = paymentCallbackService.handlePaymentSuccess(
+                order.getOrderId(), "google", verifyResult.getOrderId());
+
+        GooglePayVO vo = new GooglePayVO();
+        vo.setOrderId(order.getOrderId());
+        vo.setStatus(callbackSuccess ? "completed" : "failed");
+        vo.setGoogleOrderId(verifyResult.getOrderId());
         return vo;
     }
 
