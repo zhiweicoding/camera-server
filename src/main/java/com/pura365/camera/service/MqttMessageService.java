@@ -567,28 +567,7 @@ public class MqttMessageService {
     // 把你日志里的那串16进制粘过来
     private static final String HEX = "3479 7bc3 bd97 30f5 b9bb f6dc 74ba 6273 3a64 81c6 5703 4f31 64ce d7b4 909c b03a cae1 228a 79fc 6a36 bbe9 0db3 88ee 1cc0 84eb 128f 5f06 b438 ffa4 9609 d41b 240e 43ae e6b9 b3ac 63e7 db29 a83a f3f7 e421";
 
-    public static void main(String[] args) throws Exception {
-        byte[] payload = hexToBytes(HEX);
 
-        // 这里把可能的 SSID 都列出来，一个个试
-        String[] ssids = {
-                "SGHome",       // 你现在服务端写死的
-                "AOCCX",        // 之前示例里提到的
-                "YourRealWifi", // 把设备实际连的 WiFi SSID 写进来
-                "test",         // 你们固件那边如果有写死的测试值，就填上
-        };
-
-        MqttEncryptService enc = new MqttEncryptService();
-        for (String ssid : ssids) {
-            try {
-                String json = enc.decrypt(payload, ssid);
-                System.out.println("=== SSID = " + ssid + " ===");
-                System.out.println(json);
-            } catch (Exception e) {
-                System.out.println("=== SSID = " + ssid + " 解密失败: " + e.getMessage());
-            }
-        }
-    }
 
     private static byte[] hexToBytes(String hex) {
         hex = hex.replace(" ", "").trim();

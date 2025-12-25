@@ -100,8 +100,9 @@ public class PaymentService {
 
         // 根据商品类型获取价格
         BigDecimal amount;
+        CloudPlan plan = null;
         if (PRODUCT_TYPE_CLOUD_STORAGE.equals(request.getProductType())) {
-            CloudPlan plan = findPlanByPlanId(request.getProductId());
+            plan = findPlanByPlanId(request.getProductId());
             if (plan == null) {
                 result.setErrorCode(404);
                 result.setErrorMessage("云存储套餐不存在");
@@ -114,7 +115,25 @@ public class PaymentService {
             return result;
         }
 
-        // 创建订单
+        // 订单复用：检查是否有同样的待支付订单
+        PaymentOrder existingOrder = findPendingOrder(userId, request.getDeviceId(), 
+                request.getProductType(), request.getProductId());
+        if (existingOrder != null) {
+            log.info("复用已有订单: orderId={}", existingOrder.getOrderId());
+            OrderVO vo = new OrderVO();
+            vo.setOrderId(existingOrder.getOrderId());
+            vo.setAmount(existingOrder.getAmount());
+            vo.setCurrency(existingOrder.getCurrency());
+            vo.setCreatedAt(formatIsoTime(existingOrder.getCreatedAt()));
+            result.setSuccess(true);
+            result.setOrder(vo);
+            return result;
+        }
+
+        // 关闭该用户该设备的其他待支付订单（换了套餐）
+        closeOtherPendingOrders(userId, request.getDeviceId());
+
+        // 创建新订单
         String paymentMethod = StringUtils.hasText(request.getPaymentMethod())
                 ? request.getPaymentMethod() : DEFAULT_PAYMENT_METHOD;
 
@@ -134,6 +153,8 @@ public class PaymentService {
         snapshotVendorAndSalesmanInfo(order, request.getDeviceId());
 
         paymentOrderRepository.insert(order);
+        log.info("创建新订单: orderId={}, userId={}, deviceId={}, productId={}", 
+                order.getOrderId(), userId, request.getDeviceId(), request.getProductId());
 
         // 构建响应
         OrderVO vo = new OrderVO();
@@ -145,6 +166,39 @@ public class PaymentService {
         result.setSuccess(true);
         result.setOrder(vo);
         return result;
+    }
+
+    /**
+     * 查找待支付的相同订单（用于复用）
+     */
+    private PaymentOrder findPendingOrder(Long userId, String deviceId, String productType, String productId) {
+        LambdaQueryWrapper<PaymentOrder> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(PaymentOrder::getUserId, userId)
+               .eq(PaymentOrder::getDeviceId, deviceId)
+               .eq(PaymentOrder::getProductType, productType)
+               .eq(PaymentOrder::getProductId, productId)
+               .eq(PaymentOrder::getStatus, "pending")
+               .last("LIMIT 1");
+        return paymentOrderRepository.selectOne(wrapper);
+    }
+
+    /**
+     * 关闭用户在该设备上的其他待支付订单（换套餐时调用）
+     */
+    private void closeOtherPendingOrders(Long userId, String deviceId) {
+        LambdaQueryWrapper<PaymentOrder> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(PaymentOrder::getUserId, userId)
+               .eq(PaymentOrder::getDeviceId, deviceId)
+               .eq(PaymentOrder::getStatus, "pending");
+        
+        PaymentOrder update = new PaymentOrder();
+        update.setStatus("cancelled");
+        update.setUpdatedAt(new Date());
+        
+        int count = paymentOrderRepository.update(update, wrapper);
+        if (count > 0) {
+            log.info("关闭旧订单: userId={}, deviceId={}, count={}", userId, deviceId, count);
+        }
     }
 
     /**

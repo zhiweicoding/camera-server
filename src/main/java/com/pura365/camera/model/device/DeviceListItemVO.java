@@ -79,12 +79,14 @@ public class DeviceListItemVO {
     /**
      * WiFi信号强度
      */
+    @Schema(description = "WiFi信号强度(RSSI)")
     @JsonProperty("wifi_rssi")
     private Integer wifiRssi;
 
     /**
      * 网络类型
      */
+    @Schema(description = "网络类型: wifi/4g")
     @JsonProperty("network_type")
     private String networkType;
 

@@ -17,6 +17,12 @@ import java.util.List;
 /**
  * 设备健康检查服务
  * 定时向设备发送心跳检测，更新设备在线状态
+ * 
+ * 心跳机制说明：
+ * 1. 设备初始状态为离线(status=0)
+ * 2. 只有当设备通过MQTT发送有效消息(CODE 138/139)时才会被标记为在线
+ * 3. 定时任务会检查所有在线设备的心跳时间，超时则标记为离线
+ * 4. 从未收到过有效心跳的设备（lastHeartbeatTime为null）会被直接标记为离线
  */
 @Service
 public class DeviceHealthCheckService {
@@ -56,8 +62,11 @@ public class DeviceHealthCheckService {
         try {
             // 1. 检查超时未响应的设备，标记为离线
             markOfflineDevices();
+            
+            // 2. 标记从未有过心跳的在线设备为离线（防止虚假设备）
+            markNeverHeartbeatDevicesOffline();
 
-            // 2. 向所有在线设备发送心跳请求
+            // 3. 向所有在线设备发送心跳请求
             sendHeartbeatToOnlineDevices();
 
         } catch (Exception e) {
@@ -72,15 +81,13 @@ public class DeviceHealthCheckService {
     private void markOfflineDevices() {
         LocalDateTime threshold = LocalDateTime.now().minusSeconds(offlineThresholdSeconds);
 
-        // 查找需要标记为离线的设备：状态为在线(1)，且最后心跳时间早于阈值
+        // 查找需要标记为离线的设备：
+        // 条件1: 状态为在线(1)
+        // 条件2: 最后心跳时间不为空且早于阈值
         LambdaUpdateWrapper<Device> updateWrapper = new LambdaUpdateWrapper<>();
         updateWrapper.eq(Device::getStatus, 1) // 当前状态为在线
-                .and(wrapper -> wrapper
-                        .lt(Device::getLastHeartbeatTime, threshold) // 心跳超时
-                        .or()
-                        .isNull(Device::getLastHeartbeatTime) // 或从未有心跳且最后在线时间超时
-                        .lt(Device::getLastOnlineTime, threshold)
-                )
+                .isNotNull(Device::getLastHeartbeatTime) // 有过心跳记录
+                .lt(Device::getLastHeartbeatTime, threshold) // 心跳超时
                 .set(Device::getStatus, 0) // 设置为离线
                 .set(Device::getUpdatedAt, LocalDateTime.now());
 
@@ -89,15 +96,34 @@ public class DeviceHealthCheckService {
             log.info("已将 {} 个设备标记为离线(心跳超时 {}秒)", updatedCount, offlineThresholdSeconds);
         }
     }
+    
+    /**
+     * 标记从未有过心跳记录的在线设备为离线
+     * 这种情况通常是用户绑定了不存在的设备ID，或设备从未真正连接过
+     */
+    private void markNeverHeartbeatDevicesOffline() {
+        // 查找在线但从未有心跳的设备
+        LambdaUpdateWrapper<Device> updateWrapper = new LambdaUpdateWrapper<>();
+        updateWrapper.eq(Device::getStatus, 1) // 当前状态为在线
+                .isNull(Device::getLastHeartbeatTime) // 从未有心跳记录
+                .set(Device::getStatus, 0) // 设置为离线
+                .set(Device::getUpdatedAt, LocalDateTime.now());
+
+        int updatedCount = deviceRepository.update(null, updateWrapper);
+        if (updatedCount > 0) {
+            log.info("已将 {} 个从未心跳的设备标记为离线", updatedCount);
+        }
+    }
 
     /**
      * 向所有在线设备发送心跳请求(CODE 11)
      */
     private void sendHeartbeatToOnlineDevices() {
-        // 查询所有在线设备
+        // 查询所有在线设备（必须有过心跳记录才发送，避免向虚假设备发送）
         LambdaQueryWrapper<Device> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(Device::getStatus, 1) // 状态为在线
-                .eq(Device::getEnabled, 1);  // 且启用状态
+                .eq(Device::getEnabled, 1)  // 且启用状态
+                .isNotNull(Device::getLastHeartbeatTime); // 有过心跳记录
 
         List<Device> onlineDevices = deviceRepository.selectList(queryWrapper);
 
