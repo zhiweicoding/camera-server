@@ -6,7 +6,11 @@ import com.pura365.camera.domain.CloudVideo;
 import com.pura365.camera.domain.Device;
 import com.pura365.camera.model.cloud.ManualUploadResponse;
 import com.pura365.camera.repository.CloudVideoRepository;
+import com.pura365.camera.repository.CloudPlanRepository;
+import com.pura365.camera.repository.CloudSubscriptionRepository;
 import com.pura365.camera.repository.DeviceRepository;
+import com.pura365.camera.domain.CloudPlan;
+import com.pura365.camera.domain.CloudSubscription;
 import com.qiniu.util.Auth;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +26,8 @@ import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 import software.amazon.awssdk.services.s3.model.S3Object;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.CommonPrefix;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequest;
@@ -32,6 +38,8 @@ import java.io.InputStream;
 import java.net.URI;
 import java.text.SimpleDateFormat;
 import java.time.Duration;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -56,6 +64,12 @@ public class CloudStorageService {
 
     @Autowired
     private CloudVideoRepository cloudVideoRepository;
+
+    @Autowired
+    private CloudSubscriptionRepository cloudSubscriptionRepository;
+
+    @Autowired
+    private CloudPlanRepository cloudPlanRepository;
 
     /**
      * 判断设备是否在国内
@@ -477,6 +491,352 @@ public class CloudStorageService {
         }
         
         return String.format("%s/%s/%s", deviceId, date, fileName);
+    }
+
+    /**
+     * 获取设备的云存储循环天数
+     * @param deviceId 设备ID
+     * @return 循环天数，如果没有订阅则返回0
+     */
+    public int getStorageDaysForDevice(String deviceId) {
+        // 查询设备的有效订阅
+        QueryWrapper<CloudSubscription> subWrapper = new QueryWrapper<>();
+        subWrapper.eq("device_id", deviceId)
+                .gt("expire_at", new Date()) // 未过期
+                .orderByDesc("expire_at")
+                .last("LIMIT 1");
+        CloudSubscription subscription = cloudSubscriptionRepository.selectOne(subWrapper);
+        
+        if (subscription == null) {
+            log.debug("设备 {} 没有有效的云存储订阅", deviceId);
+            return 0;
+        }
+        
+        // 查询套餐的存储天数
+        QueryWrapper<CloudPlan> planWrapper = new QueryWrapper<>();
+        planWrapper.eq("plan_id", subscription.getPlanId());
+        CloudPlan plan = cloudPlanRepository.selectOne(planWrapper);
+        
+        if (plan == null || plan.getStorageDays() == null) {
+            log.warn("设备 {} 的套餐 {} 不存在或没有设置存储天数", deviceId, subscription.getPlanId());
+            return 0;
+        }
+        
+        return plan.getStorageDays();
+    }
+
+    /**
+     * 清理设备过期的云存储文件
+     * 根据套餐的循环天数删除过期文件
+     * 
+     * @param deviceId 设备ID
+     * @return 删除的文件数量
+     */
+    public int cleanupExpiredVideos(String deviceId) {
+        int storageDays = getStorageDaysForDevice(deviceId);
+        if (storageDays <= 0) {
+            log.debug("设备 {} 没有有效订阅或存储天数为0，跳过清理", deviceId);
+            return 0;
+        }
+        
+        Device device = deviceRepository.selectById(deviceId);
+        if (device == null) {
+            log.warn("设备不存在: {}", deviceId);
+            return 0;
+        }
+        
+        // 计算过期日期（今天 - 存储天数）
+        LocalDate cutoffDate = LocalDate.now().minusDays(storageDays);
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        
+        log.info("开始清理设备 {} 的过期云存储文件，保留 {} 天，删除 {} 之前的文件", 
+            deviceId, storageDays, cutoffDate.format(formatter));
+        
+        int deletedCount = 0;
+        
+        try {
+            if (isChina(device.getRegion())) {
+                deletedCount = cleanupExpiredVideosFromQiniu(deviceId, cutoffDate);
+            } else {
+                deletedCount = cleanupExpiredVideosFromVultr(deviceId, cutoffDate);
+            }
+        } catch (Exception e) {
+            log.error("清理设备 {} 过期云存储文件失败", deviceId, e);
+        }
+        
+        log.info("设备 {} 过期云存储文件清理完成，共删除 {} 个文件", deviceId, deletedCount);
+        return deletedCount;
+    }
+
+    /**
+     * 删除设备的所有云存储视频文件
+     * 用于设备重置时清除所有历史数据
+     * 
+     * @param deviceId 设备ID
+     * @return 删除的文件数量
+     */
+    public int deleteAllDeviceVideos(String deviceId) {
+        Device device = deviceRepository.selectById(deviceId);
+        if (device == null) {
+            log.warn("设备不存在，无法删除云存储文件: {}", deviceId);
+            return 0;
+        }
+        
+        log.info("开始删除设备 {} 的所有云存储文件", deviceId);
+        
+        int deletedCount = 0;
+        String prefix = deviceId + "/";
+        
+        try {
+            if (isChina(device.getRegion())) {
+                deletedCount = deleteAllFromQiniu(prefix);
+            } else {
+                deletedCount = deleteAllFromVultr(prefix);
+            }
+        } catch (Exception e) {
+            log.error("删除设备 {} 云存储文件失败", deviceId, e);
+        }
+        
+        log.info("设备 {} 云存储文件删除完成，共删除 {} 个文件", deviceId, deletedCount);
+        return deletedCount;
+    }
+    
+    /**
+     * 从七牛云删除指定前缀的所有文件
+     */
+    private int deleteAllFromQiniu(String prefix) {
+        int deletedCount = 0;
+        
+        try {
+            AwsBasicCredentials credentials = AwsBasicCredentials.create(
+                qiniuConfig.getAccessKey(),
+                qiniuConfig.getSecretKey()
+            );
+            
+            S3Client s3Client = S3Client.builder()
+                .region(Region.of("cn-south-1"))
+                .endpointOverride(URI.create("https://s3.cn-south-1.qiniucs.com"))
+                .credentialsProvider(StaticCredentialsProvider.create(credentials))
+                .build();
+            
+            deletedCount = deleteAllObjectsInFolder(s3Client, qiniuConfig.getBucket(), prefix);
+            
+            s3Client.close();
+            
+        } catch (Exception e) {
+            log.error("从七牛云删除文件失败 - prefix: {}", prefix, e);
+        }
+        
+        return deletedCount;
+    }
+    
+    /**
+     * 从Vultr删除指定前缀的所有文件
+     */
+    private int deleteAllFromVultr(String prefix) {
+        int deletedCount = 0;
+        
+        try {
+            AwsBasicCredentials credentials = AwsBasicCredentials.create(
+                vultrConfig.getAccessKey(),
+                vultrConfig.getSecretKey()
+            );
+            
+            S3Client s3Client = S3Client.builder()
+                .region(Region.of(vultrConfig.getRegion()))
+                .endpointOverride(URI.create(vultrConfig.getEndpoint()))
+                .credentialsProvider(StaticCredentialsProvider.create(credentials))
+                .build();
+            
+            deletedCount = deleteAllObjectsInFolder(s3Client, vultrConfig.getBucket(), prefix);
+            
+            s3Client.close();
+            
+        } catch (Exception e) {
+            log.error("从Vultr删除文件失败 - prefix: {}", prefix, e);
+        }
+        
+        return deletedCount;
+    }
+
+    /**
+     * 从七牛云清理过期文件
+     */
+    private int cleanupExpiredVideosFromQiniu(String deviceId, LocalDate cutoffDate) {
+        int deletedCount = 0;
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        
+        try {
+            AwsBasicCredentials credentials = AwsBasicCredentials.create(
+                qiniuConfig.getAccessKey(),
+                qiniuConfig.getSecretKey()
+            );
+            
+            S3Client s3Client = S3Client.builder()
+                .region(Region.of("cn-south-1"))
+                .endpointOverride(URI.create("https://s3.cn-south-1.qiniucs.com"))
+                .credentialsProvider(StaticCredentialsProvider.create(credentials))
+                .build();
+            
+            // 列出设备目录下的所有日期文件夹
+            String prefix = deviceId + "/";
+            ListObjectsV2Request listRequest = ListObjectsV2Request.builder()
+                .bucket(qiniuConfig.getBucket())
+                .prefix(prefix)
+                .delimiter("/")
+                .build();
+            
+            ListObjectsV2Response response = s3Client.listObjectsV2(listRequest);
+            
+            // 遍历日期文件夹
+            for (CommonPrefix commonPrefix : response.commonPrefixes()) {
+                String folderPath = commonPrefix.prefix(); // e.g., "deviceId/2025-12-15/"
+                String dateStr = extractDateFromPath(folderPath, deviceId);
+                
+                if (dateStr != null) {
+                    try {
+                        LocalDate folderDate = LocalDate.parse(dateStr, formatter);
+                        if (folderDate.isBefore(cutoffDate)) {
+                            // 删除该日期文件夹下的所有文件
+                            int deleted = deleteAllObjectsInFolder(s3Client, qiniuConfig.getBucket(), folderPath);
+                            deletedCount += deleted;
+                            log.info("七牛云: 已删除设备 {} 日期 {} 下的 {} 个文件", deviceId, dateStr, deleted);
+                        }
+                    } catch (Exception e) {
+                        log.warn("解析日期文件夹失败: {}", folderPath, e);
+                    }
+                }
+            }
+            
+            s3Client.close();
+            
+        } catch (Exception e) {
+            log.error("从七牛云清理过期文件失败 - deviceId: {}", deviceId, e);
+        }
+        
+        return deletedCount;
+    }
+
+    /**
+     * 从Vultr清理过期文件
+     */
+    private int cleanupExpiredVideosFromVultr(String deviceId, LocalDate cutoffDate) {
+        int deletedCount = 0;
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        
+        try {
+            AwsBasicCredentials credentials = AwsBasicCredentials.create(
+                vultrConfig.getAccessKey(),
+                vultrConfig.getSecretKey()
+            );
+            
+            S3Client s3Client = S3Client.builder()
+                .region(Region.of(vultrConfig.getRegion()))
+                .endpointOverride(URI.create(vultrConfig.getEndpoint()))
+                .credentialsProvider(StaticCredentialsProvider.create(credentials))
+                .build();
+            
+            // 列出设备目录下的所有日期文件夹
+            String prefix = deviceId + "/";
+            ListObjectsV2Request listRequest = ListObjectsV2Request.builder()
+                .bucket(vultrConfig.getBucket())
+                .prefix(prefix)
+                .delimiter("/")
+                .build();
+            
+            ListObjectsV2Response response = s3Client.listObjectsV2(listRequest);
+            
+            // 遍历日期文件夹
+            for (CommonPrefix commonPrefix : response.commonPrefixes()) {
+                String folderPath = commonPrefix.prefix(); // e.g., "deviceId/2025-12-15/"
+                String dateStr = extractDateFromPath(folderPath, deviceId);
+                
+                if (dateStr != null) {
+                    try {
+                        LocalDate folderDate = LocalDate.parse(dateStr, formatter);
+                        if (folderDate.isBefore(cutoffDate)) {
+                            // 删除该日期文件夹下的所有文件
+                            int deleted = deleteAllObjectsInFolder(s3Client, vultrConfig.getBucket(), folderPath);
+                            deletedCount += deleted;
+                            log.info("Vultr: 已删除设备 {} 日期 {} 下的 {} 个文件", deviceId, dateStr, deleted);
+                        }
+                    } catch (Exception e) {
+                        log.warn("解析日期文件夹失败: {}", folderPath, e);
+                    }
+                }
+            }
+            
+            s3Client.close();
+            
+        } catch (Exception e) {
+            log.error("从Vultr清理过期文件失败 - deviceId: {}", deviceId, e);
+        }
+        
+        return deletedCount;
+    }
+
+    /**
+     * 从路径中提取日期字符串
+     * @param folderPath 文件夹路径，如 "deviceId/2025-12-15/"
+     * @param deviceId 设备ID
+     * @return 日期字符串，如 "2025-12-15"
+     */
+    private String extractDateFromPath(String folderPath, String deviceId) {
+        // 移除前缀 "deviceId/" 和后缀 "/"
+        String prefix = deviceId + "/";
+        if (folderPath.startsWith(prefix)) {
+            String remaining = folderPath.substring(prefix.length());
+            if (remaining.endsWith("/")) {
+                remaining = remaining.substring(0, remaining.length() - 1);
+            }
+            // 验证是否是有效的日期格式 (YYYY-MM-DD)
+            if (remaining.matches("\\d{4}-\\d{2}-\\d{2}")) {
+                return remaining;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 删除文件夹下的所有对象
+     */
+    private int deleteAllObjectsInFolder(S3Client s3Client, String bucket, String folderPath) {
+        int deletedCount = 0;
+        
+        // 列出文件夹下的所有对象
+        ListObjectsV2Request listRequest = ListObjectsV2Request.builder()
+            .bucket(bucket)
+            .prefix(folderPath)
+            .build();
+        
+        ListObjectsV2Response response;
+        do {
+            response = s3Client.listObjectsV2(listRequest);
+            
+            for (S3Object obj : response.contents()) {
+                try {
+                    DeleteObjectRequest deleteRequest = DeleteObjectRequest.builder()
+                        .bucket(bucket)
+                        .key(obj.key())
+                        .build();
+                    s3Client.deleteObject(deleteRequest);
+                    deletedCount++;
+                    log.debug("已删除对象: {}", obj.key());
+                } catch (Exception e) {
+                    log.warn("删除对象失败: {}", obj.key(), e);
+                }
+            }
+            
+            // 处理分页
+            listRequest = ListObjectsV2Request.builder()
+                .bucket(bucket)
+                .prefix(folderPath)
+                .continuationToken(response.nextContinuationToken())
+                .build();
+                
+        } while (response.isTruncated());
+        
+        return deletedCount;
     }
 
     /**

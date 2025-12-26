@@ -17,6 +17,7 @@ import com.pura365.camera.repository.CloudSubscriptionRepository;
 import com.pura365.camera.repository.CloudVideoRepository;
 import com.pura365.camera.repository.UserDeviceRepository;
 import com.pura365.camera.service.CloudStorageService;
+import com.pura365.camera.service.CloudVideoCleanupService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -61,6 +62,9 @@ public class CloudController {
     
     @Autowired
     private CloudStorageService cloudStorageService;
+
+    @Autowired
+    private CloudVideoCleanupService cloudVideoCleanupService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -395,6 +399,147 @@ public class CloudController {
         return ApiResponse.success(response);
     }
 
+    // ===== 云存储清理测试接口 =====
+
+    /**
+     * 测试清理单个设备的过期云存储文件
+     * POST /api/internal/cloud/cleanup/device/{deviceId}
+     */
+    @Operation(summary = "清理设备过期云存储", description = "根据套餐循环天数清理指定设备的过期云存储文件")
+    @PostMapping("/cleanup/device/{deviceId}")
+    public ApiResponse<Map<String, Object>> cleanupDeviceVideos(
+            @Parameter(description = "设备ID", required = true) @PathVariable String deviceId) {
+        log.info("测试清理设备云存储 - deviceId={}", deviceId);
+        
+        try {
+            // 获取设备的存储天数配置
+            int storageDays = cloudStorageService.getStorageDaysForDevice(deviceId);
+            
+            // 执行清理
+            int deletedCount = cloudVideoCleanupService.cleanupDevice(deviceId);
+            
+            Map<String, Object> result = new HashMap<>();
+            result.put("device_id", deviceId);
+            result.put("storage_days", storageDays);
+            result.put("deleted_count", deletedCount);
+            result.put("message", deletedCount > 0 
+                ? "清理完成，共删除 " + deletedCount + " 个过期文件" 
+                : "没有需要清理的过期文件");
+            
+            return ApiResponse.success(result);
+        } catch (Exception e) {
+            log.error("清理设备云存储失败 - deviceId={}", deviceId, e);
+            return ApiResponse.error(500, "清理失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 测试清理所有设备的过期云存储文件
+     * POST /api/internal/cloud/cleanup/all
+     */
+    @Operation(summary = "清理所有设备过期云存储", description = "清理所有有订阅的设备的过期云存储文件")
+    @PostMapping("/cleanup/all")
+    public ApiResponse<Map<String, Object>> cleanupAllDevicesVideos() {
+        log.info("测试清理所有设备云存储");
+        
+        try {
+            int totalDeleted = cloudVideoCleanupService.cleanupAllDevices();
+            
+            Map<String, Object> result = new HashMap<>();
+            result.put("total_deleted", totalDeleted);
+            result.put("message", "清理完成，共删除 " + totalDeleted + " 个过期文件");
+            
+            return ApiResponse.success(result);
+        } catch (Exception e) {
+            log.error("清理所有设备云存储失败", e);
+            return ApiResponse.error(500, "清理失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 查询设备的云存储循环天数配置
+     * GET /api/internal/cloud/storage-days/{deviceId}
+     */
+    @Operation(summary = "查询设备存储天数", description = "获取设备当前套餐的云存储循环天数")
+    @GetMapping("/storage-days/{deviceId}")
+    public ApiResponse<Map<String, Object>> getDeviceStorageDays(
+            @Parameter(description = "设备ID", required = true) @PathVariable String deviceId) {
+        log.info("查询设备存储天数 - deviceId={}", deviceId);
+        
+        try {
+            int storageDays = cloudStorageService.getStorageDaysForDevice(deviceId);
+            
+            Map<String, Object> result = new HashMap<>();
+            result.put("device_id", deviceId);
+            result.put("storage_days", storageDays);
+            result.put("has_subscription", storageDays > 0);
+            
+            return ApiResponse.success(result);
+        } catch (Exception e) {
+            log.error("查询设备存储天数失败 - deviceId={}", deviceId, e);
+            return ApiResponse.error(500, "查询失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 异步清理单个设备的过期云存储文件（立即返回，后台执行）
+     * POST /api/internal/cloud/cleanup/device/{deviceId}/async
+     */
+    @Operation(summary = "异步清理设备过期云存储", description = "触发后立即返回，清理在后台异步执行")
+    @PostMapping("/cleanup/device/{deviceId}/async")
+    public ApiResponse<Map<String, Object>> cleanupDeviceVideosAsync(
+            @Parameter(description = "设备ID", required = true) @PathVariable String deviceId) {
+        log.info("异步清理设备云存储 - deviceId={}", deviceId);
+        
+        try {
+            int storageDays = cloudStorageService.getStorageDaysForDevice(deviceId);
+            
+            // 异步执行，不等待结果
+            cloudVideoCleanupService.cleanupDeviceAsync(deviceId);
+            
+            Map<String, Object> result = new HashMap<>();
+            result.put("device_id", deviceId);
+            result.put("storage_days", storageDays);
+            result.put("status", "submitted");
+            result.put("message", "清理任务已提交，正在后台执行");
+            
+            return ApiResponse.success(result);
+        } catch (Exception e) {
+            log.error("提交异步清理任务失败 - deviceId={}", deviceId, e);
+            return ApiResponse.error(500, "提交失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 异步清理所有设备的过期云存储文件（立即返回，后台执行）
+     * POST /api/internal/cloud/cleanup/all/async
+     */
+    @Operation(summary = "异步清理所有设备过期云存储", description = "触发后立即返回，清理在后台异步执行")
+    @PostMapping("/cleanup/all/async")
+    public ApiResponse<Map<String, Object>> cleanupAllDevicesVideosAsync() {
+        log.info("异步清理所有设备云存储");
+        
+        try {
+            // 异步执行，立即返回
+            new Thread(() -> {
+                try {
+                    cloudVideoCleanupService.cleanupAllDevices();
+                } catch (Exception e) {
+                    log.error("异步清理所有设备失败", e);
+                }
+            }).start();
+            
+            Map<String, Object> result = new HashMap<>();
+            result.put("status", "submitted");
+            result.put("message", "清理任务已提交，正在后台执行，请查看日志了解进度");
+            
+            return ApiResponse.success(result);
+        } catch (Exception e) {
+            log.error("提交异步清理任务失败", e);
+            return ApiResponse.error(500, "提交失败: " + e.getMessage());
+        }
+    }
+
     // ===== 私有辅助方法 =====
 
     private CloudPlan findPlanByPlanId(String planId) {
@@ -464,7 +609,7 @@ public class CloudController {
             }
 
             // 必须包含M
-            int mIndex = fileName.indexOf('M');
+            int mIndex = fileName.indexOf('m');
             if (mIndex <= 0) {
                 continue;
             }

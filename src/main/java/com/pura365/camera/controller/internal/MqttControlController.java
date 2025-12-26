@@ -3,6 +3,8 @@ package com.pura365.camera.controller.internal;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
+import com.pura365.camera.domain.Device;
+import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.service.MqttMessageService;
 import com.pura365.camera.util.TimeValidator;
 import org.slf4j.Logger;
@@ -27,6 +29,9 @@ public class MqttControlController {
 
     @Autowired
     private MqttMessageService mqttMessageService;
+
+    @Autowired
+    private DeviceRepository deviceRepository;
 
     /**
      * 请求设备信息（CODE 11）
@@ -129,6 +134,16 @@ public class MqttControlController {
         log.info("设置设备 {} 画面旋转: {}", deviceId, enable);
 
         try {
+            // 1. 先更新数据库（乐观更新）
+            Device device = deviceRepository.selectById(deviceId);
+            if (device != null) {
+                device.setRotate(enable);
+                device.setUpdatedAt(java.time.LocalDateTime.now());
+                deviceRepository.updateById(device);
+                log.info("已更新设备 {} 画面旋转状态到数据库: {}", deviceId, enable);
+            }
+
+            // 2. 再发送 MQTT 消息到设备
             Map<String, Object> msg = new HashMap<>();
             msg.put("code", 26);
             msg.put("time", TimeValidator.getCurrentTimestamp());
@@ -136,9 +151,11 @@ public class MqttControlController {
 
             mqttMessageService.sendToDevice(deviceId, msg, null);
 
+            // 3. 返回结果（包含新状态）
             Map<String, Object> result = new HashMap<>();
             result.put("success", true);
             result.put("message", "已发送旋转设置");
+            result.put("rotate", enable);
             return ResponseEntity.ok(result);
 
         } catch (Exception e) {
@@ -162,6 +179,16 @@ public class MqttControlController {
         log.info("设置设备 {} 白光灯: {}", deviceId, enable);
 
         try {
+            // 1. 先更新数据库（乐观更新）
+            Device device = deviceRepository.selectById(deviceId);
+            if (device != null) {
+                device.setWhiteLed(enable);
+                device.setUpdatedAt(java.time.LocalDateTime.now());
+                deviceRepository.updateById(device);
+                log.info("已更新设备 {} 白光灯状态到数据库: {}", deviceId, enable);
+            }
+
+            // 2. 再发送 MQTT 消息到设备
             Map<String, Object> msg = new HashMap<>();
             msg.put("code", 28);
             msg.put("time", TimeValidator.getCurrentTimestamp());
@@ -169,9 +196,11 @@ public class MqttControlController {
 
             mqttMessageService.sendToDevice(deviceId, msg, null);
 
+            // 3. 返回结果（包含新状态）
             Map<String, Object> result = new HashMap<>();
             result.put("success", true);
             result.put("message", "已发送白光灯设置");
+            result.put("whiteLed", enable);
             return ResponseEntity.ok(result);
 
         } catch (Exception e) {

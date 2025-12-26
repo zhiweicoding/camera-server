@@ -3,18 +3,25 @@ package com.pura365.camera.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.config.StorageConfig;
 import com.pura365.camera.domain.CloudSubscription;
+import com.pura365.camera.domain.CloudVideo;
 import com.pura365.camera.domain.Device;
+import com.pura365.camera.domain.DeviceShare;
+import com.pura365.camera.domain.UserDevice;
 import com.pura365.camera.model.GetInfoRequest;
 import com.pura365.camera.model.GetInfoResponse;
 import com.pura365.camera.model.ResetDeviceRequest;
 import com.pura365.camera.model.SendMsgRequest;
 import com.pura365.camera.repository.CloudSubscriptionRepository;
+import com.pura365.camera.repository.CloudVideoRepository;
 import com.pura365.camera.repository.DeviceRepository;
+import com.pura365.camera.repository.DeviceShareRepository;
+import com.pura365.camera.repository.UserDeviceRepository;
 import com.pura365.camera.util.TimeValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Date;
@@ -38,6 +45,15 @@ public class CameraService {
     
     @Autowired
     private StorageConfig.VultrConfig vultrConfig;
+    
+    @Autowired
+    private DeviceShareRepository deviceShareRepository;
+    
+    @Autowired
+    private UserDeviceRepository userDeviceRepository;
+    
+    @Autowired
+    private CloudVideoRepository cloudVideoRepository;
     
     /**
      * 获取设备信息
@@ -120,21 +136,92 @@ public class CameraService {
      * 2. 之前APP的已连接信息
      * 3. 云存储中的历史数据
      * 
-     * TODO: 后续需要实现真实的数据清理逻辑
+     * @return 0: 成功, 1: 设备不存在, 2: MAC地址不匹配, 3: 清理失败
      */
+    @Transactional(rollbackFor = Exception.class)
     public int resetDevice(ResetDeviceRequest request) {
         log.info("重置设备 - ID: {}, MAC: {}", request.getId(), request.getMac());
         
-        // TODO: 实现以下逻辑
-        // 1. 验证设备序列号和MAC地址是否匹配
-        // 2. 清除设备分享信息（从数据库删除相关记录）
-        // 3. 清除APP连接信息
-        // 4. 调用云存储API清除历史数据
-        // 5. 记录操作日志
+        String deviceId = request.getId();
+        String mac = request.getMac();
         
-        // 模拟成功
-        log.info("设备重置成功 - ID: {}", request.getId());
-        return 0; // 0表示成功
+        // 1. 验证设备序列号和MAC地址是否匹配
+        Device device = deviceRepository.selectById(deviceId);
+        if (device == null) {
+            log.warn("设备不存在 - ID: {}", deviceId);
+            return 1; // 设备不存在
+        }
+        
+        // 验证MAC地址（忽略大小写，移除冒号和横杠）
+        String storedMac = normalizeMac(device.getMac());
+        String requestMac = normalizeMac(mac);
+        if (!storedMac.equals(requestMac)) {
+            log.warn("MAC地址不匹配 - ID: {}, 期望: {}, 实际: {}", deviceId, device.getMac(), mac);
+            return 2; // MAC地址不匹配
+        }
+        
+        try {
+            // 2. 清除设备分享信息（device_share 表）
+            int deletedShares = deleteDeviceShares(deviceId);
+            log.info("已删除设备分享记录 - ID: {}, 删除数量: {}", deviceId, deletedShares);
+            
+            // 3. 清除APP连接信息（user_device 表）
+            int deletedUserDevices = deleteUserDevices(deviceId);
+            log.info("已删除用户设备关联记录 - ID: {}, 删除数量: {}", deviceId, deletedUserDevices);
+            
+            // 4. 清除云存储历史数据
+            // 4.1 删除云视频数据库记录（cloud_video 表）
+            int deletedVideos = deleteCloudVideos(deviceId);
+            log.info("已删除云视频记录 - ID: {}, 删除数量: {}", deviceId, deletedVideos);
+            
+            // 4.2 删除云存储中的实际文件
+            int deletedFiles = cloudStorageService.deleteAllDeviceVideos(deviceId);
+            log.info("已删除云存储文件 - ID: {}, 删除数量: {}", deviceId, deletedFiles);
+            
+            log.info("设备重置成功 - ID: {}", deviceId);
+            return 0; // 成功
+            
+        } catch (Exception e) {
+            log.error("设备重置失败 - ID: {}", deviceId, e);
+            throw e; // 抛出异常触发事务回滚
+        }
+    }
+    
+    /**
+     * 标准化MAC地址（转大写，移除分隔符）
+     */
+    private String normalizeMac(String mac) {
+        if (mac == null) {
+            return "";
+        }
+        return mac.toUpperCase().replaceAll("[:\\-]", "");
+    }
+    
+    /**
+     * 删除设备分享记录
+     */
+    private int deleteDeviceShares(String deviceId) {
+        QueryWrapper<DeviceShare> wrapper = new QueryWrapper<>();
+        wrapper.eq("device_id", deviceId);
+        return deviceShareRepository.delete(wrapper);
+    }
+    
+    /**
+     * 删除用户设备关联记录
+     */
+    private int deleteUserDevices(String deviceId) {
+        QueryWrapper<UserDevice> wrapper = new QueryWrapper<>();
+        wrapper.eq("device_id", deviceId);
+        return userDeviceRepository.delete(wrapper);
+    }
+    
+    /**
+     * 删除云视频记录
+     */
+    private int deleteCloudVideos(String deviceId) {
+        QueryWrapper<CloudVideo> wrapper = new QueryWrapper<>();
+        wrapper.eq("device_id", deviceId);
+        return cloudVideoRepository.delete(wrapper);
     }
     
     /**
