@@ -146,10 +146,10 @@ public class MqttMessageService {
             }
             
             // 获取设备的SSID
-            String ssid = deviceSsidService.getSsid(deviceId);
+            Device ssid = deviceRepository.selectById(deviceId);
             
             // 解密消息
-            String json = encryptService.decrypt(payload, ssid);
+            String json = encryptService.decrypt(payload, ssid.getSsid());
             log.info("解密后的消息: {}", json);
             
             // 解析基础消息获取code
@@ -461,7 +461,10 @@ public class MqttMessageService {
         } catch (Exception e) {
             log.warn("序列化MQTT消息为JSON失败，将继续发送加密消息", e);
         }
-        
+        Device device = deviceRepository.selectById(deviceId);
+        if (device != null) {
+            ssid = device.getSsid();
+        }
         // 加密消息
         byte[] encrypted = encryptService.encrypt(message, ssid);
         
