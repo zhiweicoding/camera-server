@@ -92,8 +92,9 @@ public class DeviceController {
     @GetMapping
     public ApiResponse<List<DeviceListItemVO>> listDevices(
             @RequestAttribute("currentUserId") Long currentUserId) {
-
+        log.info("获取设备列表 - userId={}", currentUserId);
         List<DeviceListItemVO> devices = deviceService.listDevices(currentUserId);
+        log.info("获取设备列表成功 - userId={}, count={}", currentUserId, devices.size());
         return ApiResponse.success(devices);
     }
 
@@ -109,9 +110,10 @@ public class DeviceController {
     public ApiResponse<DeviceDetailVO> getDeviceInfo(
             @RequestAttribute("currentUserId") Long currentUserId,
             @Parameter(description = "设备ID") @PathVariable("id") String deviceId) {
-
+        log.info("获取设备详情 - userId={}, deviceId={}", currentUserId, deviceId);
         DeviceDetailVO detail = deviceService.getDeviceDetail(currentUserId, deviceId);
         if (detail == null) {
+            log.warn("获取设备详情失败，设备不存在 - userId={}, deviceId={}", currentUserId, deviceId);
             return ApiResponse.error(HTTP_NOT_FOUND, MSG_DEVICE_NOT_FOUND);
         }
         return ApiResponse.success(detail);
@@ -129,13 +131,15 @@ public class DeviceController {
     public ApiResponse<DeviceVO> addDevice(
             @RequestAttribute("currentUserId") Long currentUserId,
             @Valid @RequestBody AddDeviceRequest request) {
-
+        log.info("添加设备 - userId={}, request={}", currentUserId, request);
         // 参数校验
         if (!StringUtils.hasText(request.getDeviceId())) {
+            log.warn("添加设备失败，设备ID为空 - userId={}", currentUserId);
             return ApiResponse.error(HTTP_BAD_REQUEST, MSG_DEVICE_ID_REQUIRED);
         }
 
         DeviceVO device = deviceService.addDevice(currentUserId, request);
+        log.info("添加设备成功 - userId={}, deviceId={}", currentUserId, request.getDeviceId());
         return ApiResponse.success(device);
     }
 
@@ -151,8 +155,9 @@ public class DeviceController {
     public ApiResponse<Void> deleteDevice(
             @RequestAttribute("currentUserId") Long currentUserId,
             @Parameter(description = "设备ID") @PathVariable("id") String deviceId) {
-
+        log.info("删除设备 - userId={}, deviceId={}", currentUserId, deviceId);
         deviceService.deleteDevice(currentUserId, deviceId);
+        log.info("删除设备成功 - userId={}, deviceId={}", currentUserId, deviceId);
         return ApiResponse.success(null);
     }
 
@@ -170,11 +175,13 @@ public class DeviceController {
             @RequestAttribute("currentUserId") Long currentUserId,
             @Parameter(description = "设备ID") @PathVariable("id") String deviceId,
             @Valid @RequestBody UpdateDeviceRequest request) {
-
+        log.info("更新设备 - userId={}, deviceId={}, request={}", currentUserId, deviceId, request);
         DeviceVO device = deviceService.updateDevice(deviceId, request);
         if (device == null) {
+            log.warn("更新设备失败，设备不存在 - userId={}, deviceId={}", currentUserId, deviceId);
             return ApiResponse.error(HTTP_NOT_FOUND, MSG_DEVICE_NOT_FOUND);
         }
+        log.info("更新设备成功 - userId={}, deviceId={}", currentUserId, deviceId);
         return ApiResponse.success(device);
     }
 
@@ -196,11 +203,15 @@ public class DeviceController {
             @Parameter(description = "日期过滤，格式：yyyy-MM-dd") @RequestParam(value = "date", required = false) String date,
             @Parameter(description = "页码，从1开始") @RequestParam(value = "page", required = false, defaultValue = "1") int page,
             @Parameter(description = "每页数量") @RequestParam(value = "page_size", required = false, defaultValue = "20") int pageSize) {
-
+        log.info("获取本地录像列表 - userId={}, deviceId={}, date={}, page={}, pageSize={}", 
+                currentUserId, deviceId, date, page, pageSize);
         LocalVideoPageVO result = deviceService.listLocalVideos(currentUserId, deviceId, date, page, pageSize);
         if (result == null) {
+            log.warn("获取本地录像列表失败，无权限 - userId={}, deviceId={}", currentUserId, deviceId);
             return ApiResponse.error(HTTP_FORBIDDEN, MSG_NO_PERMISSION);
         }
+        log.info("获取本地录像列表成功 - userId={}, deviceId={}, total={}", 
+                currentUserId, deviceId, result.getTotal());
         return ApiResponse.success(result);
     }
 
@@ -218,20 +229,23 @@ public class DeviceController {
             @RequestAttribute("currentUserId") Long currentUserId,
             @Parameter(description = "设备ID") @PathVariable("id") String deviceId,
             @Valid @RequestBody PtzControlRequest request) {
-
+        log.info("云台控制 - userId={}, deviceId={}, request={}", currentUserId, deviceId, request);
         // 参数校验
         if (!StringUtils.hasText(request.getDirection())) {
+            log.warn("云台控制失败，方向参数为空 - userId={}, deviceId={}", currentUserId, deviceId);
             return ApiResponse.error(HTTP_BAD_REQUEST, MSG_DIRECTION_REQUIRED);
         }
 
         try {
             Boolean result = deviceService.sendPtzCommand(currentUserId, deviceId, request);
             if (result == null) {
+                log.warn("云台控制失败，无权限 - userId={}, deviceId={}", currentUserId, deviceId);
                 return ApiResponse.error(HTTP_FORBIDDEN, MSG_NO_PERMISSION);
             }
+            log.info("云台控制成功 - userId={}, deviceId={}, direction={}", currentUserId, deviceId, request.getDirection());
             return ApiResponse.success(null);
         } catch (Exception e) {
-            log.error("发送PTZ指令失败, deviceId={}, direction={}", deviceId, request.getDirection(), e);
+            log.error("发送PTZ指令失败 - userId={}, deviceId={}, direction={}", currentUserId, deviceId, request.getDirection(), e);
             return ApiResponse.error(HTTP_INTERNAL_ERROR, "发送PTZ指令失败: " + e.getMessage());
         }
     }

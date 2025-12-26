@@ -17,6 +17,8 @@ import com.pura365.camera.repository.CloudSubscriptionRepository;
 import com.pura365.camera.repository.CloudVideoRepository;
 import com.pura365.camera.repository.UserDeviceRepository;
 import com.pura365.camera.service.CloudStorageService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -39,6 +41,8 @@ import java.util.*;
 @RestController
 @RequestMapping("/api/internal/cloud")
 public class CloudController {
+
+    private static final Logger log = LoggerFactory.getLogger(CloudController.class);
 
     @Autowired
     private CloudPlanRepository cloudPlanRepository;
@@ -66,6 +70,7 @@ public class CloudController {
     @Operation(summary = "获取云存储套餐列表", description = "列出所有可用的云存储套餐，按类型分组返回")
     @GetMapping("/plans")
     public ApiResponse<CloudPlansResponse> getCloudPlans(@RequestAttribute("currentUserId") Long currentUserId) {
+        log.info("获取云存储套餐列表 - userId={}", currentUserId);
         QueryWrapper<CloudPlan> qw = new QueryWrapper<>();
         qw.orderByAsc("type", "sort_order");
         List<CloudPlan> plans = cloudPlanRepository.selectList(qw);
@@ -115,10 +120,12 @@ public class CloudController {
     @PostMapping("/subscribe")
     public ApiResponse<CloudSubscribeResponse> subscribe(@RequestAttribute("currentUserId") Long currentUserId,
                                                          @RequestBody CloudSubscribeRequest request) {
+        log.info("订阅云存储 - userId={}, request={}", currentUserId, request);
         String deviceId = request.getDeviceId();
         String planId = request.getPlanId();
         String paymentMethod = request.getPaymentMethod();
         if (deviceId == null || deviceId.isEmpty() || planId == null || planId.isEmpty()) {
+            log.warn("订阅云存储失败 - 参数为空, userId={}", currentUserId);
             return ApiResponse.error(400, "device_id 和 plan_id 不能为空");
         }
         if (paymentMethod == null || paymentMethod.isEmpty()) {
@@ -172,10 +179,13 @@ public class CloudController {
             @RequestParam(value = "page", required = false, defaultValue = "1") int page,
             @Parameter(description = "每页数量", example = "20")
             @RequestParam(value = "page_size", required = false, defaultValue = "20") int pageSize) {
+        log.info("云存储视频列表 - userId={}, deviceId={}, date={}, page={}, pageSize={}", 
+                currentUserId, deviceId, date, page, pageSize);
         if (deviceId == null || deviceId.isEmpty()) {
             return ApiResponse.error(400, "device_id 不能为空");
         }
         if (!hasUserDevice(currentUserId, deviceId)) {
+            log.warn("云存储视频列表 - 无权查看, userId={}, deviceId={}", currentUserId, deviceId);
             return ApiResponse.error(403, "无权查看该设备");
         }
         if (page < 1) page = 1;
@@ -246,7 +256,9 @@ public class CloudController {
             @RequestAttribute("currentUserId") Long currentUserId,
             @Parameter(description = "设备ID", required = true, example = "DEVICE123456")
             @PathVariable("deviceId") String deviceId) {
+        log.info("获取云存订阅状态 - userId={}, deviceId={}", currentUserId, deviceId);
         if (!hasUserDevice(currentUserId, deviceId)) {
+            log.warn("获取云存订阅状态 - 无权查看, userId={}, deviceId={}", currentUserId, deviceId);
             return ApiResponse.error(403, "无权查看该设备");
         }
         QueryWrapper<CloudSubscription> qw = new QueryWrapper<>();
@@ -288,6 +300,8 @@ public class CloudController {
             @RequestParam(value = "key", required = false) String key,
             @RequestParam(value = "content_type", required = false) String contentType
     ) {
+        log.info("上传测试文件 - userId={}, deviceId={}, fileName={}", 
+                currentUserId, deviceId, file != null ? file.getOriginalFilename() : null);
         if (deviceId == null || deviceId.isEmpty()) {
             return ApiResponse.error(400, "device_id 不能为空");
         }
@@ -331,6 +345,7 @@ public class CloudController {
     @PostMapping("/claim-free")
     public ApiResponse<ClaimFreeCloudResponse> claimFreeTrial(@RequestAttribute("currentUserId") Long currentUserId,
                                                               @RequestBody ClaimFreeCloudRequest request) {
+        log.info("领取免费云存储 - userId={}, deviceId={}", currentUserId, request.getDeviceId());
         String deviceId = request.getDeviceId();
         
         if (deviceId == null || deviceId.isEmpty()) {

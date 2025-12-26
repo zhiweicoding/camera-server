@@ -2,6 +2,7 @@ package com.pura365.camera.model.device;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
+import lombok.ToString;
 
 import javax.validation.constraints.NotBlank;
 
@@ -11,6 +12,7 @@ import javax.validation.constraints.NotBlank;
  * @author camera-server
  */
 @Schema(description = "添加设备请求")
+@ToString
 public class AddDeviceRequest {
 
     /**

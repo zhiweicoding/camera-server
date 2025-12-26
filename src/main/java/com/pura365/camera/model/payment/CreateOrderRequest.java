@@ -2,11 +2,13 @@ package com.pura365.camera.model.payment;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
+import lombok.ToString;
 
 /**
  * 创建支付订单请求
  */
 @Schema(description = "创建支付订单请求")
+@ToString
 public class CreateOrderRequest {
 
     /**

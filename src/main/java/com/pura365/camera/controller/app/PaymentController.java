@@ -8,6 +8,8 @@ import com.pura365.camera.service.PaymentService.CreateOrderResult;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
@@ -25,6 +27,8 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/app/payment")
 public class PaymentController {
 
+    private static final Logger log = LoggerFactory.getLogger(PaymentController.class);
+
     @Autowired
     private PaymentService paymentService;
 
@@ -38,11 +42,13 @@ public class PaymentController {
     public ApiResponse<OrderVO> createOrder(
             @RequestAttribute("currentUserId") Long currentUserId,
             @RequestBody CreateOrderRequest request) {
-
+        log.info("创建支付订单 - userId={}, request={}", currentUserId, request);
         CreateOrderResult result = paymentService.createOrder(currentUserId, request);
         if (!result.isSuccess()) {
+            log.warn("创建订单失败 - userId={}, error={}", currentUserId, result.getErrorMessage());
             return ApiResponse.error(result.getErrorCode(), result.getErrorMessage());
         }
+        log.info("创建订单成功 - userId={}, orderId={}", currentUserId, result.getOrder().getOrderId());
         return ApiResponse.success(result.getOrder());
     }
 
@@ -54,9 +60,10 @@ public class PaymentController {
     public ApiResponse<OrderVO> getOrderStatus(
             @RequestAttribute("currentUserId") Long currentUserId,
             @Parameter(description = "订单ID") @PathVariable("id") String orderId) {
-
+        log.info("查询订单状态 - userId={}, orderId={}", currentUserId, orderId);
         OrderVO order = paymentService.getOrderStatus(currentUserId, orderId);
         if (order == null) {
+            log.warn("查询订单状态失败 - 订单不存在, userId={}, orderId={}", currentUserId, orderId);
             return ApiResponse.error(404, "订单不存在");
         }
         return ApiResponse.success(order);
@@ -72,15 +79,17 @@ public class PaymentController {
     public ApiResponse<WechatPayVO> wechatPay(
             @RequestAttribute("currentUserId") Long currentUserId,
             @RequestBody PayRequest request) {
-
+        log.info("微信支付 - userId={}, orderId={}", currentUserId, request.getOrderId());
         if (!StringUtils.hasText(request.getOrderId())) {
+            log.warn("微信支付失败 - orderId为空, userId={}", currentUserId);
             return ApiResponse.error(400, "order_id 不能为空");
         }
-
         WechatPayVO result = paymentService.wechatPay(currentUserId, request.getOrderId());
         if (result == null) {
+            log.warn("微信支付失败 - 订单不存在, userId={}, orderId={}", currentUserId, request.getOrderId());
             return ApiResponse.error(404, "订单不存在");
         }
+        log.info("微信支付参数获取成功 - userId={}, orderId={}", currentUserId, request.getOrderId());
         return ApiResponse.success(result);
     }
 
@@ -94,15 +103,17 @@ public class PaymentController {
     public ApiResponse<PaypalPayVO> paypalPay(
             @RequestAttribute("currentUserId") Long currentUserId,
             @RequestBody PayRequest request) {
-
+        log.info("PayPal支付 - userId={}, orderId={}", currentUserId, request.getOrderId());
         if (!StringUtils.hasText(request.getOrderId())) {
+            log.warn("PayPal支付失败 - orderId为空, userId={}", currentUserId);
             return ApiResponse.error(400, "order_id 不能为空");
         }
-
         PaypalPayVO result = paymentService.paypalPay(currentUserId, request.getOrderId());
         if (result == null) {
+            log.warn("PayPal支付失败 - 订单不存在, userId={}, orderId={}", currentUserId, request.getOrderId());
             return ApiResponse.error(404, "订单不存在");
         }
+        log.info("PayPal支付URL获取成功 - userId={}, orderId={}", currentUserId, request.getOrderId());
         return ApiResponse.success(result);
     }
 

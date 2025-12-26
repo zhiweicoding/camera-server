@@ -136,9 +136,7 @@ public class MqttMessageService {
      */
     private void handleIncomingMessage(String topic, byte[] payload) {
         try {
-            log.info("收到MQTT消息 - Topic: {}, 长度: {} bytes", topic, payload.length);
-            log.debug("消息十六进制(连续): {}", MqttEncryptService.bytesToHex(payload));
-            log.info("消息十六进制(分组): {}", MqttEncryptService.bytesToGroupedHex(payload));
+            log.debug("收到MQTT消息 - Topic: {}, 长度: {} bytes", topic, payload.length);
             
             // 从topic提取设备序列号: camera/pura365/{deviceId}/device
             String deviceId = extractDeviceIdFromTopic(topic);
@@ -473,8 +471,7 @@ public class MqttMessageService {
         mqttMessage.setRetained(false);
         
         mqttClient.publish(topic, mqttMessage);
-        log.info("已发送消息到设备 {} - Topic: {}, 大小: {} bytes", deviceId, topic, encrypted.length);
-        log.info("发送消息十六进制(分组): {}", MqttEncryptService.bytesToGroupedHex(encrypted));
+        log.debug("已发送消息到设备 {} - Topic: {}, 大小: {} bytes", deviceId, topic, encrypted.length);
     }
     
     /**

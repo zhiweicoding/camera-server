@@ -5,6 +5,8 @@ import com.pura365.camera.model.auth.WechatLoginRequest;
 import com.pura365.camera.service.AuthService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
@@ -20,6 +22,8 @@ import java.util.Map;
 @RequestMapping("/api/app/auth")
 public class AuthController {
 
+    private static final Logger log = LoggerFactory.getLogger(AuthController.class);
+
     @Autowired
     private AuthService authService;
 
@@ -29,16 +33,20 @@ public class AuthController {
     @Operation(summary = "密码注册", description = "使用用户名和密码注册新账号")
     @PostMapping("/register")
     public ApiResponse<?> register(@RequestBody Map<String, String> body) {
+        log.info("用户注册 - username={}, phone={}, email={}", body.get("username"), body.get("phone"), body.get("email"));
         try {
             String username = body.get("username");
             String phone = body.get("phone");
             String email = body.get("email");
             String password = body.get("password");
             Map<String, Object> data = authService.registerByPassword(username, phone, email, password);
+            log.info("用户注册成功 - username={}", username);
             return ApiResponse.success(data);
         } catch (RuntimeException e) {
+            log.warn("用户注册失败 - {}", e.getMessage());
             return ApiResponse.error(400, e.getMessage());
         } catch (Exception e) {
+            log.error("用户注册异常", e);
             return ApiResponse.error(500, "服务器错误");
         }
     }
@@ -49,17 +57,22 @@ public class AuthController {
     @Operation(summary = "密码登录", description = "使用账号和密码登录")
     @PostMapping("/login/password")
     public ApiResponse<?> loginByPassword(@RequestBody Map<String, String> body) {
+        log.info("密码登录 - account={}", body.get("account"));
         try {
             String account = body.get("account");
             String password = body.get("password");
             if (account == null || password == null) {
+                log.warn("密码登录失败 - 参数为空");
                 return ApiResponse.error(400, "account 和 password 不能为空");
             }
             Map<String, Object> data = authService.loginByPassword(account, password);
+            log.info("密码登录成功 - account={}", account);
             return ApiResponse.success(data);
         } catch (RuntimeException e) {
+            log.warn("密码登录失败 - {}", e.getMessage());
             return ApiResponse.error(401, e.getMessage());
         } catch (Exception e) {
+            log.error("密码登录异常", e);
             return ApiResponse.error(500, "服务器错误");
         }
     }
@@ -141,18 +154,20 @@ public class AuthController {
     @Operation(summary = "微信登录", description = "使用微信授权码登录，客户端通过微信SDK获取code后调用此接口")
     @PostMapping("/login/wechat")
     public ApiResponse<?> loginByWechat(@RequestBody WechatLoginRequest request) {
+        log.info("微信登录 - code={}", request.getCode() != null ? "***" : null);
         try {
-            // 参数校验
             if (!StringUtils.hasText(request.getCode())) {
+                log.warn("微信登录失败 - code为空");
                 return ApiResponse.error(400, "code 不能为空");
             }
-            
-            // 调用服务层处理登录
             Map<String, Object> data = authService.loginByWeChat(request.getCode());
+            log.info("微信登录成功");
             return ApiResponse.success(data);
         } catch (RuntimeException e) {
+            log.warn("微信登录失败 - {}", e.getMessage());
             return ApiResponse.error(401, e.getMessage());
         } catch (Exception e) {
+            log.error("微信登录异常", e);
             return ApiResponse.error(500, "服务器错误");
         }
     }
