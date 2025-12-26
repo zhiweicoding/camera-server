@@ -1,122 +1,61 @@
 package com.pura365.camera.domain;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
 
 import java.util.Date;
 
+/**
+ * 设备绑定实体，对应表 device_binding
+ */
+@Data
 @TableName("device_binding")
 public class DeviceBinding {
 
+    /** 主键ID */
     @TableId(type = IdType.AUTO)
     private Long id;
 
+    /** 设备ID */
+    @TableField("device_id")
     private String deviceId;
 
+    /** 设备序列号 */
+    @TableField("device_sn")
     private String deviceSn;
 
+    /** 用户ID */
+    @TableField("user_id")
     private Long userId;
 
+    /** WiFi名称 */
+    @TableField("wifi_ssid")
     private String wifiSsid;
 
+    /** WiFi密码 */
+    @TableField("wifi_password")
     private String wifiPassword;
 
+    /** 绑定状态 */
+    @TableField("status")
     private String status;
 
+    /** 绑定进度 */
+    @TableField("progress")
     private Integer progress;
 
+    /** 状态消息 */
+    @TableField("message")
     private String message;
 
+    /** 创建时间 */
+    @TableField("created_at")
     private Date createdAt;
 
+    /** 更新时间 */
+    @TableField("updated_at")
     private Date updatedAt;
-
-    public Long getId() {
-        return id;
-    }
-
-    public void setId(Long id) {
-        this.id = id;
-    }
-
-    public String getDeviceId() {
-        return deviceId;
-    }
-
-    public void setDeviceId(String deviceId) {
-        this.deviceId = deviceId;
-    }
-
-    public String getDeviceSn() {
-        return deviceSn;
-    }
-
-    public void setDeviceSn(String deviceSn) {
-        this.deviceSn = deviceSn;
-    }
-
-    public Long getUserId() {
-        return userId;
-    }
-
-    public void setUserId(Long userId) {
-        this.userId = userId;
-    }
-
-    public String getWifiSsid() {
-        return wifiSsid;
-    }
-
-    public void setWifiSsid(String wifiSsid) {
-        this.wifiSsid = wifiSsid;
-    }
-
-    public String getWifiPassword() {
-        return wifiPassword;
-    }
-
-    public void setWifiPassword(String wifiPassword) {
-        this.wifiPassword = wifiPassword;
-    }
-
-    public String getStatus() {
-        return status;
-    }
-
-    public void setStatus(String status) {
-        this.status = status;
-    }
-
-    public Integer getProgress() {
-        return progress;
-    }
-
-    public void setProgress(Integer progress) {
-        this.progress = progress;
-    }
-
-    public String getMessage() {
-        return message;
-    }
-
-    public void setMessage(String message) {
-        this.message = message;
-    }
-
-    public Date getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(Date createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public Date getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public void setUpdatedAt(Date updatedAt) {
-        this.updatedAt = updatedAt;
-    }
 }

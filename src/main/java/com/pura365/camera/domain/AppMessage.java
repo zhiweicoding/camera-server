@@ -1,112 +1,57 @@
 package com.pura365.camera.domain;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
 
 import java.util.Date;
 
+/**
+ * App消息实体，对应表 app_message
+ */
+@Data
 @TableName("app_message")
 public class AppMessage {
 
+    /** 主键ID */
     @TableId(type = IdType.AUTO)
     private Long id;
 
+    /** 用户ID */
+    @TableField("user_id")
     private Long userId;
 
+    /** 设备ID */
+    @TableField("device_id")
     private String deviceId;
 
+    /** 消息类型 */
+    @TableField("type")
     private String type;
 
+    /** 消息标题 */
+    @TableField("title")
     private String title;
 
+    /** 消息内容 */
+    @TableField("content")
     private String content;
 
+    /** 缩略图URL */
+    @TableField("thumbnail_url")
     private String thumbnailUrl;
 
+    /** 视频URL */
+    @TableField("video_url")
     private String videoUrl;
 
+    /** 是否已读: 0-未读 1-已读 */
+    @TableField("is_read")
     private Integer isRead;
 
+    /** 创建时间 */
+    @TableField("created_at")
     private Date createdAt;
-
-    public Long getId() {
-        return id;
-    }
-
-    public void setId(Long id) {
-        this.id = id;
-    }
-
-    public Long getUserId() {
-        return userId;
-    }
-
-    public void setUserId(Long userId) {
-        this.userId = userId;
-    }
-
-    public String getDeviceId() {
-        return deviceId;
-    }
-
-    public void setDeviceId(String deviceId) {
-        this.deviceId = deviceId;
-    }
-
-    public String getType() {
-        return type;
-    }
-
-    public void setType(String type) {
-        this.type = type;
-    }
-
-    public String getTitle() {
-        return title;
-    }
-
-    public void setTitle(String title) {
-        this.title = title;
-    }
-
-    public String getContent() {
-        return content;
-    }
-
-    public void setContent(String content) {
-        this.content = content;
-    }
-
-    public String getThumbnailUrl() {
-        return thumbnailUrl;
-    }
-
-    public void setThumbnailUrl(String thumbnailUrl) {
-        this.thumbnailUrl = thumbnailUrl;
-    }
-
-    public String getVideoUrl() {
-        return videoUrl;
-    }
-
-    public void setVideoUrl(String videoUrl) {
-        this.videoUrl = videoUrl;
-    }
-
-    public Integer getIsRead() {
-        return isRead;
-    }
-
-    public void setIsRead(Integer isRead) {
-        this.isRead = isRead;
-    }
-
-    public Date getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(Date createdAt) {
-        this.createdAt = createdAt;
-    }
 }

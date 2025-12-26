@@ -1,133 +1,65 @@
 package com.pura365.camera.domain;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
 
 import java.util.Date;
 
 /**
- * App 用户实体，对应表 user
+ * App用户实体，对应表 user
  */
+@Data
 @TableName("user")
 public class User {
 
+    /** 主键ID */
     @TableId(type = IdType.AUTO)
     private Long id;
 
     /** 业务用户ID，如 user_001 */
+    @TableField("uid")
     private String uid;
 
     /** 登录账号（可为手机号/邮箱） */
+    @TableField("username")
     private String username;
 
+    /** 手机号 */
+    @TableField("phone")
     private String phone;
 
+    /** 邮箱 */
+    @TableField("email")
     private String email;
 
-    /** BCrypt 密码哈希 */
+    /** BCrypt密码哈希 */
+    @TableField("password_hash")
     private String passwordHash;
 
-    /**
-     * 角色: 1-流通用户 2-经销商 3-管理员
-     */
+    /** 角色: 1-流通用户 2-经销商 3-管理员 */
+    @TableField("role")
     private Integer role;
 
+    /** 昵称 */
+    @TableField("nickname")
     private String nickname;
 
+    /** 头像 */
+    @TableField("avatar")
     private String avatar;
 
+    /** 是否启用: 0-禁用 1-启用 */
+    @TableField("enabled")
+    private Integer enabled;
+
+    /** 创建时间 */
+    @TableField("created_at")
     private Date createdAt;
 
+    /** 更新时间 */
+    @TableField("updated_at")
     private Date updatedAt;
-
-    // getters and setters
-
-    public Long getId() {
-        return id;
-    }
-
-    public void setId(Long id) {
-        this.id = id;
-    }
-
-    public String getUid() {
-        return uid;
-    }
-
-    public void setUid(String uid) {
-        this.uid = uid;
-    }
-
-    public String getUsername() {
-        return username;
-    }
-
-    public void setUsername(String username) {
-        this.username = username;
-    }
-
-    public String getPhone() {
-        return phone;
-    }
-
-    public void setPhone(String phone) {
-        this.phone = phone;
-    }
-
-    public String getEmail() {
-        return email;
-    }
-
-    public void setEmail(String email) {
-        this.email = email;
-    }
-
-    public String getPasswordHash() {
-        return passwordHash;
-    }
-
-    public void setPasswordHash(String passwordHash) {
-        this.passwordHash = passwordHash;
-    }
-
-    public Integer getRole() {
-        return role;
-    }
-
-    public void setRole(Integer role) {
-        this.role = role;
-    }
-
-    public String getNickname() {
-        return nickname;
-    }
-
-    public void setNickname(String nickname) {
-        this.nickname = nickname;
-    }
-
-    public String getAvatar() {
-        return avatar;
-    }
-
-    public void setAvatar(String avatar) {
-        this.avatar = avatar;
-    }
-
-    public Date getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(Date createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public Date getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public void setUpdatedAt(Date updatedAt) {
-        this.updatedAt = updatedAt;
-    }
 }

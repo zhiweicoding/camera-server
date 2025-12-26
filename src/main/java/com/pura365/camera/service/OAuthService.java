@@ -9,6 +9,7 @@ import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import com.pura365.camera.config.OAuthConfig;
+import com.pura365.camera.model.auth.WechatUserInfo;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -57,9 +58,10 @@ public class OAuthService {
      * 微信登录：使用 code 换取 access_token 和 openid
      *
      * @param code 客户端通过微信 SDK 获取的授权码
-     * @return 包含 openId, unionId, nickname, avatar 等信息
+     * @return 微信用户信息
+     * @throws Exception 验证失败或网络异常
      */
-    public Map<String, String> verifyWeChatCode(String code) throws Exception {
+    public WechatUserInfo verifyWeChatCode(String code) throws Exception {
         String appId = oAuthConfig.getWechat().getAppId();
         String appSecret = oAuthConfig.getWechat().getAppSecret();
 
@@ -114,14 +116,19 @@ public class OAuthService {
             // 即使获取用户信息失败，也可以用 openid 登录
         }
 
-        Map<String, String> result = new HashMap<>();
-        result.put("openId", openId);
-        result.put("unionId", unionId);
-        result.put("nickname", userInfoJson.has("nickname") ? userInfoJson.get("nickname").asText() : null);
-        result.put("avatar", userInfoJson.has("headimgurl") ? userInfoJson.get("headimgurl").asText() : null);
-        result.put("extraInfo", userInfoResp);
+        // 封装为标准的用户信息对象
+        WechatUserInfo userInfo = new WechatUserInfo();
+        userInfo.setOpenId(openId);
+        userInfo.setUnionId(unionId);
+        userInfo.setNickname(userInfoJson.has("nickname") ? userInfoJson.get("nickname").asText() : null);
+        userInfo.setAvatar(userInfoJson.has("headimgurl") ? userInfoJson.get("headimgurl").asText() : null);
+        userInfo.setGender(userInfoJson.has("sex") ? userInfoJson.get("sex").asInt() : null);
+        userInfo.setCountry(userInfoJson.has("country") ? userInfoJson.get("country").asText() : null);
+        userInfo.setProvince(userInfoJson.has("province") ? userInfoJson.get("province").asText() : null);
+        userInfo.setCity(userInfoJson.has("city") ? userInfoJson.get("city").asText() : null);
+        userInfo.setRawResponse(userInfoResp);
 
-        return result;
+        return userInfo;
     }
 
     /**
@@ -312,6 +319,9 @@ public class OAuthService {
         if (gc.getClientIdAndroid() != null && !gc.getClientIdAndroid().startsWith("YOUR_")) {
             validIds.add(gc.getClientIdAndroid());
         }
+        if (gc.getClientIdAndroidDebug() != null && !gc.getClientIdAndroidDebug().startsWith("YOUR_")) {
+            validIds.add(gc.getClientIdAndroidDebug());
+        }
         if (gc.getClientIdWeb() != null && !gc.getClientIdWeb().startsWith("YOUR_")) {
             validIds.add(gc.getClientIdWeb());
         }
@@ -321,5 +331,71 @@ public class OAuthService {
             }
         }
         return false;
+    }
+
+    /**
+     * Google OAuth Web端：使用授权码换取 ID Token
+     *
+     * @param code Google 回调返回的授权码
+     * @return 包含 openId, email, nickname, avatar 等信息
+     */
+    public Map<String, String> exchangeGoogleCodeForToken(String code) throws Exception {
+        OAuthConfig.GoogleConfig gc = oAuthConfig.getGoogle();
+        String clientId = gc.getClientIdWeb();
+        String clientSecret = gc.getClientSecretWeb();
+        String redirectUri = gc.getRedirectUri();
+
+        if (clientId == null || clientId.startsWith("YOUR_")) {
+            throw new RuntimeException("Google Web Client ID 未配置");
+        }
+        if (clientSecret == null || clientSecret.startsWith("YOUR_")) {
+            throw new RuntimeException("Google Web Client Secret 未配置");
+        }
+        if (redirectUri == null || redirectUri.isEmpty()) {
+            throw new RuntimeException("Google Redirect URI 未配置");
+        }
+
+        // 构建请求体
+        String requestBody = String.format(
+                "code=%s&client_id=%s&client_secret=%s&redirect_uri=%s&grant_type=authorization_code",
+                java.net.URLEncoder.encode(code, "UTF-8"),
+                java.net.URLEncoder.encode(clientId, "UTF-8"),
+                java.net.URLEncoder.encode(clientSecret, "UTF-8"),
+                java.net.URLEncoder.encode(redirectUri, "UTF-8")
+        );
+
+        okhttp3.RequestBody body = okhttp3.RequestBody.create(
+                requestBody,
+                okhttp3.MediaType.parse("application/x-www-form-urlencoded")
+        );
+
+        Request request = new Request.Builder()
+                .url("https://oauth2.googleapis.com/token")
+                .post(body)
+                .build();
+
+        String tokenResp;
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                log.error("Google token exchange failed: {}", response.code());
+                throw new RuntimeException("Google 授权请求失败");
+            }
+            tokenResp = response.body().string();
+        }
+
+        JsonNode tokenJson = objectMapper.readTree(tokenResp);
+        if (tokenJson.has("error")) {
+            String error = tokenJson.get("error").asText();
+            String errorDesc = tokenJson.has("error_description") 
+                    ? tokenJson.get("error_description").asText() 
+                    : "未知错误";
+            log.warn("Google token exchange error: {} - {}", error, errorDesc);
+            throw new RuntimeException("Google 授权失败: " + errorDesc);
+        }
+
+        String idToken = tokenJson.get("id_token").asText();
+        
+        // 验证并解析 ID Token
+        return verifyGoogleIdToken(idToken, "web");
     }
 }

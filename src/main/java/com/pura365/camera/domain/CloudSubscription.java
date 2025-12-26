@@ -1,102 +1,53 @@
 package com.pura365.camera.domain;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
 
 import java.util.Date;
 
+/**
+ * 云存储订阅实体，对应表 cloud_subscription
+ */
+@Data
 @TableName("cloud_subscription")
 public class CloudSubscription {
 
+    /** 主键ID */
     @TableId(type = IdType.AUTO)
     private Long id;
 
+    /** 用户ID */
+    @TableField("user_id")
     private Long userId;
 
+    /** 设备ID */
+    @TableField("device_id")
     private String deviceId;
 
+    /** 套餐ID */
+    @TableField("plan_id")
     private String planId;
 
+    /** 套餐名称 */
+    @TableField("plan_name")
     private String planName;
 
+    /** 过期时间 */
+    @TableField("expire_at")
     private Date expireAt;
 
+    /** 是否自动续费: 0-否 1-是 */
+    @TableField("auto_renew")
     private Integer autoRenew;
 
+    /** 创建时间 */
+    @TableField("created_at")
     private Date createdAt;
 
+    /** 更新时间 */
+    @TableField("updated_at")
     private Date updatedAt;
-
-    public Long getId() {
-        return id;
-    }
-
-    public void setId(Long id) {
-        this.id = id;
-    }
-
-    public Long getUserId() {
-        return userId;
-    }
-
-    public void setUserId(Long userId) {
-        this.userId = userId;
-    }
-
-    public String getDeviceId() {
-        return deviceId;
-    }
-
-    public void setDeviceId(String deviceId) {
-        this.deviceId = deviceId;
-    }
-
-    public String getPlanId() {
-        return planId;
-    }
-
-    public void setPlanId(String planId) {
-        this.planId = planId;
-    }
-
-    public String getPlanName() {
-        return planName;
-    }
-
-    public void setPlanName(String planName) {
-        this.planName = planName;
-    }
-
-    public Date getExpireAt() {
-        return expireAt;
-    }
-
-    public void setExpireAt(Date expireAt) {
-        this.expireAt = expireAt;
-    }
-
-    public Integer getAutoRenew() {
-        return autoRenew;
-    }
-
-    public void setAutoRenew(Integer autoRenew) {
-        this.autoRenew = autoRenew;
-    }
-
-    public Date getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(Date createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public Date getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public void setUpdatedAt(Date updatedAt) {
-        this.updatedAt = updatedAt;
-    }
 }

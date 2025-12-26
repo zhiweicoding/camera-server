@@ -136,9 +136,7 @@ public class MqttMessageService {
      */
     private void handleIncomingMessage(String topic, byte[] payload) {
         try {
-            log.info("收到MQTT消息 - Topic: {}, 长度: {} bytes", topic, payload.length);
-            log.debug("消息十六进制(连续): {}", MqttEncryptService.bytesToHex(payload));
-            log.info("消息十六进制(分组): {}", MqttEncryptService.bytesToGroupedHex(payload));
+            log.debug("收到MQTT消息 - Topic: {}, 长度: {} bytes", topic, payload.length);
             
             // 从topic提取设备序列号: camera/pura365/{deviceId}/device
             String deviceId = extractDeviceIdFromTopic(topic);
@@ -210,12 +208,15 @@ public class MqttMessageService {
     private void handleMqttConnected(MqttCode10Message msg, String deviceId) {
         log.info("设备 {} MQTT已连接 - Status: {}", deviceId, msg.getStatus());
         
-        // 更新设备在线状态到数据库
+        // 更新设备在线状态到数据库（同时视为一次心跳）
         try {
+            LocalDateTime now = LocalDateTime.now();
             Device device = deviceRepository.selectById(deviceId);
             if (device != null) {
                 device.setStatus(1); // 1-在线
-                device.setLastOnlineTime(LocalDateTime.now());
+                device.setLastOnlineTime(now);
+                device.setLastHeartbeatTime(now); // MQTT连接也视为心跳
+                device.setUpdatedAt(now);
                 deviceRepository.updateById(device);
                 log.info("已更新设备 {} 状态为在线", deviceId);
             } else {
@@ -225,8 +226,10 @@ public class MqttMessageService {
                 device.setMac("UNKNOWN"); // MAC地址后续通过设备信息更新
                 device.setStatus(1);
                 device.setEnabled(1);
-                device.setLastOnlineTime(LocalDateTime.now());
-                device.setCreatedAt(LocalDateTime.now());
+                device.setLastOnlineTime(now);
+                device.setLastHeartbeatTime(now);
+                device.setCreatedAt(now);
+                device.setUpdatedAt(now);
                 deviceRepository.insert(device);
                 log.info("已创建新设备记录 {}", deviceId);
             }
@@ -242,26 +245,29 @@ public class MqttMessageService {
     }
     
     /**
-     * 处理设备信息响应
+     * 处理设备信息响应(CODE 139)
+     * 更新设备的完整状态信息到数据库，同时作为心跳响应更新在线状态
      */
     private void handleDeviceInfo(MqttDeviceInfoMessage msg, String deviceId) {
-        log.info("收到设备信息 - WiFi: {}, RSSI: {}, 版本: {}", 
-                msg.getWifiname(), msg.getWifirssi(), msg.getVer());
+        log.info("收到设备信息 - 设备: {}, WiFi: {}, RSSI: {}, 版本: {}, TF卡: {}", 
+                deviceId, msg.getWifiname(), msg.getWifirssi(), msg.getVer(), 
+                msg.getSdstate() == 1 ? "有" : "无");
         
         // 更新设备信息到数据库
         try {
             Device device = deviceRepository.selectById(deviceId);
-            if (device == null) {
+            boolean isNewDevice = (device == null);
+            
+            if (isNewDevice) {
                 // 设备不存在，创建新记录
                 device = new Device();
                 device.setId(deviceId);
                 device.setMac("UNKNOWN");
-                device.setStatus(1);
                 device.setEnabled(1);
                 device.setCreatedAt(LocalDateTime.now());
             }
             
-            // 更新设备信息
+            // 更新基本信息
             if (msg.getWifiname() != null) {
                 device.setSsid(msg.getWifiname());
                 // 同步更新 SSID 到缓存，用于后续消息加解密
@@ -270,16 +276,63 @@ public class MqttMessageService {
             if (msg.getVer() != null) {
                 device.setFirmwareVersion(msg.getVer());
             }
-            device.setLastOnlineTime(LocalDateTime.now());
-            device.setUpdatedAt(LocalDateTime.now());
             
-            if (device.getCreatedAt() == null) {
+            // 更新WiFi信号强度
+            if (msg.getWifirssi() != null) {
+                device.setWifiRssi(msg.getWifirssi());
+            }
+            
+            // 更新TF卡信息
+            if (msg.getSdstate() != null) {
+                device.setSdState(msg.getSdstate());
+            }
+            if (msg.getSdcap() != null) {
+                device.setSdCapacity(msg.getSdcap());
+            }
+            if (msg.getSdblock() != null) {
+                device.setSdBlockSize(msg.getSdblock());
+            }
+            if (msg.getSdfree() != null) {
+                device.setSdFree(msg.getSdfree());
+            }
+            
+            // 更新摄像头设置状态
+            if (msg.getRotate() != null) {
+                device.setRotate(msg.getRotate());
+            }
+            if (msg.getLightled() != null) {
+                device.setLightLed(msg.getLightled());
+            }
+            if (msg.getWhiteled() != null) {
+                device.setWhiteLed(msg.getWhiteled());
+            }
+            
+            // 更新在线状态和心跳时间
+            device.setStatus(1); // 1-在线
+            LocalDateTime now = LocalDateTime.now();
+            device.setLastOnlineTime(now);
+            device.setLastHeartbeatTime(now); // 收到设备信息即为心跳响应
+            device.setUpdatedAt(now);
+            
+            if (isNewDevice) {
                 deviceRepository.insert(device);
                 log.info("已创建设备 {} 信息记录", deviceId);
             } else {
                 deviceRepository.updateById(device);
-                log.info("已更新设备 {} 信息: SSID={}, 版本={}", deviceId, msg.getWifiname(), msg.getVer());
+                log.info("已更新设备 {} 状态: SSID={}, RSSI={}, 版本={}, TF卡状态={}", 
+                        deviceId, msg.getWifiname(), msg.getWifirssi(), msg.getVer(), msg.getSdstate());
             }
+            
+            // 记录TF卡容量信息(用于调试)
+            if (msg.getSdstate() != null && msg.getSdstate() == 1) {
+                long totalBytes = (msg.getSdcap() != null && msg.getSdblock() != null) 
+                        ? msg.getSdcap() * msg.getSdblock() : 0;
+                long freeBytes = (msg.getSdfree() != null && msg.getSdblock() != null) 
+                        ? msg.getSdfree() * msg.getSdblock() : 0;
+                log.info("设备 {} TF卡容量: 总计 {} MB, 剩余 {} MB", 
+                        deviceId, totalBytes / 1024 / 1024, freeBytes / 1024 / 1024);
+            }
+            
         } catch (Exception e) {
             log.error("更新设备 {} 信息失败", deviceId, e);
         }
@@ -418,8 +471,7 @@ public class MqttMessageService {
         mqttMessage.setRetained(false);
         
         mqttClient.publish(topic, mqttMessage);
-        log.info("已发送消息到设备 {} - Topic: {}, 大小: {} bytes", deviceId, topic, encrypted.length);
-        log.info("发送消息十六进制(分组): {}", MqttEncryptService.bytesToGroupedHex(encrypted));
+        log.debug("已发送消息到设备 {} - Topic: {}, 大小: {} bytes", deviceId, topic, encrypted.length);
     }
     
     /**
@@ -512,28 +564,7 @@ public class MqttMessageService {
     // 把你日志里的那串16进制粘过来
     private static final String HEX = "3479 7bc3 bd97 30f5 b9bb f6dc 74ba 6273 3a64 81c6 5703 4f31 64ce d7b4 909c b03a cae1 228a 79fc 6a36 bbe9 0db3 88ee 1cc0 84eb 128f 5f06 b438 ffa4 9609 d41b 240e 43ae e6b9 b3ac 63e7 db29 a83a f3f7 e421";
 
-    public static void main(String[] args) throws Exception {
-        byte[] payload = hexToBytes(HEX);
 
-        // 这里把可能的 SSID 都列出来，一个个试
-        String[] ssids = {
-                "SGHome",       // 你现在服务端写死的
-                "AOCCX",        // 之前示例里提到的
-                "YourRealWifi", // 把设备实际连的 WiFi SSID 写进来
-                "test",         // 你们固件那边如果有写死的测试值，就填上
-        };
-
-        MqttEncryptService enc = new MqttEncryptService();
-        for (String ssid : ssids) {
-            try {
-                String json = enc.decrypt(payload, ssid);
-                System.out.println("=== SSID = " + ssid + " ===");
-                System.out.println(json);
-            } catch (Exception e) {
-                System.out.println("=== SSID = " + ssid + " 解密失败: " + e.getMessage());
-            }
-        }
-    }
 
     private static byte[] hexToBytes(String hex) {
         hex = hex.replace(" ", "").trim();

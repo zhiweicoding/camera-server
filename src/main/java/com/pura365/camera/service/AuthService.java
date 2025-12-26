@@ -31,7 +31,7 @@ public class AuthService {
 
     // TODO: 如果你有正式配置，可以把 SECRET_KEY 放到配置文件
     private static final String SECRET_KEY = "app-user-jwt-secret-camera-server";
-    private static final long ACCESS_TOKEN_EXPIRE_SECONDS = 7200; // 2 小时
+    private static final long ACCESS_TOKEN_EXPIRE_SECONDS = 259200; // 72 小时
 
     private static final String AUTH_TYPE_WECHAT = "wechat";
     private static final String AUTH_TYPE_APPLE = "apple";
@@ -148,6 +148,43 @@ public class AuthService {
     }
 
     /**
+     * 修改密码
+     * @param userId 用户ID
+     * @param oldPassword 旧密码
+     * @param newPassword 新密码
+     */
+    public void changePassword(Long userId, String oldPassword, String newPassword) {
+        if (userId == null) {
+            throw new RuntimeException("用户ID不能为空");
+        }
+        if (oldPassword == null || oldPassword.isEmpty()) {
+            throw new RuntimeException("旧密码不能为空");
+        }
+        if (newPassword == null || newPassword.isEmpty()) {
+            throw new RuntimeException("新密码不能为空");
+        }
+        if (newPassword.length() < 6) {
+            throw new RuntimeException("新密码长度不能少于6位");
+        }
+
+        User user = userRepository.selectById(userId);
+        if (user == null) {
+            throw new RuntimeException("用户不存在");
+        }
+        if (user.getPasswordHash() == null) {
+            throw new RuntimeException("该账号未设置密码，无法修改");
+        }
+        if (!passwordEncoder.matches(oldPassword, user.getPasswordHash())) {
+            throw new RuntimeException("旧密码错误");
+        }
+
+        user.setPasswordHash(passwordEncoder.encode(newPassword));
+        user.setUpdatedAt(new Date());
+        userRepository.updateById(user);
+        log.info("用户修改密码成功: userId={}", userId);
+    }
+
+    /**
      * 退出登录：删除当前 refresh_token 记录
      */
     public void logout(Long userId, String refreshToken) {
@@ -219,6 +256,10 @@ public class AuthService {
         userMap.put("nickname", user.getNickname());
         userMap.put("avatar", user.getAvatar());
         userMap.put("role", user.getRole());
+        // 经销商用户返回vendorCode
+        if (user.getRole() != null && user.getRole() == 2) {
+            userMap.put("vendorCode", user.getUsername());
+        }
         data.put("user", userMap);
 
         return data;
@@ -242,15 +283,18 @@ public class AuthService {
     public Map<String, Object> loginByWeChat(String code) {
         try {
             // 验证微信 code 并获取用户信息
-            Map<String, String> wechatUser = oAuthService.verifyWeChatCode(code);
-            String openId = wechatUser.get("openId");
-            String unionId = wechatUser.get("unionId");
-            String nickname = wechatUser.get("nickname");
-            String avatar = wechatUser.get("avatar");
-            String extraInfo = wechatUser.get("extraInfo");
-
+            com.pura365.camera.model.auth.WechatUserInfo wechatUser = oAuthService.verifyWeChatCode(code);
+            
             // 查找或创建用户
-            User user = findOrCreateUserByOAuth(AUTH_TYPE_WECHAT, openId, unionId, nickname, avatar, null, extraInfo);
+            User user = findOrCreateUserByOAuth(
+                AUTH_TYPE_WECHAT, 
+                wechatUser.getOpenId(), 
+                wechatUser.getUnionId(), 
+                wechatUser.getNickname(), 
+                wechatUser.getAvatar(), 
+                null, 
+                wechatUser.getRawResponse()
+            );
 
             return buildLoginResult(user);
         } catch (RuntimeException e) {
@@ -327,6 +371,34 @@ public class AuthService {
             throw e;
         } catch (Exception e) {
             log.error("Google 登录异常", e);
+            throw new RuntimeException("Google 登录失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Google OAuth Web端登录（使用授权码）
+     *
+     * @param code Google 回调返回的授权码
+     * @return 登录结果（token + 用户信息）
+     */
+    public Map<String, Object> loginByGoogleCode(String code) {
+        try {
+            // 使用授权码换取 token 并验证
+            Map<String, String> googleUser = oAuthService.exchangeGoogleCodeForToken(code);
+            String openId = googleUser.get("openId");  // Google 的 sub
+            String email = googleUser.get("email");
+            String nickname = googleUser.get("nickname");
+            String avatar = googleUser.get("avatar");
+            String extraInfo = googleUser.get("extraInfo");
+
+            // 查找或创建用户
+            User user = findOrCreateUserByOAuth(AUTH_TYPE_GOOGLE, openId, null, nickname, avatar, email, extraInfo);
+
+            return buildLoginResult(user);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Google OAuth 登录异常", e);
             throw new RuntimeException("Google 登录失败: " + e.getMessage());
         }
     }

@@ -127,8 +127,9 @@ public class DeviceProductionController {
             @RequestParam(defaultValue = "20") Integer size,
             @RequestParam(required = false) String deviceId,
             @RequestParam(required = false) String batchNo,
-            @RequestParam(required = false) String status) {
-        Map<String, Object> result = productionService.listDevices(page, size, deviceId, batchNo, status);
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String vendorCode) {
+        Map<String, Object> result = productionService.listDevices(page, size, deviceId, batchNo, status, vendorCode);
         return ApiResponse.success(result);
     }
 
@@ -282,6 +283,64 @@ public class DeviceProductionController {
                     .body(outputStream.toByteArray());
         } catch (Exception e) {
             return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    // ==================== 业务员分配接口 ====================
+
+    /**
+     * 分配业务员到设备
+     * 请求体：{ "salesmanId": 1 }
+     */
+    @PutMapping("/devices/{deviceId}/salesman")
+    public ApiResponse<Void> assignSalesman(
+            @PathVariable String deviceId,
+            @RequestBody Map<String, Long> body) {
+        try {
+            Long salesmanId = body.get("salesmanId");
+            if (salesmanId == null) {
+                return ApiResponse.error(400, "业务员ID不能为空");
+            }
+            productionService.assignSalesman(deviceId, salesmanId);
+            return ApiResponse.success(null);
+        } catch (RuntimeException e) {
+            return ApiResponse.error(400, e.getMessage());
+        }
+    }
+
+    /**
+     * 批量分配业务员到设备
+     * 请求体：{ "deviceIds": ["A110000000000001", "A110000000000002"], "salesmanId": 1 }
+     */
+    @PutMapping("/devices/batch-assign-salesman")
+    public ApiResponse<Void> batchAssignSalesman(@RequestBody Map<String, Object> body) {
+        try {
+            @SuppressWarnings("unchecked")
+            List<String> deviceIds = (List<String>) body.get("deviceIds");
+            Long salesmanId = Long.valueOf(body.get("salesmanId").toString());
+            if (deviceIds == null || deviceIds.isEmpty()) {
+                return ApiResponse.error(400, "设备ID列表不能为空");
+            }
+            if (salesmanId == null) {
+                return ApiResponse.error(400, "业务员ID不能为空");
+            }
+            productionService.batchAssignSalesman(deviceIds, salesmanId);
+            return ApiResponse.success(null);
+        } catch (RuntimeException e) {
+            return ApiResponse.error(400, e.getMessage());
+        }
+    }
+
+    /**
+     * 移除设备的业务员分配
+     */
+    @DeleteMapping("/devices/{deviceId}/salesman")
+    public ApiResponse<Void> removeSalesmanAssignment(@PathVariable String deviceId) {
+        try {
+            productionService.removeSalesmanAssignment(deviceId);
+            return ApiResponse.success(null);
+        } catch (RuntimeException e) {
+            return ApiResponse.error(400, e.getMessage());
         }
     }
 }

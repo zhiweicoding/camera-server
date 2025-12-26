@@ -1,6 +1,9 @@
 package com.pura365.camera.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.pura365.camera.domain.Device;
+import com.pura365.camera.repository.DeviceRepository;
+import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -17,15 +20,27 @@ import java.util.Arrays;
  * 密钥：WiFi SSID 的 MD5 值（原始 16 字节）
  */
 @Service
+@RequiredArgsConstructor
 public class MqttEncryptService {
     
     private static final Logger log = LoggerFactory.getLogger(MqttEncryptService.class);
     
-    // TODO: 这个SSID需要从配置或数据库中获取，每个设备可能不同
-    // 当前为了方便调试，先固定为 SGHome（注意大小写）
+    // 默认SSID，仅在数据库查询不到时使用
     private static final String DEFAULT_SSID = "SGHome";
     
+    private final DeviceRepository deviceRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    
+    /**
+     * 加密消息（根据设备ID自动查询SSID）
+     * @param message 消息对象
+     * @param deviceId 设备ID
+     * @return 加密后的字节数组
+     */
+    public byte[] encryptByDeviceId(Object message, String deviceId) throws Exception {
+        String ssid = getSsidByDeviceId(deviceId);
+        return encrypt(message, ssid);
+    }
     
     /**
      * 加密消息
@@ -40,6 +55,7 @@ public class MqttEncryptService {
         
         // 2. 生成AES密钥：MD5(SSID)的原始16字节
         String actualSsid = (ssid != null && !ssid.isEmpty()) ? ssid : DEFAULT_SSID;
+        log.debug("使用SSID加密: {}", actualSsid);
         byte[] keyBytes = md5(actualSsid);
         SecretKeySpec keySpec = new SecretKeySpec(keyBytes, "AES");
         
@@ -54,6 +70,17 @@ public class MqttEncryptService {
     }
     
     /**
+     * 解密消息（根据设备ID自动查询SSID）
+     * @param encryptedBytes 加密的字节数组
+     * @param deviceId 设备ID
+     * @return 解密后的JSON字符串
+     */
+    public String decryptByDeviceId(byte[] encryptedBytes, String deviceId) throws Exception {
+        String ssid = getSsidByDeviceId(deviceId);
+        return decrypt(encryptedBytes, ssid);
+    }
+    
+    /**
      * 解密消息
      * @param encryptedBytes 加密的字节数组
      * @param ssid WiFi SSID（如果为null则使用默认值）
@@ -62,6 +89,7 @@ public class MqttEncryptService {
     public String decrypt(byte[] encryptedBytes, String ssid) throws Exception {
         // 1. 生成AES密钥
         String actualSsid = (ssid != null && !ssid.isEmpty()) ? ssid : DEFAULT_SSID;
+        log.debug("使用SSID解密: {}", actualSsid);
         byte[] keyBytes = md5(actualSsid);
         SecretKeySpec keySpec = new SecretKeySpec(keyBytes, "AES");
         
@@ -77,11 +105,45 @@ public class MqttEncryptService {
     }
     
     /**
+     * 解密并反序列化为指定类型（根据设备ID自动查询SSID）
+     */
+    public <T> T decryptAndParseByDeviceId(byte[] encryptedBytes, String deviceId, Class<T> clazz) throws Exception {
+        String ssid = getSsidByDeviceId(deviceId);
+        return decryptAndParse(encryptedBytes, ssid, clazz);
+    }
+    
+    /**
      * 解密并反序列化为指定类型
      */
     public <T> T decryptAndParse(byte[] encryptedBytes, String ssid, Class<T> clazz) throws Exception {
         String json = decrypt(encryptedBytes, ssid);
         return objectMapper.readValue(json, clazz);
+    }
+    
+    /**
+     * 根据设备ID从数据库查询SSID
+     * @param deviceId 设备ID
+     * @return SSID，如果查询不到则返回默认值
+     */
+    public String getSsidByDeviceId(String deviceId) {
+        if (deviceId == null || deviceId.isEmpty()) {
+            log.warn("设备ID为空，使用默认SSID: {}", DEFAULT_SSID);
+            return DEFAULT_SSID;
+        }
+        
+        try {
+            Device device = deviceRepository.selectById(deviceId);
+            if (device != null && device.getSsid() != null && !device.getSsid().isEmpty()) {
+                log.debug("从数据库获取设备SSID, deviceId={}, ssid={}", deviceId, device.getSsid());
+                return device.getSsid();
+            } else {
+                log.warn("设备SSID为空或设备不存在, deviceId={}, 使用默认SSID: {}", deviceId, DEFAULT_SSID);
+                return DEFAULT_SSID;
+            }
+        } catch (Exception e) {
+            log.error("查询设备SSID失败, deviceId={}", deviceId, e);
+            return DEFAULT_SSID;
+        }
     }
     
     /**

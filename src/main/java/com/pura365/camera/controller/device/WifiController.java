@@ -3,17 +3,18 @@ package com.pura365.camera.controller.device;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.pura365.camera.domain.Device;
-import com.pura365.camera.domain.DeviceBinding;
-import com.pura365.camera.domain.UserDevice;
-import com.pura365.camera.domain.WifiHistory;
 import com.pura365.camera.model.ApiResponse;
-import com.pura365.camera.repository.*;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.pura365.camera.model.wifi.BindDeviceRequest;
+import com.pura365.camera.model.wifi.BindingStatusVO;
+import com.pura365.camera.model.wifi.WifiInfoVO;
+import com.pura365.camera.service.WifiService;
+import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.*;
+import javax.validation.Valid;
+import java.util.List;
 
 /**
  * WiFi 配网 & 设备绑定相关接口
@@ -25,126 +26,57 @@ import java.util.*;
 @Tag(name = "WiFi管理", description = "WiFi配置相关接口")
 @RestController
 @RequestMapping("/api/device")
+@RequiredArgsConstructor
 public class WifiController {
 
-    @Autowired
-    private WifiHistoryRepository wifiHistoryRepository;
+    private static final Logger log = LoggerFactory.getLogger(WifiController.class);
 
-    @Autowired
-    private DeviceRepository deviceRepository;
-
-    @Autowired
-    private UserDeviceRepository userDeviceRepository;
-
-    @Autowired
-    private DeviceBindingRepository deviceBindingRepository;
+    private final WifiService wifiService;
 
     /**
      * WiFi 列表 - GET /wifi/scan
      *
      * 目前从 wifi_history 返回当前用户最近使用的 WiFi 记录
      */
-    @Operation(summary = "扫描 WiFi 列表", description = "返回当前用户最近使用的 WiFi 记录（wifi_history）")
+    @Operation(summary = "扫描 WiFi 列表", description = "返回当前用户最近使用的 WiFi 记录")
     @GetMapping("/wifi/scan")
-    public ApiResponse<List<Map<String, Object>>> scanWifi(@RequestAttribute("currentUserId") Long currentUserId) {
-        QueryWrapper<WifiHistory> qw = new QueryWrapper<>();
-        qw.lambda().eq(WifiHistory::getUserId, currentUserId)
-                .orderByDesc(WifiHistory::getLastUsedAt)
-                .last("limit 20");
-        List<WifiHistory> list = wifiHistoryRepository.selectList(qw);
-        List<Map<String, Object>> result = new ArrayList<>();
-        if (list != null) {
-            for (WifiHistory w : list) {
-                Map<String, Object> m = new HashMap<>();
-                m.put("ssid", w.getSsid());
-                m.put("signal", w.getSignal());
-                m.put("security", w.getSecurity());
-                m.put("is_connected", w.getIsConnected() != null && w.getIsConnected() == 1);
-                result.add(m);
-            }
+    public ApiResponse<List<WifiInfoVO>> scanWifi(@RequestAttribute("currentUserId") Long currentUserId) {
+        log.info("[WiFi] 扫描WiFi列表请求, userId={}", currentUserId);
+        try {
+            List<WifiInfoVO> result = wifiService.getWifiHistory(currentUserId);
+            log.info("[WiFi] 扫描WiFi列表成功, userId={}, count={}", currentUserId, result.size());
+            return ApiResponse.success(result);
+        } catch (Exception e) {
+            log.error("[WiFi] 扫描WiFi列表失败, userId={}", currentUserId, e);
+            return ApiResponse.error(500, "获取WiFi列表失败: " + e.getMessage());
         }
-        return ApiResponse.success(result);
     }
 
     /**
      * 设备绑定 - POST /devices/bind
-     *
-     * RequestBody 示例:
-     * {
-     *   "device_sn": "设备序列号",
-     *   "device_name": "客厅摄像头",
-     *   "wifi_ssid": "ACCGE-5G",
-     *   "wifi_password": "password123"
-     * }
      */
     @Operation(summary = "设备绑定", description = "绑定设备并记录 WiFi 信息")
     @PostMapping("/devices/bind")
-    public ApiResponse<Map<String, Object>> bindDevice(@RequestAttribute("currentUserId") Long currentUserId,
-                                                       @RequestBody Map<String, String> body) {
-        String deviceSn = body.get("device_sn");
-        String deviceName = body.get("device_name");
-        String wifiSsid = body.get("wifi_ssid");
-        String wifiPassword = body.get("wifi_password");
-        if (deviceSn == null || deviceSn.isEmpty()) {
+    public ApiResponse<BindingStatusVO> bindDevice(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @Valid @RequestBody BindDeviceRequest request) {
+        log.info("[WiFi] 设备绑定请求, userId={}, deviceSn={}, wifiSsid={}", 
+                currentUserId, request.getDeviceSn(), request.getWifiSsid());
+        
+        if (request.getDeviceSn() == null || request.getDeviceSn().isEmpty()) {
+            log.warn("[WiFi] 设备绑定失败: 设备序列号为空, userId={}", currentUserId);
             return ApiResponse.error(400, "device_sn 不能为空");
         }
-        // 创建设备（如果不存在）
-        Device device = deviceRepository.selectById(deviceSn);
-        if (device == null) {
-            device = new Device();
-            device.setId(deviceSn);
-            device.setName(deviceName);
-            device.setSsid(wifiSsid);
-            device.setStatus(0);
-            device.setEnabled(1);
-            deviceRepository.insert(device);
-        } else {
-            if (deviceName != null && !deviceName.isEmpty()) {
-                device.setName(deviceName);
-                deviceRepository.updateById(device);
-            }
+        
+        try {
+            BindingStatusVO result = wifiService.bindDevice(currentUserId, request);
+            log.info("[WiFi] 设备绑定成功, userId={}, deviceId={}", currentUserId, result.getDeviceId());
+            return ApiResponse.success(result);
+        } catch (Exception e) {
+            log.error("[WiFi] 设备绑定失败, userId={}, deviceSn={}", 
+                    currentUserId, request.getDeviceSn(), e);
+            return ApiResponse.error(500, "设备绑定失败: " + e.getMessage());
         }
-        // 绑定关系
-        QueryWrapper<UserDevice> qw = new QueryWrapper<>();
-        qw.lambda().eq(UserDevice::getUserId, currentUserId)
-                .eq(UserDevice::getDeviceId, deviceSn);
-        if (userDeviceRepository.selectCount(qw) == 0) {
-            UserDevice ud = new UserDevice();
-            ud.setUserId(currentUserId);
-            ud.setDeviceId(deviceSn);
-            ud.setRole("owner");
-            userDeviceRepository.insert(ud);
-        }
-        // 创建 binding 记录，初始状态 binding
-        DeviceBinding binding = new DeviceBinding();
-        binding.setDeviceId(deviceSn);
-        binding.setDeviceSn(deviceSn);
-        binding.setUserId(currentUserId);
-        binding.setWifiSsid(wifiSsid);
-        binding.setWifiPassword(wifiPassword);
-        binding.setStatus("binding");
-        binding.setProgress(0);
-        binding.setMessage("正在配置WiFi");
-        deviceBindingRepository.insert(binding);
-
-        // 新增 wifi_history 记录
-        if (wifiSsid != null && !wifiSsid.isEmpty()) {
-            WifiHistory history = new WifiHistory();
-            history.setUserId(currentUserId);
-            history.setSsid(wifiSsid);
-            history.setSignal(null);
-            history.setSecurity("WPA2");
-            history.setIsConnected(0);
-            history.setLastUsedAt(new Date());
-            wifiHistoryRepository.insert(history);
-        }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("id", device.getId());
-        data.put("name", device.getName());
-        data.put("status", "binding");
-        data.put("binding_progress", 0);
-        return ApiResponse.success(data);
     }
 
     /**
@@ -152,24 +84,18 @@ public class WifiController {
      */
     @Operation(summary = "查询绑定进度", description = "查询设备绑定进度和状态")
     @GetMapping("/devices/{id}/binding-status")
-    public ApiResponse<Map<String, Object>> getBindingStatus(@RequestAttribute("currentUserId") Long currentUserId,
-                                                             @PathVariable("id") String deviceId) {
-        QueryWrapper<DeviceBinding> qw = new QueryWrapper<>();
-        qw.lambda().eq(DeviceBinding::getUserId, currentUserId)
-                .eq(DeviceBinding::getDeviceId, deviceId)
-                .orderByDesc(DeviceBinding::getCreatedAt)
-                .last("limit 1");
-        DeviceBinding binding = deviceBindingRepository.selectOne(qw);
-        Map<String, Object> data = new HashMap<>();
-        if (binding == null) {
-            data.put("status", "binding");
-            data.put("progress", 0);
-            data.put("message", "未找到绑定记录");
-        } else {
-            data.put("status", binding.getStatus());
-            data.put("progress", binding.getProgress());
-            data.put("message", binding.getMessage());
+    public ApiResponse<BindingStatusVO> getBindingStatus(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @PathVariable("id") String deviceId) {
+        log.debug("[WiFi] 查询绑定状态, userId={}, deviceId={}", currentUserId, deviceId);
+        
+        try {
+            BindingStatusVO result = wifiService.getBindingStatus(currentUserId, deviceId);
+            log.debug("[WiFi] 查询绑定状态成功, deviceId={}, status={}", deviceId, result.getStatus());
+            return ApiResponse.success(result);
+        } catch (Exception e) {
+            log.error("[WiFi] 查询绑定状态失败, userId={}, deviceId={}", currentUserId, deviceId, e);
+            return ApiResponse.error(500, "查询绑定状态失败: " + e.getMessage());
         }
-        return ApiResponse.success(data);
     }
 }

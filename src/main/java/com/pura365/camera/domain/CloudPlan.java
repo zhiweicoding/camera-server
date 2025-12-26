@@ -1,100 +1,74 @@
 package com.pura365.camera.domain;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
 
+import java.math.BigDecimal;
+import java.util.Date;
+
+/**
+ * 云存储套餐实体，对应表 cloud_plan
+ */
+@Data
 @TableName("cloud_plan")
 public class CloudPlan {
 
+    /** 主键ID */
     @TableId(type = IdType.AUTO)
     private Long id;
 
+    /** 套餐ID */
+    @TableField("plan_id")
     private String planId;
 
+    /** 套餐名称 */
+    @TableField("name")
     private String name;
 
+    /** 套餐描述 */
+    @TableField("description")
     private String description;
 
+    /** 存储天数 */
+    @TableField("storage_days")
     private Integer storageDays;
 
-    private java.math.BigDecimal price;
+    /** 价格 */
+    @TableField("price")
+    private BigDecimal price;
 
-    private java.math.BigDecimal originalPrice;
+    /** 原价 */
+    @TableField("original_price")
+    private BigDecimal originalPrice;
 
+    /** 周期: month/year */
+    @TableField("period")
     private String period;
 
+    /** 套餐特性(JSON) */
+    @TableField("features")
     private String features;
 
-    public Long getId() {
-        return id;
-    }
+    /** 套餐类型: motion-动态录像, fulltime-全天录像, traffic-4G流量 */
+    @TableField("type")
+    private String type;
 
-    public void setId(Long id) {
-        this.id = id;
-    }
+    /** 排序序号 */
+    @TableField("sort_order")
+    private Integer sortOrder;
 
-    public String getPlanId() {
-        return planId;
-    }
+    /** 状态: 1-启用, 0-禁用 */
+    @TableField("status")
+    private Integer status;
 
-    public void setPlanId(String planId) {
-        this.planId = planId;
-    }
+    /** 创建时间 */
+    @TableField("created_at")
+    private Date createdAt;
 
-    public String getName() {
-        return name;
-    }
-
-    public void setName(String name) {
-        this.name = name;
-    }
-
-    public String getDescription() {
-        return description;
-    }
-
-    public void setDescription(String description) {
-        this.description = description;
-    }
-
-    public Integer getStorageDays() {
-        return storageDays;
-    }
-
-    public void setStorageDays(Integer storageDays) {
-        this.storageDays = storageDays;
-    }
-
-    public java.math.BigDecimal getPrice() {
-        return price;
-    }
-
-    public void setPrice(java.math.BigDecimal price) {
-        this.price = price;
-    }
-
-    public java.math.BigDecimal getOriginalPrice() {
-        return originalPrice;
-    }
-
-    public void setOriginalPrice(java.math.BigDecimal originalPrice) {
-        this.originalPrice = originalPrice;
-    }
-
-    public String getPeriod() {
-        return period;
-    }
-
-    public void setPeriod(String period) {
-        this.period = period;
-    }
-
-    public String getFeatures() {
-        return features;
-    }
-
-    public void setFeatures(String features) {
-        this.features = features;
-    }
+    /** 更新时间 */
+    @TableField("updated_at")
+    private Date updatedAt;
 }

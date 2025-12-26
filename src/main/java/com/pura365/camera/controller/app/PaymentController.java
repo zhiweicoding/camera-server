@@ -1,33 +1,25 @@
 package com.pura365.camera.controller.app;
 
-import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.tags.Tag;
-
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.pura365.camera.domain.CloudPlan;
-import com.pura365.camera.domain.PaymentOrder;
-import com.pura365.camera.domain.PaymentWechat;
-import com.pura365.camera.domain.UserDevice;
 import com.pura365.camera.model.ApiResponse;
-import com.pura365.camera.repository.CloudPlanRepository;
-import com.pura365.camera.repository.PaymentOrderRepository;
-import com.pura365.camera.repository.PaymentWechatRepository;
-import com.pura365.camera.repository.UserDeviceRepository;
+import com.pura365.camera.model.payment.*;
+import com.pura365.camera.service.GooglePayService;
+import com.pura365.camera.service.PaymentService;
+import com.pura365.camera.service.PaymentService.CreateOrderResult;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
-import java.math.BigDecimal;
-import java.text.SimpleDateFormat;
-import java.util.*;
-
 /**
- * 支付相关接口
+ * 支付接口
  * 
- * 包含：
- * - 创建支付订单
- * - 查询支付状态
- * - 微信支付
- * - PayPal支付
+ * 提供订单创建、查询以及多种支付方式的对接：
+ * - 微信支付 (WeChat Pay)
+ * - PayPal
  * - Apple Pay
  */
 @Tag(name = "支付管理", description = "订单创建、支付相关接口")
@@ -35,216 +27,140 @@ import java.util.*;
 @RequestMapping("/api/app/payment")
 public class PaymentController {
 
-    @Autowired
-    private PaymentOrderRepository paymentOrderRepository;
+    private static final Logger log = LoggerFactory.getLogger(PaymentController.class);
 
     @Autowired
-    private PaymentWechatRepository paymentWechatRepository;
-
-    @Autowired
-    private CloudPlanRepository cloudPlanRepository;
-
-    @Autowired
-    private UserDeviceRepository userDeviceRepository;
+    private PaymentService paymentService;
 
     /**
-     * 创建支付订单 - POST /payment/create
+     * 创建支付订单
+     * 
+     * 根据商品类型和商品ID创建订单，返回订单号和金额信息
      */
+    @Operation(summary = "创建支付订单", description = "根据商品类型创建订单，目前支持云存储套餐")
     @PostMapping("/create")
-    public ApiResponse<Map<String, Object>> createOrder(@RequestAttribute("currentUserId") Long currentUserId,
-                                                        @RequestBody Map<String, String> body) {
-        String productType = body.get("product_type");
-        String productId = body.get("product_id");
-        String deviceId = body.get("device_id");
-        String paymentMethod = body.get("payment_method");
-
-        if (productType == null || productType.isEmpty() || productId == null || productId.isEmpty()) {
-            return ApiResponse.error(400, "product_type 和 product_id 不能为空");
+    public ApiResponse<OrderVO> createOrder(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @RequestBody CreateOrderRequest request) {
+        log.info("创建支付订单 - userId={}, request={}", currentUserId, request);
+        CreateOrderResult result = paymentService.createOrder(currentUserId, request);
+        if (!result.isSuccess()) {
+            log.warn("创建订单失败 - userId={}, error={}", currentUserId, result.getErrorMessage());
+            return ApiResponse.error(result.getErrorCode(), result.getErrorMessage());
         }
-        if (deviceId == null || deviceId.isEmpty()) {
-            return ApiResponse.error(400, "device_id 不能为空");
-        }
-        if (paymentMethod == null || paymentMethod.isEmpty()) {
-            paymentMethod = "wechat"; // 默认微信
-        }
-        // 校验设备归属
-        if (!hasUserDevice(currentUserId, deviceId)) {
-            return ApiResponse.error(403, "无权操作该设备");
-        }
-
-        BigDecimal amount;
-        String currency = "CNY";
-
-        if ("cloud_storage".equals(productType)) {
-            CloudPlan plan = findPlanByPlanId(productId);
-            if (plan == null) {
-                return ApiResponse.error(404, "云存储套餐不存在");
-            }
-            amount = plan.getPrice() != null ? plan.getPrice() : BigDecimal.ZERO;
-        } else {
-            return ApiResponse.error(400, "暂不支持的商品类型: " + productType);
-        }
-
-        PaymentOrder order = new PaymentOrder();
-        order.setOrderId(generateOrderId());
-        order.setUserId(currentUserId);
-        order.setDeviceId(deviceId);
-        order.setProductType(productType);
-        order.setProductId(productId);
-        order.setAmount(amount);
-        order.setCurrency(currency);
-        order.setStatus("pending");
-        order.setPaymentMethod(paymentMethod);
-        order.setCreatedAt(new Date());
-        paymentOrderRepository.insert(order);
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("order_id", order.getOrderId());
-        data.put("amount", order.getAmount());
-        data.put("currency", order.getCurrency());
-        data.put("created_at", formatIsoTime(order.getCreatedAt()));
-        return ApiResponse.success(data);
+        log.info("创建订单成功 - userId={}, orderId={}", currentUserId, result.getOrder().getOrderId());
+        return ApiResponse.success(result.getOrder());
     }
 
     /**
-     * 查询支付状态 - GET /payment/{id}/status
+     * 查询订单支付状态
      */
+    @Operation(summary = "查询支付状态", description = "根据订单ID查询当前支付状态")
     @GetMapping("/{id}/status")
-    public ApiResponse<Map<String, Object>> getOrderStatus(@RequestAttribute("currentUserId") Long currentUserId,
-                                                           @PathVariable("id") String orderId) {
-        PaymentOrder order = findOrderByOrderId(orderId);
-        if (order == null || order.getUserId() == null || !order.getUserId().equals(currentUserId)) {
+    public ApiResponse<OrderVO> getOrderStatus(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @Parameter(description = "订单ID") @PathVariable("id") String orderId) {
+        log.info("查询订单状态 - userId={}, orderId={}", currentUserId, orderId);
+        OrderVO order = paymentService.getOrderStatus(currentUserId, orderId);
+        if (order == null) {
+            log.warn("查询订单状态失败 - 订单不存在, userId={}, orderId={}", currentUserId, orderId);
             return ApiResponse.error(404, "订单不存在");
         }
-        Map<String, Object> data = new HashMap<>();
-        data.put("order_id", order.getOrderId());
-        data.put("status", order.getStatus());
-        data.put("amount", order.getAmount());
-        data.put("paid_at", order.getPaidAt() != null ? formatIsoTime(order.getPaidAt()) : null);
-        return ApiResponse.success(data);
+        return ApiResponse.success(order);
     }
 
     /**
-     * 微信支付参数 - POST /payment/wechat
+     * 获取微信支付参数
+     * 
+     * 返回客户端调起微信支付所需的全部参数
      */
+    @Operation(summary = "微信支付", description = "获取微信支付所需参数，客户端使用返回参数调用微信SDK")
     @PostMapping("/wechat")
-    public ApiResponse<Map<String, Object>> wechatPay(@RequestAttribute("currentUserId") Long currentUserId,
-                                                      @RequestBody Map<String, String> body) {
-        String orderId = body.get("order_id");
-        if (orderId == null || orderId.isEmpty()) {
+    public ApiResponse<WechatPayVO> wechatPay(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @RequestBody PayRequest request) {
+        log.info("微信支付 - userId={}, orderId={}", currentUserId, request.getOrderId());
+        if (!StringUtils.hasText(request.getOrderId())) {
+            log.warn("微信支付失败 - orderId为空, userId={}", currentUserId);
             return ApiResponse.error(400, "order_id 不能为空");
         }
-        PaymentOrder order = findOrderByOrderId(orderId);
-        if (order == null || order.getUserId() == null || !order.getUserId().equals(currentUserId)) {
+        WechatPayVO result = paymentService.wechatPay(currentUserId, request.getOrderId());
+        if (result == null) {
+            log.warn("微信支付失败 - 订单不存在, userId={}, orderId={}", currentUserId, request.getOrderId());
             return ApiResponse.error(404, "订单不存在");
         }
-
-        // 简单保存一条微信支付预下单记录（mock）
-        PaymentWechat pw = new PaymentWechat();
-        pw.setOrderId(order.getOrderId());
-        pw.setPrepayId("mock_prepay_" + order.getOrderId());
-        pw.setRawResponse("{}");
-        pw.setCreatedAt(new Date());
-        paymentWechatRepository.insert(pw);
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("appid", "wx_app_id_mock");
-        data.put("partnerid", "partner_mock");
-        data.put("prepayid", pw.getPrepayId());
-        data.put("package", "Sign=WXPay");
-        data.put("noncestr", UUID.randomUUID().toString().replace("-", ""));
-        data.put("timestamp", String.valueOf(System.currentTimeMillis() / 1000));
-        data.put("sign", "mock_sign_" + order.getOrderId());
-        return ApiResponse.success(data);
+        log.info("微信支付参数获取成功 - userId={}, orderId={}", currentUserId, request.getOrderId());
+        return ApiResponse.success(result);
     }
 
     /**
-     * PayPal 支付 - POST /payment/paypal
+     * 获取 PayPal 支付链接
+     * 
+     * 返回 PayPal 支付页面 URL，客户端需跳转到该 URL 完成支付
      */
+    @Operation(summary = "PayPal 支付", description = "获取 PayPal 支付页面 URL")
     @PostMapping("/paypal")
-    public ApiResponse<Map<String, Object>> paypalPay(@RequestAttribute("currentUserId") Long currentUserId,
-                                                      @RequestBody Map<String, String> body) {
-        String orderId = body.get("order_id");
-        if (orderId == null || orderId.isEmpty()) {
+    public ApiResponse<PaypalPayVO> paypalPay(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @RequestBody PayRequest request) {
+        log.info("PayPal支付 - userId={}, orderId={}", currentUserId, request.getOrderId());
+        if (!StringUtils.hasText(request.getOrderId())) {
+            log.warn("PayPal支付失败 - orderId为空, userId={}", currentUserId);
             return ApiResponse.error(400, "order_id 不能为空");
         }
-        PaymentOrder order = findOrderByOrderId(orderId);
-        if (order == null || order.getUserId() == null || !order.getUserId().equals(currentUserId)) {
+        PaypalPayVO result = paymentService.paypalPay(currentUserId, request.getOrderId());
+        if (result == null) {
+            log.warn("PayPal支付失败 - 订单不存在, userId={}, orderId={}", currentUserId, request.getOrderId());
             return ApiResponse.error(404, "订单不存在");
         }
-        Map<String, Object> data = new HashMap<>();
-        data.put("approval_url", "https://www.paypal.com/checkout?token=" + order.getOrderId());
-        data.put("paypal_order_id", "paypal_" + order.getOrderId());
-        return ApiResponse.success(data);
+        log.info("PayPal支付URL获取成功 - userId={}, orderId={}", currentUserId, request.getOrderId());
+        return ApiResponse.success(result);
     }
 
-    /**
-     * Apple Pay 支付 - POST /payment/apple
-     */
-    @PostMapping("/apple")
-    public ApiResponse<Map<String, Object>> applePay(@RequestAttribute("currentUserId") Long currentUserId,
-                                                     @RequestBody Map<String, String> body) {
-        String orderId = body.get("order_id");
-        String paymentToken = body.get("payment_token");
-        if (orderId == null || orderId.isEmpty()) {
-            return ApiResponse.error(400, "order_id 不能为空");
-        }
-        PaymentOrder order = findOrderByOrderId(orderId);
-        if (order == null || order.getUserId() == null || !order.getUserId().equals(currentUserId)) {
-            return ApiResponse.error(404, "订单不存在");
-        }
-
-        // 简单模拟支付成功，更新订单状态
-        order.setStatus("paid");
-        order.setThirdOrderId("apple_" + order.getOrderId());
-        order.setPaidAt(new Date());
-        order.setUpdatedAt(new Date());
-        paymentOrderRepository.updateById(order);
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("transaction_id", order.getThirdOrderId());
-        data.put("status", "completed");
-        return ApiResponse.success(data);
-    }
-
-    // ===== 辅助方法 =====
-
-    private CloudPlan findPlanByPlanId(String planId) {
-        QueryWrapper<CloudPlan> qw = new QueryWrapper<>();
-        qw.lambda().eq(CloudPlan::getPlanId, planId).last("limit 1");
-        CloudPlan plan = cloudPlanRepository.selectOne(qw);
-        if (plan == null) {
-            try {
-                Long id = Long.parseLong(planId);
-                plan = cloudPlanRepository.selectById(id);
-            } catch (NumberFormatException ignore) {
-            }
-        }
-        return plan;
-    }
-
-    private PaymentOrder findOrderByOrderId(String orderId) {
-        QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
-        qw.lambda().eq(PaymentOrder::getOrderId, orderId).last("limit 1");
-        return paymentOrderRepository.selectOne(qw);
-    }
-
-    private boolean hasUserDevice(Long userId, String deviceId) {
-        QueryWrapper<UserDevice> qw = new QueryWrapper<>();
-        qw.lambda().eq(UserDevice::getUserId, userId)
-                .eq(UserDevice::getDeviceId, deviceId);
-        Integer count = userDeviceRepository.selectCount(qw).intValue();
-        return count != null && count > 0;
-    }
-
-    private String generateOrderId() {
-        return "order_" + System.currentTimeMillis();
-    }
-
-    private String formatIsoTime(Date date) {
-        if (date == null) return null;
-        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'");
-        sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
-        return sdf.format(date);
-    }
+//    /**
+//     * Apple Pay 支付
+//     *
+//     * 客户端传入 Apple Pay SDK 返回的 payment_token，服务端验证并完成支付
+//     */
+//    @Operation(summary = "Apple Pay 支付", description = "使用 Apple Pay 完成支付")
+//    @PostMapping("/apple")
+//    public ApiResponse<ApplePayVO> applePay(
+//            @RequestAttribute("currentUserId") Long currentUserId,
+//            @RequestBody ApplePayRequest request) {
+//
+//        if (!StringUtils.hasText(request.getOrderId())) {
+//            return ApiResponse.error(400, "order_id 不能为空");
+//        }
+//
+//        ApplePayVO result = paymentService.applePay(currentUserId, request);
+//        if (result == null) {
+//            return ApiResponse.error(404, "订单不存在");
+//        }
+//        return ApiResponse.success(result);
+//    }
+//
+//    /**
+//     * Google Play 支付
+//     *
+//     * 客户端传入Google Play Billing返回的purchase token，服务端验证并完成支付
+//     */
+//    @Operation(summary = "Google Play 支付", description = "使用 Google Play 完成支付")
+//    @PostMapping("/google")
+//    public ApiResponse<GooglePayVO> googlePay(
+//            @RequestAttribute("currentUserId") Long currentUserId,
+//            @RequestBody GooglePayRequest request) {
+//
+//        if (!StringUtils.hasText(request.getOrderId())) {
+//            return ApiResponse.error(400, "order_id 不能为空");
+//        }
+//        if (!StringUtils.hasText(request.getPurchaseToken())) {
+//            return ApiResponse.error(400, "purchase_token 不能为空");
+//        }
+//
+//        GooglePayVO result = paymentService.googlePay(currentUserId, request);
+//        if (result == null) {
+//            return ApiResponse.error(404, "订单不存在");
+//        }
+//        return ApiResponse.success(result);
+//    }
 }

@@ -1,18 +1,23 @@
 package com.pura365.camera.model;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.swagger.v3.oas.annotations.media.Schema;
 
 /**
  * 统一 API 响应封装
  */
+@Schema(description = "统一API响应")
 public class ApiResponse<T> {
 
+    @Schema(description = "响应码，0表示成功，其他表示失败", example = "0")
     @JsonProperty("code")
     private int code;
 
+    @Schema(description = "响应消息", example = "success")
     @JsonProperty("message")
     private String message;
 
+    @Schema(description = "响应数据")
     @JsonProperty("data")
     private T data;
 

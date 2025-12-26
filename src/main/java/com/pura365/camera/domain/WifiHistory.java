@@ -1,82 +1,45 @@
 package com.pura365.camera.domain;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
 
 import java.util.Date;
 
+/**
+ * WiFi历史记录实体，对应表 wifi_history
+ */
+@Data
 @TableName("wifi_history")
 public class WifiHistory {
 
+    /** 主键ID */
     @TableId(type = IdType.AUTO)
     private Long id;
 
+    /** 用户ID */
+    @TableField("user_id")
     private Long userId;
 
+    /** WiFi名称 */
+    @TableField("ssid")
     private String ssid;
 
+    /** 信号强度 */
+    @TableField("signal")
     private Integer signal;
 
+    /** 安全类型 */
+    @TableField("security")
     private String security;
 
+    /** 是否连接: 0-否 1-是 */
+    @TableField("is_connected")
     private Integer isConnected;
 
+    /** 最后使用时间 */
+    @TableField("last_used_at")
     private Date lastUsedAt;
-
-    public Long getId() {
-        return id;
-    }
-
-    public void setId(Long id) {
-        this.id = id;
-    }
-
-    public Long getUserId() {
-        return userId;
-    }
-
-    public void setUserId(Long userId) {
-        this.userId = userId;
-    }
-
-    public String getSsid() {
-        return ssid;
-    }
-
-    public void setSsid(String ssid) {
-        this.ssid = ssid;
-    }
-
-    public Integer getSignal() {
-        return signal;
-    }
-
-    public void setSignal(Integer signal) {
-        this.signal = signal;
-    }
-
-    public String getSecurity() {
-        return security;
-    }
-
-    public void setSecurity(String security) {
-        this.security = security;
-    }
-
-    public Integer getIsConnected() {
-        return isConnected;
-    }
-
-    public void setIsConnected(Integer isConnected) {
-        this.isConnected = isConnected;
-    }
-
-    public Date getLastUsedAt() {
-        return lastUsedAt;
-    }
-
-    public void setLastUsedAt(Date lastUsedAt) {
-        this.lastUsedAt = lastUsedAt;
-    }
 }

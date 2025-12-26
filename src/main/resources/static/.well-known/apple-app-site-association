@@ -1,0 +1,11 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "4544Q9CZLQ.com.thought.device",
+        "paths": ["/app/*"]
+      }
+    ]
+  }
+}

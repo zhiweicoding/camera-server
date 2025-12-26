@@ -6,6 +6,8 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import com.pura365.camera.domain.User;
 import com.pura365.camera.model.ApiResponse;
 import com.pura365.camera.repository.UserRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -31,6 +33,8 @@ import java.util.UUID;
 @RequestMapping("/api/app/user")
 public class UserController {
 
+    private static final Logger log = LoggerFactory.getLogger(UserController.class);
+
     @Autowired
     private UserRepository userRepository;
 
@@ -39,11 +43,14 @@ public class UserController {
      */
     @GetMapping("/info")
     public ApiResponse<Map<String, Object>> getUserInfo(@RequestAttribute(value = "currentUserId", required = false) Long currentUserId) {
+        log.info("获取用户信息 - userId={}", currentUserId);
         if (currentUserId == null) {
+            log.warn("获取用户信息失败 - 未登录");
             return ApiResponse.error(401, "未登录");
         }
         User user = userRepository.selectById(currentUserId);
         if (user == null) {
+            log.warn("获取用户信息失败 - 用户不存在, userId={}", currentUserId);
             return ApiResponse.error(404, "用户不存在");
         }
         Map<String, Object> data = buildUserInfo(user);
@@ -56,11 +63,13 @@ public class UserController {
     @PutMapping("/update")
     public ApiResponse<Map<String, Object>> updateUser(@RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
                                                        @RequestBody Map<String, String> body) {
+        log.info("更新用户信息 - userId={}, body={}", currentUserId, body);
         if (currentUserId == null) {
             return ApiResponse.error(401, "未登录");
         }
         User user = userRepository.selectById(currentUserId);
         if (user == null) {
+            log.warn("更新用户信息失败 - 用户不存在, userId={}", currentUserId);
             return ApiResponse.error(404, "用户不存在");
         }
         String nickname = body.get("nickname");
@@ -72,6 +81,7 @@ public class UserController {
             user.setAvatar(avatar);
         }
         userRepository.updateById(user);
+        log.info("更新用户信息成功 - userId={}", currentUserId);
         Map<String, Object> data = buildUserInfo(user);
         return ApiResponse.success(data);
     }
@@ -82,10 +92,12 @@ public class UserController {
     @PostMapping("/avatar")
     public ApiResponse<Map<String, Object>> uploadAvatar(@RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
                                                          @RequestParam("file") MultipartFile file) {
+        log.info("上传头像 - userId={}, fileName={}", currentUserId, file != null ? file.getOriginalFilename() : null);
         if (currentUserId == null) {
             return ApiResponse.error(401, "未登录");
         }
         if (file == null || file.isEmpty()) {
+            log.warn("上传头像失败 - 文件为空, userId={}", currentUserId);
             return ApiResponse.error(400, "文件不能为空");
         }
         User user = userRepository.selectById(currentUserId);
@@ -96,10 +108,12 @@ public class UserController {
             String avatarUrl = saveAvatarFile(file);
             user.setAvatar(avatarUrl);
             userRepository.updateById(user);
+            log.info("上传头像成功 - userId={}, url={}", currentUserId, avatarUrl);
             Map<String, Object> data = new HashMap<>();
             data.put("url", avatarUrl);
             return ApiResponse.success(data);
         } catch (IOException e) {
+            log.error("上传头像异常 - userId={}", currentUserId, e);
             return ApiResponse.error(500, "上传失败");
         }
     }

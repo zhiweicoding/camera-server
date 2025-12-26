@@ -1,10 +1,14 @@
 package com.pura365.camera.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.pura365.camera.config.StorageConfig;
+import com.pura365.camera.domain.CloudSubscription;
 import com.pura365.camera.domain.Device;
 import com.pura365.camera.model.GetInfoRequest;
 import com.pura365.camera.model.GetInfoResponse;
 import com.pura365.camera.model.ResetDeviceRequest;
 import com.pura365.camera.model.SendMsgRequest;
+import com.pura365.camera.repository.CloudSubscriptionRepository;
 import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.util.TimeValidator;
 import org.slf4j.Logger;
@@ -13,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.Date;
 
 @Service
 public class CameraService {
@@ -22,6 +27,18 @@ public class CameraService {
     @Autowired
     private DeviceRepository deviceRepository;
     
+    @Autowired
+    private CloudSubscriptionRepository cloudSubscriptionRepository;
+    
+    @Autowired
+    private CloudStorageService cloudStorageService;
+    
+    @Autowired
+    private StorageConfig.QiniuConfig qiniuConfig;
+    
+    @Autowired
+    private StorageConfig.VultrConfig vultrConfig;
+    
     /**
      * 获取设备信息
      * 设备调用此接口时，自动新增或更新设备记录
@@ -30,8 +47,9 @@ public class CameraService {
         log.info("设备请求配置信息 - ID: {}, MAC: {}, Region: {}", info.getId(), info.getMac(), info.getRegion());
         
         // 查找或创建设备记录
+        Device device = null;
         try {
-            Device device = deviceRepository.selectById(info.getId());
+            device = deviceRepository.selectById(info.getId());
             if (device == null) {
                 // 设备不存在，创建新记录
                 device = new Device();
@@ -75,12 +93,14 @@ public class CameraService {
         response.setMqttUser("camera_test");
         response.setMqttPass("123456");
         
-        // 以下配置可以后续从数据库读取
-        // response.setCloudStorage(1);
-        // response.setS3Hostname("s3.pura365.com");
-        // response.setS3Region("us-east-1");
-        // response.setS3AccessKey("your-access-key");
-        // response.setS3SecretKey("your-secret-key");
+        // 检查云存储订阅状态并配置S3凭证
+        if (device != null) {
+            configureCloudStorage(device, response);
+        } else {
+            response.setCloudStorage(0);
+        }
+        
+        // GPT/AI 配置（预留）
         // response.setGPTHostname("ai.pura365.com");
         // response.setGPTKey("gpt-access-key");
         
@@ -138,5 +158,89 @@ public class CameraService {
     @Deprecated
     public boolean validateRequest(Long exp) {
         return TimeValidator.isValid(exp);
+    }
+    
+    /**
+     * 检查设备是否有有效的云存储订阅
+     */
+    private boolean checkCloudStorageSubscription(String deviceId) {
+        try {
+            QueryWrapper<CloudSubscription> qw = new QueryWrapper<>();
+            qw.lambda().eq(CloudSubscription::getDeviceId, deviceId)
+                    .orderByDesc(CloudSubscription::getExpireAt)
+                    .last("limit 1");
+            CloudSubscription subscription = cloudSubscriptionRepository.selectOne(qw);
+            
+            if (subscription == null) {
+                return false;
+            }
+            
+            // 检查是否过期
+            Date expireAt = subscription.getExpireAt();
+            if (expireAt == null) {
+                // 无过期时间，视为永久有效
+                return true;
+            }
+            
+            return expireAt.after(new Date());
+        } catch (Exception e) {
+            log.error("检查云存储订阅状态失败 - deviceId: {}", deviceId, e);
+            return false;
+        }
+    }
+    
+    /**
+     * 配置云存储和S3凭证
+     * 根据设备region选择七牛云（国内）或Vultr（国外）
+     */
+    private void configureCloudStorage(Device device, GetInfoResponse response) {
+        // 检查是否有有效订阅
+        boolean hasSubscription = checkCloudStorageSubscription(device.getId());
+        
+        if (!hasSubscription) {
+            response.setCloudStorage(0); // 未启用
+            return;
+        }
+        
+        // 有订阅，设置为连续存储模式
+        // TODO: 后续可从 CloudSubscription 表或 设备设置中读取具体模式
+        // 1 = 连续存储, 2 = 事件存储
+        response.setCloudStorage(1);
+        
+        // 判断设备区域
+        boolean isChina = isChina(device.getRegion());
+        
+        if (isChina) {
+            // 国内：使用七牛云S3兼容配置（当前先写死华南-广东）
+            // 七牛云S3兼容域名：https://developer.qiniu.com/kodo/4088/s3-access-domainname
+            // Bucket固定为 cloud-storage，摄像头默认使用
+            response.setS3Hostname("s3.cn-south-1.qiniucs.com");
+            response.setS3Region("cn-south-1");
+            response.setS3AccessKey(qiniuConfig.getAccessKey());
+            response.setS3SecretKey(qiniuConfig.getSecretKey());
+
+            log.info("配置七牛云S3凭证 - deviceId: {}", device.getId());
+        } else {
+            // 国外：使用Vultr S3配置
+            // Bucket固定为 cloud-storage，摄像头默认使用
+            String hostname = vultrConfig.getEndpoint().replace("https://", "").replace("http://", "");
+            response.setS3Hostname(hostname);
+            response.setS3Region(vultrConfig.getRegion());
+            response.setS3AccessKey(vultrConfig.getAccessKey());
+            response.setS3SecretKey(vultrConfig.getSecretKey());
+            
+            log.info("配置Vultr S3凭证 - deviceId: {}", device.getId());
+        }
+    }
+    
+    /**
+     * 判断设备是否在国内
+     */
+    private boolean isChina(String region) {
+        if (region == null || region.isEmpty()) {
+            return true; // 默认国内
+        }
+        String r = region.toLowerCase();
+        return r.equals("cn") || r.equals("china") || r.startsWith("cn-");
     }
 }

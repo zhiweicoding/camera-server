@@ -1,443 +1,252 @@
 package com.pura365.camera.controller.device;
 
-import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.tags.Tag;
-
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.pura365.camera.domain.*;
 import com.pura365.camera.model.ApiResponse;
-import com.pura365.camera.repository.*;
+import com.pura365.camera.model.device.*;
+import com.pura365.camera.service.DeviceService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
-import java.text.SimpleDateFormat;
-import java.util.*;
+import javax.validation.Valid;
+import java.util.List;
 
 /**
- * App 侧设备相关接口
- * 
- * 包含：
- * - 设备列表
- * - 设备详情
- * - 添加设备
- * - 删除设备
- * - 更新设备信息
- * - 设备设置
- * - 本地录像列表
- * - 云台控制
+ * 设备管理控制器
+ * <p>
+ * 提供App端设备相关的HTTP接口，包括：
+ * <ul>
+ *     <li>设备列表查询</li>
+ *     <li>设备详情查询</li>
+ *     <li>添加/绑定设备</li>
+ *     <li>删除/解绑设备</li>
+ *     <li>更新设备信息</li>
+ *     <li>设备设置管理</li>
+ *     <li>本地录像列表</li>
+ *     <li>云台PTZ控制</li>
+ * </ul>
+ *
+ * @author camera-server
  */
-@Tag(name = "设备管理", description = "设备增删改查、设置等管理接口")
+@Tag(name = "设备管理", description = "设备增删改查、设置、录像、云台控制等管理接口")
 @RestController
 @RequestMapping("/api/device/devices")
 public class DeviceController {
 
-    @Autowired
-    private DeviceRepository deviceRepository;
-
-    @Autowired
-    private UserDeviceRepository userDeviceRepository;
-
-    @Autowired
-    private DeviceSettingsRepository deviceSettingsRepository;
-
-    @Autowired
-    private CloudSubscriptionRepository cloudSubscriptionRepository;
-
-    @Autowired
-    private LocalVideoRepository localVideoRepository;
-
-    @Autowired
-    private DeviceRecordRepository deviceRecordRepository;
-
-    @Autowired
-    private DeviceBindingRepository deviceBindingRepository;
-
-    @Autowired
-    private com.pura365.camera.service.MqttMessageService mqttMessageService;
+    private static final Logger log = LoggerFactory.getLogger(DeviceController.class);
 
     /**
-     * 设备列表 - GET /devices
+     * HTTP状态码：请求参数错误
      */
+    private static final int HTTP_BAD_REQUEST = 400;
+
+    /**
+     * HTTP状态码：无权限
+     */
+    private static final int HTTP_FORBIDDEN = 403;
+
+    /**
+     * HTTP状态码：资源不存在
+     */
+    private static final int HTTP_NOT_FOUND = 404;
+
+    /**
+     * HTTP状态码：服务器内部错误
+     */
+    private static final int HTTP_INTERNAL_ERROR = 500;
+
+    /**
+     * 错误消息：设备不存在
+     */
+    private static final String MSG_DEVICE_NOT_FOUND = "设备不存在";
+
+    /**
+     * 错误消息：无权操作该设备
+     */
+    private static final String MSG_NO_PERMISSION = "无权操作该设备";
+
+    /**
+     * 错误消息：设备ID不能为空
+     */
+    private static final String MSG_DEVICE_ID_REQUIRED = "设备ID不能为空";
+
+    /**
+     * 错误消息：方向参数不能为空
+     */
+    private static final String MSG_DIRECTION_REQUIRED = "方向参数不能为空";
+
+    @Autowired
+    private DeviceService deviceService;
+
+    /**
+     * 获取当前用户的设备列表
+     *
+     * @param currentUserId 当前登录用户ID（由拦截器注入）
+     * @return 设备列表
+     */
+    @Operation(summary = "获取设备列表", description = "获取当前用户绑定的所有设备")
     @GetMapping
-    public ApiResponse<List<Map<String, Object>>> listDevices(@RequestAttribute("currentUserId") Long currentUserId) {
-        QueryWrapper<UserDevice> qw = new QueryWrapper<>();
-        qw.lambda().eq(UserDevice::getUserId, currentUserId);
-        List<UserDevice> bindings = userDeviceRepository.selectList(qw);
-        List<Map<String, Object>> list = new ArrayList<>();
-        if (bindings != null) {
-            for (UserDevice ud : bindings) {
-                Device device = deviceRepository.selectById(ud.getDeviceId());
-                if (device == null) continue;
-                Map<String, Object> item = buildDeviceListItem(currentUserId, device);
-                list.add(item);
-            }
-        }
-        return ApiResponse.success(list);
+    public ApiResponse<List<DeviceListItemVO>> listDevices(
+            @RequestAttribute("currentUserId") Long currentUserId) {
+        log.info("获取设备列表 - userId={}", currentUserId);
+        List<DeviceListItemVO> devices = deviceService.listDevices(currentUserId);
+        log.info("获取设备列表成功 - userId={}, count={}", currentUserId, devices.size());
+        return ApiResponse.success(devices);
     }
 
     /**
-     * 设备详情 - GET /devices/{id}/info
+     * 获取设备详情
+     *
+     * @param currentUserId 当前登录用户ID
+     * @param deviceId      设备ID
+     * @return 设备详细信息
      */
+    @Operation(summary = "获取设备详情", description = "获取指定设备的详细信息，包括设置、云存储状态等")
     @GetMapping("/{id}/info")
-    public ApiResponse<Map<String, Object>> getDeviceInfo(@RequestAttribute("currentUserId") Long currentUserId,
-                                                          @PathVariable("id") String deviceId) {
-        Device device = deviceRepository.selectById(deviceId);
-        if (device == null) {
-            return ApiResponse.error(404, "设备不存在");
+    public ApiResponse<DeviceDetailVO> getDeviceInfo(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @Parameter(description = "设备ID") @PathVariable("id") String deviceId) {
+        log.info("获取设备详情 - userId={}, deviceId={}", currentUserId, deviceId);
+        DeviceDetailVO detail = deviceService.getDeviceDetail(currentUserId, deviceId);
+        if (detail == null) {
+            log.warn("获取设备详情失败，设备不存在 - userId={}, deviceId={}", currentUserId, deviceId);
+            return ApiResponse.error(HTTP_NOT_FOUND, MSG_DEVICE_NOT_FOUND);
         }
-        Map<String, Object> data = buildDeviceDetail(currentUserId, device);
-        return ApiResponse.success(data);
+        return ApiResponse.success(detail);
     }
 
     /**
-     * 添加设备 - POST /devices/add
+     * 添加/绑定设备
+     *
+     * @param currentUserId 当前登录用户ID
+     * @param request       添加设备请求参数
+     * @return 添加后的设备基础信息
      */
+    @Operation(summary = "添加设备", description = "将设备绑定到当前用户，如果设备不存在则自动创建")
     @PostMapping("/add")
-    public ApiResponse<Map<String, Object>> addDevice(@RequestAttribute("currentUserId") Long currentUserId,
-                                                      @RequestBody Map<String, String> body) {
-        String deviceId = body.get("device_id");
-        String name = body.get("name");
-        String wifiSsid = body.get("wifi_ssid");
-        String wifiPassword = body.get("wifi_password");
-        if (deviceId == null || deviceId.isEmpty()) {
-            return ApiResponse.error(400, "device_id 不能为空");
+    public ApiResponse<DeviceVO> addDevice(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @Valid @RequestBody AddDeviceRequest request) {
+        log.info("添加设备 - userId={}, request={}", currentUserId, request);
+        // 参数校验
+        if (!StringUtils.hasText(request.getDeviceId())) {
+            log.warn("添加设备失败，设备ID为空 - userId={}", currentUserId);
+            return ApiResponse.error(HTTP_BAD_REQUEST, MSG_DEVICE_ID_REQUIRED);
         }
-        // 创建设备（如果不存在）
-        Device device = deviceRepository.selectById(deviceId);
-        if (device == null) {
-            device = new Device();
-            device.setId(deviceId);
-            device.setName(name);
-            device.setSsid(wifiSsid);
-            device.setStatus(0); // 默认离线
-            device.setEnabled(1);
-            deviceRepository.insert(device);
-        } else {
-            if (name != null && !name.isEmpty()) {
-                device.setName(name);
-                deviceRepository.updateById(device);
-            }
-        }
-        // 绑定用户与设备
-        bindUserDeviceOnce(currentUserId, deviceId);
-        // 可选：记录绑定信息（视为已成功）
-        DeviceBinding binding = new DeviceBinding();
-        binding.setDeviceId(deviceId);
-        binding.setDeviceSn(deviceId);
-        binding.setUserId(currentUserId);
-        binding.setWifiSsid(wifiSsid);
-        binding.setWifiPassword(wifiPassword);
-        binding.setStatus("success");
-        binding.setProgress(100);
-        binding.setMessage("绑定成功");
-        deviceBindingSafeInsert(binding);
 
-        Map<String, Object> data = new HashMap<>();
-        data.put("id", device.getId());
-        data.put("name", device.getName());
-        data.put("model", null); // 暂无型号字段
-        data.put("status", device.getStatus() != null && device.getStatus() == 1 ? "online" : "offline");
-        return ApiResponse.success(data);
+        DeviceVO device = deviceService.addDevice(currentUserId, request);
+        log.info("添加设备成功 - userId={}, deviceId={}", currentUserId, request.getDeviceId());
+        return ApiResponse.success(device);
     }
 
     /**
-     * 删除/解绑设备 - DELETE /devices/{id}
+     * 删除/解绑设备
+     *
+     * @param currentUserId 当前登录用户ID
+     * @param deviceId      设备ID
+     * @return 空响应
      */
+    @Operation(summary = "删除设备", description = "解除当前用户与指定设备的绑定关系")
     @DeleteMapping("/{id}")
-    public ApiResponse<Void> deleteDevice(@RequestAttribute("currentUserId") Long currentUserId,
-                                          @PathVariable("id") String deviceId) {
-        QueryWrapper<UserDevice> qw = new QueryWrapper<>();
-        qw.lambda().eq(UserDevice::getUserId, currentUserId)
-                .eq(UserDevice::getDeviceId, deviceId);
-        userDeviceRepository.delete(qw);
+    public ApiResponse<Void> deleteDevice(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @Parameter(description = "设备ID") @PathVariable("id") String deviceId) {
+        log.info("删除设备 - userId={}, deviceId={}", currentUserId, deviceId);
+        deviceService.deleteDevice(currentUserId, deviceId);
+        log.info("删除设备成功 - userId={}, deviceId={}", currentUserId, deviceId);
         return ApiResponse.success(null);
     }
 
     /**
-     * 更新设备信息 - 目前只支持修改名称
-     */
-    @PutMapping("/{id}")
-    public ApiResponse<Map<String, Object>> updateDevice(@RequestAttribute("currentUserId") Long currentUserId,
-                                                         @PathVariable("id") String deviceId,
-                                                         @RequestBody Map<String, String> body) {
-        Device device = deviceRepository.selectById(deviceId);
-        if (device == null) {
-            return ApiResponse.error(404, "设备不存在");
-        }
-        String name = body.get("name");
-        if (name != null && !name.isEmpty()) {
-            device.setName(name);
-            deviceRepository.updateById(device);
-        }
-        Map<String, Object> data = new HashMap<>();
-        data.put("id", device.getId());
-        data.put("name", device.getName());
-        return ApiResponse.success(data);
-    }
-
-    /**
-     * 更新设备设置 - PUT /devices/{id}/settings
-     */
-    @PutMapping("/{id}/settings")
-    public ApiResponse<Map<String, Object>> updateDeviceSettings(@RequestAttribute("currentUserId") Long currentUserId,
-                                                                 @PathVariable("id") String deviceId,
-                                                                 @RequestBody Map<String, Object> body) {
-        // 确保当前用户有这个设备
-        if (!hasUserDevice(currentUserId, deviceId)) {
-            return ApiResponse.error(403, "无权操作该设备");
-        }
-        DeviceSettings settings = getOrCreateSettings(deviceId);
-        if (body.containsKey("motion_detection")) {
-            settings.setMotionDetection(boolToInt(body.get("motion_detection"))); 
-        }
-        if (body.containsKey("night_vision")) {
-            settings.setNightVision(boolToInt(body.get("night_vision")));
-        }
-        if (body.containsKey("audio_enabled")) {
-            settings.setAudioEnabled(boolToInt(body.get("audio_enabled")));
-        }
-        if (body.containsKey("flip_image")) {
-            settings.setFlipImage(boolToInt(body.get("flip_image")));
-        }
-        if (body.containsKey("sensitivity")) {
-            Object s = body.get("sensitivity");
-            settings.setSensitivity(s != null ? s.toString() : null);
-        }
-        if (settings.getId() == null) {
-            deviceSettingsRepository.insert(settings);
-        } else {
-            deviceSettingsRepository.updateById(settings);
-        }
-        Map<String, Object> data = new HashMap<>();
-        data.put("motion_detection", settings.getMotionDetection() != null && settings.getMotionDetection() == 1);
-        data.put("night_vision", settings.getNightVision() != null && settings.getNightVision() == 1);
-        data.put("audio_enabled", settings.getAudioEnabled() != null && settings.getAudioEnabled() == 1);
-        data.put("flip_image", settings.getFlipImage() != null && settings.getFlipImage() == 1);
-        data.put("sensitivity", settings.getSensitivity());
-        return ApiResponse.success(data);
-    }
-
-    /**
-     * 本地录像列表 - GET /devices/{id}/local-videos
-     */
-    @GetMapping("/{id}/local-videos")
-    public ApiResponse<Map<String, Object>> listLocalVideos(@RequestAttribute("currentUserId") Long currentUserId,
-                                                            @PathVariable("id") String deviceId,
-                                                            @RequestParam(value = "date", required = false) String date,
-                                                            @RequestParam(value = "page", required = false, defaultValue = "1") int page,
-                                                            @RequestParam(value = "page_size", required = false, defaultValue = "20") int pageSize) {
-        if (!hasUserDevice(currentUserId, deviceId)) {
-            return ApiResponse.error(403, "无权查看该设备");
-        }
-        if (page < 1) page = 1;
-        if (pageSize <= 0) pageSize = 20;
-        int offset = (page - 1) * pageSize;
-
-        QueryWrapper<LocalVideo> qw = new QueryWrapper<>();
-        qw.lambda().eq(LocalVideo::getDeviceId, deviceId);
-        if (date != null && !date.isEmpty()) {
-            // 简单按日期前缀过滤 created_at 的日期部分
-            qw.apply("DATE(created_at) = {0}", date);
-        }
-        qw.orderByDesc("created_at");
-
-        int total = localVideoRepository.selectCount(qw).intValue();
-        List<LocalVideo> rows = localVideoRepository.selectList(qw.last("limit " + offset + "," + pageSize));
-
-        List<Map<String, Object>> list = new ArrayList<>();
-        if (rows != null) {
-            for (LocalVideo v : rows) {
-                Map<String, Object> item = new HashMap<>();
-                item.put("id", v.getVideoId());
-                item.put("device_id", v.getDeviceId());
-                item.put("type", v.getType());
-                item.put("title", v.getTitle());
-                item.put("thumbnail_url", v.getThumbnail());
-                item.put("video_url", v.getVideoUrl());
-                item.put("duration", v.getDuration());
-                item.put("size", v.getSize());
-                if (v.getCreatedAt() != null) {
-                    item.put("created_at", formatIsoTime(v.getCreatedAt()));
-                }
-                list.add(item);
-            }
-        }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("list", list);
-        data.put("total", total);
-        data.put("page", page);
-        data.put("page_size", pageSize);
-        return ApiResponse.success(data);
-    }
-
-    /**
-     * 云台控制 - POST /devices/{id}/ptz
+     * 更新设备信息
      *
-     * RequestBody: { "direction": "up", "speed": 5 }
-     * direction: up/down/left/right/stop
+     * @param currentUserId 当前登录用户ID
+     * @param deviceId      设备ID
+     * @param request       更新请求参数
+     * @return 更新后的设备信息
      */
+    @Operation(summary = "更新设备信息", description = "更新设备的基础信息，目前支持修改设备名称")
+    @PutMapping("/{id}")
+    public ApiResponse<DeviceVO> updateDevice(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @Parameter(description = "设备ID") @PathVariable("id") String deviceId,
+            @Valid @RequestBody UpdateDeviceRequest request) {
+        log.info("更新设备 - userId={}, deviceId={}, request={}", currentUserId, deviceId, request);
+        DeviceVO device = deviceService.updateDevice(deviceId, request);
+        if (device == null) {
+            log.warn("更新设备失败，设备不存在 - userId={}, deviceId={}", currentUserId, deviceId);
+            return ApiResponse.error(HTTP_NOT_FOUND, MSG_DEVICE_NOT_FOUND);
+        }
+        log.info("更新设备成功 - userId={}, deviceId={}", currentUserId, deviceId);
+        return ApiResponse.success(device);
+    }
+
+    /**
+     * 获取本地录像列表
+     *
+     * @param currentUserId 当前登录用户ID
+     * @param deviceId      设备ID
+     * @param date          日期过滤（可选，格式：yyyy-MM-dd）
+     * @param page          页码（从1开始，默认1）
+     * @param pageSize      每页数量（默认20）
+     * @return 分页的录像列表
+     */
+    @Operation(summary = "获取本地录像列表", description = "获取设备TF卡上的本地录像列表，支持按日期过滤和分页")
+    @GetMapping("/{id}/local-videos")
+    public ApiResponse<LocalVideoPageVO> listLocalVideos(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @Parameter(description = "设备ID") @PathVariable("id") String deviceId,
+            @Parameter(description = "日期过滤，格式：yyyy-MM-dd") @RequestParam(value = "date", required = false) String date,
+            @Parameter(description = "页码，从1开始") @RequestParam(value = "page", required = false, defaultValue = "1") int page,
+            @Parameter(description = "每页数量") @RequestParam(value = "page_size", required = false, defaultValue = "20") int pageSize) {
+        log.info("获取本地录像列表 - userId={}, deviceId={}, date={}, page={}, pageSize={}", 
+                currentUserId, deviceId, date, page, pageSize);
+        LocalVideoPageVO result = deviceService.listLocalVideos(currentUserId, deviceId, date, page, pageSize);
+        if (result == null) {
+            log.warn("获取本地录像列表失败，无权限 - userId={}, deviceId={}", currentUserId, deviceId);
+            return ApiResponse.error(HTTP_FORBIDDEN, MSG_NO_PERMISSION);
+        }
+        log.info("获取本地录像列表成功 - userId={}, deviceId={}, total={}", 
+                currentUserId, deviceId, result.getTotal());
+        return ApiResponse.success(result);
+    }
+
+    /**
+     * 云台PTZ控制
+     *
+     * @param currentUserId 当前登录用户ID
+     * @param deviceId      设备ID
+     * @param request       云台控制请求
+     * @return 空响应
+     */
+    @Operation(summary = "云台控制", description = "控制设备云台转动方向，支持上下左右及停止")
     @PostMapping("/{id}/ptz")
-    public ApiResponse<Void> ptzControl(@RequestAttribute("currentUserId") Long currentUserId,
-                                        @PathVariable("id") String deviceId,
-                                        @RequestBody Map<String, Object> body) {
-        if (!hasUserDevice(currentUserId, deviceId)) {
-            return ApiResponse.error(403, "无权操作该设备");
+    public ApiResponse<Void> ptzControl(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @Parameter(description = "设备ID") @PathVariable("id") String deviceId,
+            @Valid @RequestBody PtzControlRequest request) {
+        log.info("云台控制 - userId={}, deviceId={}, request={}", currentUserId, deviceId, request);
+        // 参数校验
+        if (!StringUtils.hasText(request.getDirection())) {
+            log.warn("云台控制失败，方向参数为空 - userId={}, deviceId={}", currentUserId, deviceId);
+            return ApiResponse.error(HTTP_BAD_REQUEST, MSG_DIRECTION_REQUIRED);
         }
-        Object dirObj = body.get("direction");
-        if (dirObj == null) {
-            return ApiResponse.error(400, "direction 不能为空");
-        }
-        String direction = dirObj.toString();
-        // 通过 MQTT 发送一个 DataChannel 控制指令（与 DataChannelController 使用同一 CODE 99 协议）
+
         try {
-            Map<String, Object> msg = new HashMap<>();
-            msg.put("code", 99);
-            msg.put("time", com.pura365.camera.util.TimeValidator.getCurrentTimestamp());
-            msg.put("command", direction);
-            mqttMessageService.sendToDevice(deviceId, msg, null);
+            Boolean result = deviceService.sendPtzCommand(currentUserId, deviceId, request);
+            if (result == null) {
+                log.warn("云台控制失败，无权限 - userId={}, deviceId={}", currentUserId, deviceId);
+                return ApiResponse.error(HTTP_FORBIDDEN, MSG_NO_PERMISSION);
+            }
+            log.info("云台控制成功 - userId={}, deviceId={}, direction={}", currentUserId, deviceId, request.getDirection());
             return ApiResponse.success(null);
         } catch (Exception e) {
-            return ApiResponse.error(500, "发送 PTZ 指令失败: " + e.getMessage());
-        }
-    }
-
-    // ===== 辅助方法 =====
-
-    private Map<String, Object> buildDeviceListItem(Long userId, Device device) {
-        Map<String, Object> m = new HashMap<>();
-        m.put("id", device.getId());
-        m.put("name", device.getName());
-        m.put("model", null); // 当前未有型号字段
-        m.put("status", device.getStatus() != null && device.getStatus() == 1 ? "online" : "offline");
-        // 云存状态
-        CloudSubscription sub = findActiveSubscription(userId, device.getId());
-        boolean hasCloud = sub != null && (sub.getExpireAt() == null || sub.getExpireAt().after(new Date()));
-        m.put("has_cloud_storage", hasCloud);
-        if (hasCloud && sub.getExpireAt() != null) {
-            m.put("cloud_expire_at", formatIsoTime(sub.getExpireAt()));
-        } else {
-            m.put("cloud_expire_at", null);
-        }
-        m.put("thumbnail_url", null); // 暂无缩略图字段
-        if (device.getLastOnlineTime() != null) {
-            m.put("last_online_at", device.getLastOnlineTime().toString());
-        } else {
-            m.put("last_online_at", null);
-        }
-        return m;
-    }
-
-    private Map<String, Object> buildDeviceDetail(Long userId, Device device) {
-        Map<String, Object> m = new HashMap<>();
-        m.put("id", device.getId());
-        m.put("name", device.getName());
-        m.put("model", null);
-        m.put("firmware_version", device.getFirmwareVersion());
-        m.put("status", device.getStatus() != null && device.getStatus() == 1 ? "online" : "offline");
-
-        CloudSubscription sub = findActiveSubscription(userId, device.getId());
-        boolean hasCloud = sub != null && (sub.getExpireAt() == null || sub.getExpireAt().after(new Date()));
-        m.put("has_cloud_storage", hasCloud);
-        if (hasCloud && sub.getExpireAt() != null) {
-            m.put("cloud_expire_at", formatIsoTime(sub.getExpireAt()));
-        } else {
-            m.put("cloud_expire_at", null);
-        }
-        m.put("thumbnail_url", null);
-        m.put("wifi_ssid", device.getSsid());
-        m.put("wifi_signal", null); // 目前未存RSSI，可后续接设备上报
-
-        Map<String, Object> sd = new HashMap<>();
-        sd.put("total", 0);
-        sd.put("used", 0);
-        sd.put("available", 0);
-        m.put("sd_card", sd);
-
-        DeviceSettings settings = getOrCreateSettings(device.getId());
-        Map<String, Object> set = new HashMap<>();
-        set.put("motion_detection", settings.getMotionDetection() != null && settings.getMotionDetection() == 1);
-        set.put("night_vision", settings.getNightVision() != null && settings.getNightVision() == 1);
-        set.put("audio_enabled", settings.getAudioEnabled() != null && settings.getAudioEnabled() == 1);
-        set.put("flip_image", settings.getFlipImage() != null && settings.getFlipImage() == 1);
-        set.put("sensitivity", settings.getSensitivity());
-        m.put("settings", set);
-
-        if (device.getLastOnlineTime() != null) {
-            m.put("last_online_at", device.getLastOnlineTime().toString());
-        } else {
-            m.put("last_online_at", null);
-        }
-        return m;
-    }
-
-    private CloudSubscription findActiveSubscription(Long userId, String deviceId) {
-        QueryWrapper<CloudSubscription> qw = new QueryWrapper<>();
-        qw.lambda().eq(CloudSubscription::getUserId, userId)
-                .eq(CloudSubscription::getDeviceId, deviceId)
-                .orderByDesc(CloudSubscription::getExpireAt)
-                .last("limit 1");
-        return cloudSubscriptionRepository.selectOne(qw);
-    }
-
-    private boolean hasUserDevice(Long userId, String deviceId) {
-        QueryWrapper<UserDevice> qw = new QueryWrapper<>();
-        qw.lambda().eq(UserDevice::getUserId, userId)
-                .eq(UserDevice::getDeviceId, deviceId);
-        Integer count = userDeviceRepository.selectCount(qw).intValue();
-        return count != null && count > 0;
-    }
-
-    private void bindUserDeviceOnce(Long userId, String deviceId) {
-        QueryWrapper<UserDevice> qw = new QueryWrapper<>();
-        qw.lambda().eq(UserDevice::getUserId, userId)
-                .eq(UserDevice::getDeviceId, deviceId);
-        if (userDeviceRepository.selectCount(qw) == 0) {
-            UserDevice ud = new UserDevice();
-            ud.setUserId(userId);
-            ud.setDeviceId(deviceId);
-            ud.setRole("owner");
-            userDeviceRepository.insert(ud);
-        }
-    }
-
-    private DeviceSettings getOrCreateSettings(String deviceId) {
-        QueryWrapper<DeviceSettings> qw = new QueryWrapper<>();
-        qw.lambda().eq(DeviceSettings::getDeviceId, deviceId).last("limit 1");
-        DeviceSettings settings = deviceSettingsRepository.selectOne(qw);
-        if (settings == null) {
-            settings = new DeviceSettings();
-            settings.setDeviceId(deviceId);
-            settings.setMotionDetection(0);
-            settings.setNightVision(0);
-            settings.setAudioEnabled(1);
-            settings.setFlipImage(0);
-            settings.setSensitivity("medium");
-        }
-        return settings;
-    }
-
-    private int boolToInt(Object value) {
-        if (value == null) return 0;
-        if (value instanceof Boolean) {
-            return (Boolean) value ? 1 : 0;
-        }
-        return Boolean.parseBoolean(value.toString()) ? 1 : 0;
-    }
-
-    private String formatIsoTime(Date date) {
-        if (date == null) return null;
-        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'");
-        sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
-        return sdf.format(date);
-    }
-
-    private void deviceBindingSafeInsert(DeviceBinding binding) {
-        try {
-            // 直接插入绑定记录（前端正常不会高频重复调用）
-            deviceBindingRepository.insert(binding);
-        } catch (Exception ignore) {
-            // 如果插入失败（例如唯一性冲突等），这里简单忽略，不影响主流程
+            log.error("发送PTZ指令失败 - userId={}, deviceId={}, direction={}", currentUserId, deviceId, request.getDirection(), e);
+            return ApiResponse.error(HTTP_INTERNAL_ERROR, "发送PTZ指令失败: " + e.getMessage());
         }
     }
 }

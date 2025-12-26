@@ -1,87 +1,45 @@
 package com.pura365.camera.domain;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
 
 import java.util.Date;
 
 /**
- * 用户 Token 信息，对应表 user_token
+ * 用户Token信息实体，对应表 user_token
  */
+@Data
 @TableName("user_token")
 public class UserToken {
 
+    /** 主键ID */
     @TableId(type = IdType.AUTO)
     private Long id;
 
+    /** 用户ID */
+    @TableField("user_id")
     private Long userId;
 
+    /** 访问Token */
+    @TableField("access_token")
     private String accessToken;
 
+    /** 刷新Token */
+    @TableField("refresh_token")
     private String refreshToken;
 
+    /** 过期时间 */
+    @TableField("expires_at")
     private Date expiresAt;
 
+    /** 创建时间 */
+    @TableField("created_at")
     private Date createdAt;
 
+    /** 更新时间 */
+    @TableField("updated_at")
     private Date updatedAt;
-
-    // getters and setters
-
-    public Long getId() {
-        return id;
-    }
-
-    public void setId(Long id) {
-        this.id = id;
-    }
-
-    public Long getUserId() {
-        return userId;
-    }
-
-    public void setUserId(Long userId) {
-        this.userId = userId;
-    }
-
-    public String getAccessToken() {
-        return accessToken;
-    }
-
-    public void setAccessToken(String accessToken) {
-        this.accessToken = accessToken;
-    }
-
-    public String getRefreshToken() {
-        return refreshToken;
-    }
-
-    public void setRefreshToken(String refreshToken) {
-        this.refreshToken = refreshToken;
-    }
-
-    public Date getExpiresAt() {
-        return expiresAt;
-    }
-
-    public void setExpiresAt(Date expiresAt) {
-        this.expiresAt = expiresAt;
-    }
-
-    public Date getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(Date createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public Date getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public void setUpdatedAt(Date updatedAt) {
-        this.updatedAt = updatedAt;
-    }
 }

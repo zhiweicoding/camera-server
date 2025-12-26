@@ -3,6 +3,7 @@ package com.pura365.camera.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.*;
 import com.pura365.camera.model.CreateBatchRequest;
+import com.pura365.camera.domain.Salesman;
 import com.pura365.camera.repository.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +35,20 @@ public class DeviceProductionService {
     @Autowired
     private ManufacturedDeviceRepository deviceRepository;
 
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private SysDictService sysDictService;
+
+    @Autowired
+    private SalesmanRepository salesmanRepository;
+
+    /**
+     * 默认密码哈希(与admin2一致)
+     */
+    private static final String DEFAULT_PASSWORD_HASH = "$2a$10$Pw.m19MeKdWZvC.r5MrdiebsKTLcf6WS9fuWwmfAxX1IugFu2k.pS";
+
     // ==================== 经销商/销售商管理 ====================
 
     /**
@@ -56,6 +71,7 @@ public class DeviceProductionService {
 
     /**
      * 根据ID获取经销商
+     *
      * @param id 经销商ID
      * @return 经销商实体
      */
@@ -65,6 +81,7 @@ public class DeviceProductionService {
 
     /**
      * 根据经销商代码获取经销商
+     *
      * @param vendorCode 经销商代码（2位）
      * @return 经销商实体
      */
@@ -76,9 +93,11 @@ public class DeviceProductionService {
 
     /**
      * 新增经销商
+     *
      * @param vendor 经销商信息
      * @return 新增后的经销商实体
      */
+    @Transactional
     public Vendor createVendor(Vendor vendor) {
         // 校验经销商代码
         if (vendor.getVendorCode() == null || vendor.getVendorCode().length() != 2) {
@@ -91,19 +110,41 @@ public class DeviceProductionService {
         if (getVendorByCode(vendor.getVendorCode()) != null) {
             throw new RuntimeException("经销商代码已存在");
         }
+        // 检查用户名是否已存在
+        QueryWrapper<User> userQw = new QueryWrapper<>();
+        userQw.lambda().eq(User::getUsername, vendor.getVendorCode());
+        if (userRepository.selectCount(userQw) > 0) {
+            throw new RuntimeException("该经销商代码对应的用户已存在");
+        }
         if (vendor.getStatus() == null) {
             vendor.setStatus(1); // 默认启用
         }
         vendorRepository.insert(vendor);
-        log.info("新增经销商: code={}, name={}", vendor.getVendorCode(), vendor.getVendorName());
+
+        // 同步创建user表记录
+        User user = new User();
+        user.setUid("vendor_" + System.currentTimeMillis());
+        user.setUsername(vendor.getVendorCode());
+        user.setPasswordHash(DEFAULT_PASSWORD_HASH);
+        user.setRole(2); // 经销商角色
+        user.setNickname(vendor.getVendorName());
+        user.setPhone(vendor.getContactPhone());
+        user.setEnabled(vendor.getStatus());
+        user.setCreatedAt(new Date());
+        user.setUpdatedAt(new Date());
+        userRepository.insert(user);
+
+        log.info("新增经销商: code={}, name={}, userId={}", vendor.getVendorCode(), vendor.getVendorName(), user.getId());
         return vendor;
     }
 
     /**
      * 更新经销商信息
+     *
      * @param vendor 经销商信息
      * @return 更新后的经销商实体
      */
+    @Transactional
     public Vendor updateVendor(Vendor vendor) {
         if (vendor.getId() == null) {
             throw new RuntimeException("经销商ID不能为空");
@@ -120,14 +161,39 @@ public class DeviceProductionService {
             }
         }
         vendorRepository.updateById(vendor);
+
+        // 同步更新user表记录
+        QueryWrapper<User> userQw = new QueryWrapper<>();
+        userQw.lambda().eq(User::getUsername, existing.getVendorCode());
+        User user = userRepository.selectOne(userQw);
+        if (user != null) {
+            // 如果vendorCode变了，更新username
+            if (vendor.getVendorCode() != null && !vendor.getVendorCode().equals(existing.getVendorCode())) {
+                user.setUsername(vendor.getVendorCode());
+            }
+            if (vendor.getVendorName() != null) {
+                user.setNickname(vendor.getVendorName());
+            }
+            if (vendor.getContactPhone() != null) {
+                user.setPhone(vendor.getContactPhone());
+            }
+            if (vendor.getStatus() != null) {
+                user.setEnabled(vendor.getStatus());
+            }
+            user.setUpdatedAt(new Date());
+            userRepository.updateById(user);
+        }
+
         log.info("更新经销商: id={}, code={}", vendor.getId(), vendor.getVendorCode());
         return vendorRepository.selectById(vendor.getId());
     }
 
     /**
      * 删除经销商（物理删除）
+     *
      * @param id 经销商ID
      */
+    @Transactional
     public void deleteVendor(Long id) {
         Vendor vendor = vendorRepository.selectById(id);
         if (vendor == null) {
@@ -139,15 +205,23 @@ public class DeviceProductionService {
         if (deviceRepository.selectCount(qw) > 0) {
             throw new RuntimeException("该经销商已有关联的生产设备，无法删除，请改为禁用");
         }
+
+        // 同步删除user表记录
+        QueryWrapper<User> userQw = new QueryWrapper<>();
+        userQw.lambda().eq(User::getUsername, vendor.getVendorCode());
+        userRepository.delete(userQw);
+
         vendorRepository.deleteById(id);
         log.info("删除经销商: id={}, code={}", id, vendor.getVendorCode());
     }
 
     /**
      * 启用/禁用经销商
-     * @param id 经销商ID
+     *
+     * @param id     经销商ID
      * @param status 状态：1-启用, 0-禁用
      */
+    @Transactional
     public void updateVendorStatus(Long id, Integer status) {
         Vendor vendor = vendorRepository.selectById(id);
         if (vendor == null) {
@@ -155,6 +229,17 @@ public class DeviceProductionService {
         }
         vendor.setStatus(status);
         vendorRepository.updateById(vendor);
+
+        // 同步更新user表状态
+        QueryWrapper<User> userQw = new QueryWrapper<>();
+        userQw.lambda().eq(User::getUsername, vendor.getVendorCode());
+        User user = userRepository.selectOne(userQw);
+        if (user != null) {
+            user.setEnabled(status);
+            user.setUpdatedAt(new Date());
+            userRepository.updateById(user);
+        }
+
         log.info("更新经销商状态: id={}, status={}", id, status);
     }
 
@@ -192,10 +277,80 @@ public class DeviceProductionService {
         return map;
     }
 
+
+    // ==================== 业务员分配 ====================
+
+    /**
+     * 分配业务员到设备
+     *
+     * @param deviceId   设备ID
+     * @param salesmanId 业务员ID
+     */
+    @Transactional
+    public void assignSalesman(String deviceId, Long salesmanId) {
+        ManufacturedDevice device = getDevice(deviceId);
+        if (device == null) {
+            throw new RuntimeException("设备不存在");
+        }
+        Salesman salesman = salesmanRepository.selectById(salesmanId);
+        if (salesman == null) {
+            throw new RuntimeException("业务员不存在");
+        }
+        // 校验业务员是否属于设备的经销商
+        if (!salesman.getVendorCode().equals(device.getVendorCode())) {
+            throw new RuntimeException("业务员不属于该设备的经销商");
+        }
+        device.setSalesmanId(salesmanId);
+        device.setUpdatedAt(new Date());
+        deviceRepository.updateById(device);
+        log.info("分配业务员: deviceId={}, salesmanId={}", deviceId, salesmanId);
+    }
+
+    /**
+     * 批量分配业务员到设备
+     *
+     * @param deviceIds  设备ID列表
+     * @param salesmanId 业务员ID
+     */
+    @Transactional
+    public void batchAssignSalesman(List<String> deviceIds, Long salesmanId) {
+        Salesman salesman = salesmanRepository.selectById(salesmanId);
+        if (salesman == null) {
+            throw new RuntimeException("业务员不存在");
+        }
+        for (String deviceId : deviceIds) {
+            ManufacturedDevice device = getDevice(deviceId);
+            if (device != null && salesman.getVendorCode().equals(device.getVendorCode())) {
+                device.setSalesmanId(salesmanId);
+                device.setUpdatedAt(new Date());
+                deviceRepository.updateById(device);
+            }
+        }
+        log.info("批量分配业务员: deviceCount={}, salesmanId={}", deviceIds.size(), salesmanId);
+    }
+
+    /**
+     * 移除设备的业务员分配
+     *
+     * @param deviceId 设备ID
+     */
+    @Transactional
+    public void removeSalesmanAssignment(String deviceId) {
+        ManufacturedDevice device = getDevice(deviceId);
+        if (device == null) {
+            throw new RuntimeException("设备不存在");
+        }
+        device.setSalesmanId(null);
+        device.setUpdatedAt(new Date());
+        deviceRepository.updateById(device);
+        log.info("移除业务员分配: deviceId={}", deviceId);
+    }
+
     // ==================== 生产批次管理 ====================
 
     /**
      * 创建生产批次并批量生成设备ID入库
+     *
      * @param request 创建批次请求参数
      * @return 创建的批次信息
      */
@@ -230,8 +385,8 @@ public class DeviceProductionService {
         String batchNo = generateBatchNo();
 
         // 计算起始序列号
-        int startSerial = request.getStartSerial() != null 
-                ? request.getStartSerial() 
+        int startSerial = request.getStartSerial() != null
+                ? request.getStartSerial()
                 : calculateNextStartSerial(networkLens, deviceForm, specialReq, assemblerCode, vendorCode, reserved);
         int endSerial = startSerial + quantity - 1;
 
@@ -254,10 +409,10 @@ public class DeviceProductionService {
 
         // 批量生成设备ID
         String prefix = batch.getDeviceIdPrefix();
-        generateDevices(batch.getId(), prefix, networkLens, deviceForm, specialReq, 
+        generateDevices(batch.getId(), prefix, networkLens, deviceForm, specialReq,
                 assemblerCode, vendorCode, startSerial, endSerial);
 
-        log.info("创建生产批次成功: batchNo={}, quantity={}, startSerial={}, endSerial={}", 
+        log.info("创建生产批次成功: batchNo={}, quantity={}, startSerial={}, endSerial={}",
                 batchNo, quantity, startSerial, endSerial);
         return batch;
     }
@@ -291,12 +446,17 @@ public class DeviceProductionService {
 
     /**
      * 批量生成设备记录
+     * 后8位使用随机字符（大小写字母+数字），确保唯一性
      */
     private void generateDevices(Long batchId, String prefix, String networkLens, String deviceForm,
-                                  String specialReq, String assemblerCode, String vendorCode,
-                                  int startSerial, int endSerial) {
-        for (int i = startSerial; i <= endSerial; i++) {
-            String serial8 = String.format("%08d", i);
+                                 String specialReq, String assemblerCode, String vendorCode,
+                                 int startSerial, int endSerial) {
+        int quantity = endSerial - startSerial + 1;
+        Set<String> generatedSerials = new HashSet<>();
+        
+        for (int i = 0; i < quantity; i++) {
+            String serial8 = generateUniqueSerial8(prefix, generatedSerials);
+            generatedSerials.add(serial8);
             String deviceId = prefix + serial8;
 
             ManufacturedDevice device = new ManufacturedDevice();
@@ -314,7 +474,32 @@ public class DeviceProductionService {
     }
 
     /**
+     * 生成唯一的8位随机序列号（大小写字母+数字）
+     * 确保在数据库和当前批次中都不重复
+     */
+    private String generateUniqueSerial8(String prefix, Set<String> currentBatchSerials) {
+        for (int attempt = 0; attempt < 100; attempt++) {
+            String serial8 = generateRandomString(8);
+            
+            // 检查当前批次是否已存在
+            if (currentBatchSerials.contains(serial8)) {
+                continue;
+            }
+            
+            // 检查数据库是否已存在该设备ID
+            String deviceId = prefix + serial8;
+            QueryWrapper<ManufacturedDevice> qw = new QueryWrapper<>();
+            qw.lambda().eq(ManufacturedDevice::getDeviceId, deviceId);
+            if (deviceRepository.selectCount(qw) == 0) {
+                return serial8;
+            }
+        }
+        throw new RuntimeException("无法生成唯一的设备序列号，请稍后重试");
+    }
+
+    /**
      * 根据批次号获取批次信息
+     *
      * @param batchNo 批次号
      * @return 批次实体
      */
@@ -326,6 +511,7 @@ public class DeviceProductionService {
 
     /**
      * 获取批次下的所有设备列表
+     *
      * @param batchNo 批次号
      * @return 设备列表
      */
@@ -344,6 +530,7 @@ public class DeviceProductionService {
 
     /**
      * 根据设备ID获取设备信息
+     *
      * @param deviceId 设备ID (16位)
      * @return 设备实体
      */
@@ -356,56 +543,84 @@ public class DeviceProductionService {
     /**
      * 分页查询设备列表
      */
-    public Map<String, Object> listDevices(Integer page, Integer size, String deviceId, String batchNo, String status) {
+    public Map<String, Object> listDevices(Integer page, Integer size, String deviceId, String batchNo, String status, String vendorCode) {
         QueryWrapper<ManufacturedDevice> qw = new QueryWrapper<>();
         if (deviceId != null && !deviceId.trim().isEmpty()) {
             qw.lambda().like(ManufacturedDevice::getDeviceId, deviceId);
         }
         if (batchNo != null && !batchNo.trim().isEmpty()) {
-            // 根据批次号查找批次ID
-            QueryWrapper<DeviceProductionBatch> batchQw = new QueryWrapper<>();
-            batchQw.lambda().eq(DeviceProductionBatch::getBatchNo, batchNo);
-            DeviceProductionBatch batch = batchRepository.selectOne(batchQw);
-            if (batch != null) {
-                qw.lambda().eq(ManufacturedDevice::getBatchId, batch.getId());
+            // 支持按批次ID(纯数字)或批次号(字符串)查询
+            Long batchId = null;
+            try {
+                batchId = Long.parseLong(batchNo.trim());
+            } catch (NumberFormatException ignored) {
+            }
+
+            if (batchId != null) {
+                // 按批次ID查询
+                qw.lambda().eq(ManufacturedDevice::getBatchId, batchId);
             } else {
-                // 批次不存在，返回空列表
-                Map<String, Object> result = new HashMap<>();
-                result.put("list", new ArrayList<>());
-                result.put("total", 0);
-                result.put("page", page);
-                result.put("size", size);
-                return result;
+                // 根据批次号查找批次ID
+                QueryWrapper<DeviceProductionBatch> batchQw = new QueryWrapper<>();
+                batchQw.lambda().eq(DeviceProductionBatch::getBatchNo, batchNo);
+                DeviceProductionBatch batch = batchRepository.selectOne(batchQw);
+                if (batch != null) {
+                    qw.lambda().eq(ManufacturedDevice::getBatchId, batch.getId());
+                } else {
+                    // 批次不存在，返回空列表
+                    Map<String, Object> result = new HashMap<>();
+                    result.put("list", new ArrayList<>());
+                    result.put("total", 0);
+                    result.put("page", page);
+                    result.put("size", size);
+                    return result;
+                }
             }
         }
         if (status != null && !status.trim().isEmpty()) {
             qw.lambda().eq(ManufacturedDevice::getStatus, status);
         }
+        if (vendorCode != null && !vendorCode.trim().isEmpty()) {
+            qw.lambda().eq(ManufacturedDevice::getVendorCode, vendorCode);
+        }
         qw.lambda().orderByDesc(ManufacturedDevice::getCreatedAt);
-        
+
         // 分页查询
         int offset = (page - 1) * size;
         qw.last("LIMIT " + offset + ", " + size);
         List<ManufacturedDevice> devices = deviceRepository.selectList(qw);
-        
+
         // 查询总数
         QueryWrapper<ManufacturedDevice> countQw = new QueryWrapper<>();
         if (deviceId != null && !deviceId.trim().isEmpty()) {
             countQw.lambda().like(ManufacturedDevice::getDeviceId, deviceId);
         }
         if (batchNo != null && !batchNo.trim().isEmpty()) {
-            QueryWrapper<DeviceProductionBatch> batchQw = new QueryWrapper<>();
-            batchQw.lambda().eq(DeviceProductionBatch::getBatchNo, batchNo);
-            DeviceProductionBatch batch = batchRepository.selectOne(batchQw);
-            if (batch != null) {
-                countQw.lambda().eq(ManufacturedDevice::getBatchId, batch.getId());
+            Long batchId = null;
+            try {
+                batchId = Long.parseLong(batchNo.trim());
+            } catch (NumberFormatException ignored) {
+            }
+
+            if (batchId != null) {
+                countQw.lambda().eq(ManufacturedDevice::getBatchId, batchId);
+            } else {
+                QueryWrapper<DeviceProductionBatch> batchQw = new QueryWrapper<>();
+                batchQw.lambda().eq(DeviceProductionBatch::getBatchNo, batchNo);
+                DeviceProductionBatch batch = batchRepository.selectOne(batchQw);
+                if (batch != null) {
+                    countQw.lambda().eq(ManufacturedDevice::getBatchId, batch.getId());
+                }
             }
         }
         if (status != null && !status.trim().isEmpty()) {
             countQw.lambda().eq(ManufacturedDevice::getStatus, status);
         }
+        if (vendorCode != null && !vendorCode.trim().isEmpty()) {
+            countQw.lambda().eq(ManufacturedDevice::getVendorCode, vendorCode);
+        }
         long total = deviceRepository.selectCount(countQw);
-        
+
         Map<String, Object> result = new HashMap<>();
         result.put("list", devices);
         result.put("total", total);
@@ -427,7 +642,7 @@ public class DeviceProductionService {
                 throw new RuntimeException("设备ID已存在: " + device.getDeviceId());
             }
         }
-        
+
         device.setCreatedAt(new Date());
         device.setUpdatedAt(new Date());
         if (device.getStatus() == null || device.getStatus().trim().isEmpty()) {
@@ -446,7 +661,7 @@ public class DeviceProductionService {
         if (existing == null) {
             throw new RuntimeException("设备不存在");
         }
-        
+
         device.setId(id);
         device.setUpdatedAt(new Date());
         // 不允许修改设备ID
@@ -494,16 +709,53 @@ public class DeviceProductionService {
     // ==================== 私有方法 ====================
 
     /**
+     * 随机字符池：大小写字母 + 数字0-9
+     */
+    private static final String RANDOM_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    private static final Random RANDOM = new Random();
+
+    /**
      * 生成批次号
-     * 格式: PB + yyyyMMdd + 3位序号
-     * 例如: PB20241205001
+     * 格式: PB + yyyyMMdd + 8位随机字符(大小写字母+数字0-9)
+     * 例如: PB20241205aB3xYz9K
      */
     private String generateBatchNo() {
         String date = new SimpleDateFormat("yyyyMMdd").format(new Date());
-        QueryWrapper<DeviceProductionBatch> qw = new QueryWrapper<>();
-        qw.lambda().likeRight(DeviceProductionBatch::getBatchNo, "PB" + date);
-        long count = batchRepository.selectCount(qw);
-        return String.format("PB%s%03d", date, count + 1);
+        String prefix = "PB" + date;
+
+        // 最多尝试10次生成唯一批次号
+        for (int attempt = 0; attempt < 10; attempt++) {
+            String randomSuffix = generateRandomString(8);
+            String batchNo = prefix + randomSuffix;
+
+            // 检查是否已存在
+            QueryWrapper<DeviceProductionBatch> qw = new QueryWrapper<>();
+            qw.lambda().eq(DeviceProductionBatch::getBatchNo, batchNo);
+            if (batchRepository.selectCount(qw) == 0) {
+                return batchNo;
+            }
+            log.warn("批次号冲突，重新生成: {}", batchNo);
+        }
+        throw new RuntimeException("无法生成唯一批次号，请稍后重试");
+    }
+
+    /**
+     * 生成指定长度的随机字符串（大小写字母+数字，字符不重复）
+     */
+    private String generateRandomString(int length) {
+        // 将字符池转为列表并打乱
+        List<Character> chars = new ArrayList<>();
+        for (char c : RANDOM_CHARS.toCharArray()) {
+            chars.add(c);
+        }
+        Collections.shuffle(chars, RANDOM);
+
+        // 取前length个字符
+        StringBuilder sb = new StringBuilder(length);
+        for (int i = 0; i < length; i++) {
+            sb.append(chars.get(i));
+        }
+        return sb.toString();
     }
 
     /**
@@ -511,7 +763,7 @@ public class DeviceProductionService {
      * 查找现有最大序列号 + 1
      */
     private int calculateNextStartSerial(String networkLens, String deviceForm, String specialReq,
-                                          String assemblerCode, String vendorCode, String reserved) {
+                                         String assemblerCode, String vendorCode, String reserved) {
         String prefix = networkLens + deviceForm + specialReq + assemblerCode + vendorCode + reserved;
         QueryWrapper<ManufacturedDevice> qw = new QueryWrapper<>();
         qw.lambda().likeRight(ManufacturedDevice::getDeviceId, prefix)

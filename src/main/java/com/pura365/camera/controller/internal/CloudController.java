@@ -1,6 +1,7 @@
 package com.pura365.camera.controller.internal;
 
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -8,16 +9,22 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pura365.camera.domain.CloudPlan;
 import com.pura365.camera.domain.CloudSubscription;
-import com.pura365.camera.domain.CloudVideo;
 import com.pura365.camera.domain.UserDevice;
 import com.pura365.camera.model.ApiResponse;
+import com.pura365.camera.model.cloud.*;
 import com.pura365.camera.repository.CloudPlanRepository;
 import com.pura365.camera.repository.CloudSubscriptionRepository;
 import com.pura365.camera.repository.CloudVideoRepository;
 import com.pura365.camera.repository.UserDeviceRepository;
+import com.pura365.camera.service.CloudStorageService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.InputStream;
 import java.math.BigDecimal;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -35,6 +42,8 @@ import java.util.*;
 @RequestMapping("/api/internal/cloud")
 public class CloudController {
 
+    private static final Logger log = LoggerFactory.getLogger(CloudController.class);
+
     @Autowired
     private CloudPlanRepository cloudPlanRepository;
 
@@ -46,47 +55,77 @@ public class CloudController {
 
     @Autowired
     private UserDeviceRepository userDeviceRepository;
+    
+    @Autowired
+    private com.pura365.camera.repository.DeviceRepository deviceRepository;
+    
+    @Autowired
+    private CloudStorageService cloudStorageService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
      * 获取云存储套餐列表 - GET /cloud/plans
      */
-    @Operation(summary = "获取云存储套餐列表", description = "列出所有可用的云存储套餐")
+    @Operation(summary = "获取云存储套餐列表", description = "列出所有可用的云存储套餐，按类型分组返回")
     @GetMapping("/plans")
-    public ApiResponse<List<Map<String, Object>>> getCloudPlans(@RequestAttribute("currentUserId") Long currentUserId) {
-        List<CloudPlan> plans = cloudPlanRepository.selectList(new QueryWrapper<>());
-        List<Map<String, Object>> list = new ArrayList<>();
+    public ApiResponse<CloudPlansResponse> getCloudPlans(@RequestAttribute("currentUserId") Long currentUserId) {
+        log.info("获取云存储套餐列表 - userId={}", currentUserId);
+        QueryWrapper<CloudPlan> qw = new QueryWrapper<>();
+        qw.orderByAsc("type", "sort_order");
+        List<CloudPlan> plans = cloudPlanRepository.selectList(qw);
+        
+        // 按类型分组
+        Map<String, List<CloudPlanVO>> groupedPlans = new LinkedHashMap<>();
+        groupedPlans.put("motion", new ArrayList<>());    // 动态录像
+        groupedPlans.put("fulltime", new ArrayList<>());  // 全天录像
+        groupedPlans.put("traffic", new ArrayList<>());   // 4G流量
+        
         if (plans != null) {
             for (CloudPlan plan : plans) {
-                Map<String, Object> item = new HashMap<>();
-                // 对外优先使用 planId，没有则退回自增 id
-                item.put("id", plan.getPlanId() != null ? plan.getPlanId() : String.valueOf(plan.getId()));
-                item.put("name", plan.getName());
-                item.put("description", plan.getDescription());
-                item.put("storage_days", plan.getStorageDays());
-                item.put("price", plan.getPrice());
-                item.put("original_price", plan.getOriginalPrice());
-                item.put("period", plan.getPeriod());
-                item.put("features", parseFeatures(plan.getFeatures()));
-                list.add(item);
+                CloudPlanVO item = new CloudPlanVO();
+                item.setId(plan.getPlanId() != null ? plan.getPlanId() : String.valueOf(plan.getId()));
+                item.setName(plan.getName());
+                item.setDescription(plan.getDescription());
+                item.setStorageDays(plan.getStorageDays());
+                item.setPrice(plan.getPrice());
+                item.setOriginalPrice(plan.getOriginalPrice());
+                item.setPeriod(plan.getPeriod());
+                item.setFeatures(parseFeatures(plan.getFeatures()));
+                item.setType(plan.getType());
+                item.setSortOrder(plan.getSortOrder());
+                
+                String type = plan.getType() != null ? plan.getType() : "motion";
+                if (groupedPlans.containsKey(type)) {
+                    groupedPlans.get(type).add(item);
+                } else {
+                    groupedPlans.get("motion").add(item);
+                }
             }
         }
-        return ApiResponse.success(list);
+        
+        CloudPlansResponse response = new CloudPlansResponse();
+        response.setMotion(groupedPlans.get("motion"));
+        response.setFulltime(groupedPlans.get("fulltime"));
+        response.setTraffic(groupedPlans.get("traffic"));
+        
+        return ApiResponse.success(response);
     }
 
     /**
      * 订阅云存储 - POST /cloud/subscribe
      * 这里只创建支付订单，不直接写入 CloudSubscription（支付成功后再写入）。
      */
-    @Operation(summary = "订阅云存储", description = "创建云存储套餐的支付订单")
+    @Operation(summary = "订阅云存储", description = "创建云存储套餐的支付订单，返回支付参数")
     @PostMapping("/subscribe")
-    public ApiResponse<Map<String, Object>> subscribe(@RequestAttribute("currentUserId") Long currentUserId,
-                                                      @RequestBody Map<String, String> body) {
-        String deviceId = body.get("device_id");
-        String planId = body.get("plan_id");
-        String paymentMethod = body.get("payment_method");
+    public ApiResponse<CloudSubscribeResponse> subscribe(@RequestAttribute("currentUserId") Long currentUserId,
+                                                         @RequestBody CloudSubscribeRequest request) {
+        log.info("订阅云存储 - userId={}, request={}", currentUserId, request);
+        String deviceId = request.getDeviceId();
+        String planId = request.getPlanId();
+        String paymentMethod = request.getPaymentMethod();
         if (deviceId == null || deviceId.isEmpty() || planId == null || planId.isEmpty()) {
+            log.warn("订阅云存储失败 - 参数为空, userId={}", currentUserId);
             return ApiResponse.error(400, "device_id 和 plan_id 不能为空");
         }
         if (paymentMethod == null || paymentMethod.isEmpty()) {
@@ -108,75 +147,104 @@ public class CloudController {
         }
 
         // 这里原项目中是通过 PaymentOrder 表统一处理支付，这里我们只返回一个模拟的订单信息
-        Map<String, Object> paymentInfo = new HashMap<>();
         String orderId = "order_" + System.currentTimeMillis();
-        paymentInfo.put("order_id", orderId);
-        paymentInfo.put("amount", amount);
-        paymentInfo.put("currency", "CNY");
-        paymentInfo.put("payment_method", paymentMethod);
+        
+        CloudSubscribeResponse response = new CloudSubscribeResponse();
+        response.setOrderId(orderId);
+        response.setAmount(amount);
+        response.setCurrency("CNY");
+        response.setPaymentMethod(paymentMethod);
 
         if ("wechat".equalsIgnoreCase(paymentMethod)) {
-            paymentInfo.put("prepay_id", "mock_prepay_" + orderId);
-            paymentInfo.put("sign", "mock_sign_" + orderId);
+            response.setPrepayId("mock_prepay_" + orderId);
+            response.setSign("mock_sign_" + orderId);
         }
 
-        return ApiResponse.success(paymentInfo);
+        return ApiResponse.success(response);
     }
 
     /**
      * 云存储视频列表 - GET /cloud/videos
+     * 直接从S3云存储查询视频文件列表
      */
     @Operation(summary = "云存储视频列表", description = "分页查询某设备的云存储视频")
     @GetMapping("/videos")
-    public ApiResponse<Map<String, Object>> listCloudVideos(@RequestAttribute("currentUserId") Long currentUserId,
-                                                            @RequestParam("device_id") String deviceId,
-                                                            @RequestParam(value = "date", required = false) String date,
-                                                            @RequestParam(value = "page", required = false, defaultValue = "1") int page,
-                                                            @RequestParam(value = "page_size", required = false, defaultValue = "20") int pageSize) {
+    public ApiResponse<CloudVideoListResponse> listCloudVideos(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @Parameter(description = "设备ID", required = true, example = "DEVICE123456")
+            @RequestParam("device_id") String deviceId,
+            @Parameter(description = "查询日期（格式: yyyy-MM-dd）", example = "2023-12-13")
+            @RequestParam(value = "date", required = false) String date,
+            @Parameter(description = "页码", example = "1")
+            @RequestParam(value = "page", required = false, defaultValue = "1") int page,
+            @Parameter(description = "每页数量", example = "20")
+            @RequestParam(value = "page_size", required = false, defaultValue = "20") int pageSize) {
+        log.info("云存储视频列表 - userId={}, deviceId={}, date={}, page={}, pageSize={}", 
+                currentUserId, deviceId, date, page, pageSize);
         if (deviceId == null || deviceId.isEmpty()) {
             return ApiResponse.error(400, "device_id 不能为空");
         }
         if (!hasUserDevice(currentUserId, deviceId)) {
+            log.warn("云存储视频列表 - 无权查看, userId={}, deviceId={}", currentUserId, deviceId);
             return ApiResponse.error(403, "无权查看该设备");
         }
         if (page < 1) page = 1;
         if (pageSize <= 0) pageSize = 20;
-        int offset = (page - 1) * pageSize;
 
-        QueryWrapper<CloudVideo> qw = new QueryWrapper<>();
-        qw.lambda().eq(CloudVideo::getDeviceId, deviceId);
-        if (date != null && !date.isEmpty()) {
-            qw.apply("DATE(created_at) = {0}", date);
-        }
-        qw.orderByDesc("created_at");
+        // 直接从云存储查询视频列表
+        List<Map<String, Object>> allObjects = cloudStorageService.listVideosFromCloud(deviceId, date);
 
-        int total = cloudVideoRepository.selectCount(qw).intValue();
-        List<CloudVideo> rows = cloudVideoRepository.selectList(qw.last("limit " + offset + "," + pageSize));
+        // 只保留文件名中带有 "M" 的视频文件，并为其匹配对应的 jpg 缩略图
+        List<Map<String, Object>> filteredVideos = filterVideosWithThumbnails(allObjects);
 
-        List<Map<String, Object>> list = new ArrayList<>();
-        if (rows != null) {
-            for (CloudVideo v : rows) {
-                Map<String, Object> item = new HashMap<>();
-                item.put("id", v.getVideoId());
-                item.put("device_id", v.getDeviceId());
-                item.put("type", v.getType());
-                item.put("title", v.getTitle());
-                item.put("thumbnail_url", v.getThumbnail());
-                item.put("video_url", v.getVideoUrl());
-                item.put("duration", v.getDuration());
-                if (v.getCreatedAt() != null) {
-                    item.put("created_at", formatIsoTime(v.getCreatedAt()));
+        // 手动分页
+        int total = filteredVideos.size();
+        int fromIndex = (page - 1) * pageSize;
+        int toIndex = Math.min(fromIndex + pageSize, total);
+
+        List<CloudVideoVO> videoList = new ArrayList<>();
+        if (fromIndex < total) {
+            List<Map<String, Object>> subList = filteredVideos.subList(fromIndex, toIndex);
+            for (Map<String, Object> video : subList) {
+                CloudVideoVO vo = new CloudVideoVO();
+
+                // video_id 兼容 old key "id"
+                Object videoIdObj = video.get("video_id");
+                if (videoIdObj == null) {
+                    videoIdObj = video.get("id");
                 }
-                list.add(item);
+                vo.setVideoId(videoIdObj != null ? String.valueOf(videoIdObj) : null);
+
+                vo.setDeviceId((String) video.get("device_id"));
+                vo.setType((String) video.get("type"));
+                vo.setTitle((String) video.get("title"));
+
+                Object thumbObj = video.get("thumbnail");
+                if (thumbObj == null) {
+                    thumbObj = video.get("thumbnail_url");
+                }
+                vo.setThumbnail(thumbObj != null ? String.valueOf(thumbObj) : null);
+
+                vo.setVideoUrl((String) video.get("video_url"));
+
+                Object durationObj = video.get("duration");
+                if (durationObj instanceof Number) {
+                    vo.setDuration(((Number) durationObj).intValue());
+                } else {
+                    vo.setDuration(null);
+                }
+
+                vo.setCreatedAt((String) video.get("created_at"));
+                videoList.add(vo);
             }
         }
 
-        Map<String, Object> data = new HashMap<>();
-        data.put("list", list);
-        data.put("total", total);
-        data.put("page", page);
-        data.put("page_size", pageSize);
-        return ApiResponse.success(data);
+        CloudVideoListResponse response = new CloudVideoListResponse();
+        response.setList(videoList);
+        response.setTotal(total);
+        response.setPage(page);
+        response.setPageSize(pageSize);
+        return ApiResponse.success(response);
     }
 
     /**
@@ -184,9 +252,13 @@ public class CloudController {
      */
     @Operation(summary = "获取云存订阅状态", description = "获取某设备当前云存储订阅信息")
     @GetMapping("/subscription/{deviceId}")
-    public ApiResponse<Map<String, Object>> getSubscription(@RequestAttribute("currentUserId") Long currentUserId,
-                                                            @PathVariable("deviceId") String deviceId) {
+    public ApiResponse<CloudSubscriptionVO> getSubscription(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @Parameter(description = "设备ID", required = true, example = "DEVICE123456")
+            @PathVariable("deviceId") String deviceId) {
+        log.info("获取云存订阅状态 - userId={}, deviceId={}", currentUserId, deviceId);
         if (!hasUserDevice(currentUserId, deviceId)) {
+            log.warn("获取云存订阅状态 - 无权查看, userId={}, deviceId={}", currentUserId, deviceId);
             return ApiResponse.error(403, "无权查看该设备");
         }
         QueryWrapper<CloudSubscription> qw = new QueryWrapper<>();
@@ -196,21 +268,131 @@ public class CloudController {
                 .last("limit 1");
         CloudSubscription sub = cloudSubscriptionRepository.selectOne(qw);
 
-        Map<String, Object> data = new HashMap<>();
+        CloudSubscriptionVO response = new CloudSubscriptionVO();
         boolean isSubscribed = sub != null && (sub.getExpireAt() == null || sub.getExpireAt().after(new Date()));
-        data.put("is_subscribed", isSubscribed);
+        response.setIsSubscribed(isSubscribed);
         if (isSubscribed && sub != null) {
-            data.put("plan_id", sub.getPlanId());
-            data.put("plan_name", sub.getPlanName());
-            data.put("expire_at", sub.getExpireAt() != null ? formatIsoTime(sub.getExpireAt()) : null);
-            data.put("auto_renew", sub.getAutoRenew() != null && sub.getAutoRenew() == 1);
+            response.setPlanId(sub.getPlanId());
+            response.setPlanName(sub.getPlanName());
+            response.setExpireAt(sub.getExpireAt() != null ? formatIsoTime(sub.getExpireAt()) : null);
+            response.setAutoRenew(sub.getAutoRenew() != null && sub.getAutoRenew() == 1);
         } else {
-            data.put("plan_id", null);
-            data.put("plan_name", null);
-            data.put("expire_at", null);
-            data.put("auto_renew", false);
+            response.setPlanId(null);
+            response.setPlanName(null);
+            response.setExpireAt(null);
+            response.setAutoRenew(false);
         }
-        return ApiResponse.success(data);
+        return ApiResponse.success(response);
+    }
+    
+    /**
+     * 手动上传视频文件到云存储（用于测试）
+     * - 用 S3 兼容方式直接 PUT 到七牛云 / Vultr
+     * - 使用的 endpoint/region/AK/SK 与下发给摄像头的配置保持一致（不在响应里返回密钥）
+     */
+    @Operation(summary = "手动上传视频文件到云存储", description = "用于联调：通过 S3 兼容接口把文件上传到云存储。bucket/key 可选，不传则使用默认 bucket 并自动生成 key。")
+    @PostMapping(value = "/upload-test", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<ManualUploadResponse> uploadTest(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @RequestParam("device_id") String deviceId,
+            @RequestPart("file") MultipartFile file,
+            @RequestParam(value = "bucket", required = false) String bucket,
+            @RequestParam(value = "key", required = false) String key,
+            @RequestParam(value = "content_type", required = false) String contentType
+    ) {
+        log.info("上传测试文件 - userId={}, deviceId={}, fileName={}", 
+                currentUserId, deviceId, file != null ? file.getOriginalFilename() : null);
+        if (deviceId == null || deviceId.isEmpty()) {
+            return ApiResponse.error(400, "device_id 不能为空");
+        }
+        if (file == null || file.isEmpty()) {
+            return ApiResponse.error(400, "file 不能为空");
+        }
+        // 校验设备归属
+        if (!hasUserDevice(currentUserId, deviceId)) {
+            return ApiResponse.error(403, "无权操作该设备");
+        }
+
+        String ct = (contentType != null && !contentType.trim().isEmpty()) ? contentType.trim() : file.getContentType();
+
+        try (InputStream in = file.getInputStream()) {
+            ManualUploadResponse resp = cloudStorageService.uploadObjectForTest(
+                deviceId,
+                bucket,
+                key,
+                file.getOriginalFilename(),
+                ct,
+                file.getSize(),
+                in
+            );
+
+            if (resp == null) {
+                return ApiResponse.error(404, "设备不存在");
+            }
+            if (resp.getUploaded() != null && resp.getUploaded()) {
+                return ApiResponse.success(resp);
+            }
+            return ApiResponse.error(500, "上传失败");
+        } catch (Exception e) {
+            return ApiResponse.error(500, "上传异常: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 领取免费7天云存储 - POST /cloud/claim-free
+     */
+    @Operation(summary = "领取免费7天云存储", description = "用户首次领取7天免费云存储，每台设备只能领取一次")
+    @PostMapping("/claim-free")
+    public ApiResponse<ClaimFreeCloudResponse> claimFreeTrial(@RequestAttribute("currentUserId") Long currentUserId,
+                                                              @RequestBody ClaimFreeCloudRequest request) {
+        log.info("领取免费云存储 - userId={}, deviceId={}", currentUserId, request.getDeviceId());
+        String deviceId = request.getDeviceId();
+        
+        if (deviceId == null || deviceId.isEmpty()) {
+            return ApiResponse.error(400, "device_id不能为空");
+        }
+        
+        // 验证设备归属
+        if (!hasUserDevice(currentUserId, deviceId)) {
+            return ApiResponse.error(403, "无权操作该设备");
+        }
+        
+        // 检查设备是否已领取
+        com.pura365.camera.domain.Device device = deviceRepository.selectById(deviceId);
+        if (device == null) {
+            return ApiResponse.error(404, "设备不存在");
+        }
+        
+        if (device.getFreeCloudClaimed() != null && device.getFreeCloudClaimed() == 1) {
+            return ApiResponse.error(400, "该设备已领取过免费云存储");
+        }
+        
+        // 创建7天免费订阅
+        CloudSubscription subscription = new CloudSubscription();
+        subscription.setUserId(currentUserId);
+        subscription.setDeviceId(deviceId);
+        subscription.setPlanId("free-trial-7d");
+        subscription.setPlanName("7天免费试用");
+        
+        // 设置7天后过期
+        Calendar calendar = Calendar.getInstance();
+        calendar.add(Calendar.DAY_OF_MONTH, 7);
+        subscription.setExpireAt(calendar.getTime());
+        subscription.setAutoRenew(0);
+        subscription.setCreatedAt(new Date());
+        subscription.setUpdatedAt(new Date());
+        
+        cloudSubscriptionRepository.insert(subscription);
+        
+        // 标记设备已领取
+        device.setFreeCloudClaimed(1);
+        deviceRepository.updateById(device);
+        
+        ClaimFreeCloudResponse response = new ClaimFreeCloudResponse();
+        response.setClaimed(true);
+        response.setExpireAt(formatIsoTime(subscription.getExpireAt()));
+        
+        return ApiResponse.success(response);
     }
 
     // ===== 私有辅助方法 =====
@@ -227,6 +409,83 @@ public class CloudController {
             }
         }
         return plan;
+    }
+
+    /**
+     * 过滤出文件名带 "M" 的视频，并根据规则绑定对应的 jpg 缩略图。
+     *
+     * 约定：
+     *   - 视频文件：095337M0021.mp4、095358M0021.mp4（格式：6位数字+M+4位数字.mp4）
+     *   - 对应缩略图：095337.jpg、095358.jpg（M前面的部分）
+     */
+    private List<Map<String, Object>> filterVideosWithThumbnails(List<Map<String, Object>> allObjects) {
+        if (allObjects == null || allObjects.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        // 第一步：收集所有 jpg 缩略图 -> Map<文件名(不带扩展名), URL>
+        // 例如："095337.jpg" -> jpgUrlMap.put("095337", "https://...")
+        Map<String, String> jpgUrlMap = new HashMap<>();
+        for (Map<String, Object> obj : allObjects) {
+            Object fileNameObj = obj.get("file_name");
+            if (!(fileNameObj instanceof String)) {
+                continue;
+            }
+            String fileName = (String) fileNameObj;
+            String lower = fileName.toLowerCase(Locale.ROOT);
+            
+            if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+                // 095337.jpg -> 去掉 .jpg 后 -> "095337"
+                int dot = fileName.lastIndexOf('.');
+                String baseName = (dot > 0) ? fileName.substring(0, dot) : fileName;
+                
+                // 取URL，优先用 video_url（CloudStorageService 把 URL 放在这里）
+                Object urlObj = obj.get("video_url");
+                if (urlObj != null) {
+                    jpgUrlMap.put(baseName, String.valueOf(urlObj));
+                }
+            }
+        }
+
+        // 第二步：过滤出文件名带M的视频，并给它匹配jpg
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Map<String, Object> obj : allObjects) {
+            Object fileNameObj = obj.get("file_name");
+            if (!(fileNameObj instanceof String)) {
+                continue;
+            }
+            String fileName = (String) fileNameObj;
+            String lower = fileName.toLowerCase(Locale.ROOT);
+
+            // 必须是视频文件
+            if (!(lower.endsWith(".mp4") || lower.endsWith(".h264") || lower.endsWith(".avi")
+                    || lower.endsWith(".mkv") || lower.endsWith(".mov") || lower.endsWith(".ts"))) {
+                continue;
+            }
+
+            // 必须包含M
+            int mIndex = fileName.indexOf('M');
+            if (mIndex <= 0) {
+                continue;
+            }
+
+            // 取M之前的部分作为缩略图的基名
+            // 例：095337M0021.mp4 -> "095337"
+            String jpgBaseName = fileName.substring(0, mIndex);
+            String thumbnailUrl = jpgUrlMap.get(jpgBaseName);
+
+            // 拷贝原数据
+            Map<String, Object> copy = new HashMap<>(obj);
+            if (thumbnailUrl != null) {
+                copy.put("thumbnail", thumbnailUrl);
+            } else {
+                copy.put("thumbnail", null);
+            }
+
+            result.add(copy);
+        }
+
+        return result;
     }
 
     private boolean hasUserDevice(Long userId, String deviceId) {

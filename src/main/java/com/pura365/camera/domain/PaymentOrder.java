@@ -1,153 +1,106 @@
 package com.pura365.camera.domain;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
 
 import java.math.BigDecimal;
 import java.util.Date;
 
+/**
+ * 支付订单实体，对应表 payment_order
+ */
+@Data
 @TableName("payment_order")
 public class PaymentOrder {
 
+    /** 主键ID */
     @TableId(type = IdType.AUTO)
     private Long id;
 
+    /** 订单ID */
+    @TableField("order_id")
     private String orderId;
 
+    /** 用户ID */
+    @TableField("user_id")
     private Long userId;
 
+    /** 设备ID */
+    @TableField("device_id")
     private String deviceId;
 
+    /** 经销商代码 */
+    @TableField("vendor_code")
+    private String vendorCode;
+
+    /** 业务员ID */
+    @TableField("salesman_id")
+    private Long salesmanId;
+
+    /** 业务员姓名(快照) */
+    @TableField("salesman_name")
+    private String salesmanName;
+
+    /** 佣金比例(快照) */
+    @TableField("commission_rate")
+    private BigDecimal commissionRate;
+
+    /** 业务员应得金额 */
+    @TableField("salesman_amount")
+    private BigDecimal salesmanAmount;
+
+    /** 经销商应得金额 */
+    @TableField("vendor_amount")
+    private BigDecimal vendorAmount;
+
+    /** 产品类型 */
+    @TableField("product_type")
     private String productType;
 
+    /** 产品ID */
+    @TableField("product_id")
     private String productId;
 
+    /** 订单金额 */
+    @TableField("amount")
     private BigDecimal amount;
 
+    /** 货币类型 */
+    @TableField("currency")
     private String currency;
 
+    /** 订单状态 */
+    @TableField("status")
     private String status;
 
+    /** 支付方式 */
+    @TableField("payment_method")
     private String paymentMethod;
 
+    /** 第三方订单ID */
+    @TableField("third_order_id")
     private String thirdOrderId;
 
+    /** 创建时间 */
+    @TableField("created_at")
     private Date createdAt;
 
+    /** 支付时间 */
+    @TableField("paid_at")
     private Date paidAt;
 
+    /** 更新时间 */
+    @TableField("updated_at")
     private Date updatedAt;
 
-    public Long getId() {
-        return id;
-    }
+    /** 退款时间 */
+    @TableField("refund_at")
+    private Date refundAt;
 
-    public void setId(Long id) {
-        this.id = id;
-    }
-
-    public String getOrderId() {
-        return orderId;
-    }
-
-    public void setOrderId(String orderId) {
-        this.orderId = orderId;
-    }
-
-    public Long getUserId() {
-        return userId;
-    }
-
-    public void setUserId(Long userId) {
-        this.userId = userId;
-    }
-
-    public String getDeviceId() {
-        return deviceId;
-    }
-
-    public void setDeviceId(String deviceId) {
-        this.deviceId = deviceId;
-    }
-
-    public String getProductType() {
-        return productType;
-    }
-
-    public void setProductType(String productType) {
-        this.productType = productType;
-    }
-
-    public String getProductId() {
-        return productId;
-    }
-
-    public void setProductId(String productId) {
-        this.productId = productId;
-    }
-
-    public BigDecimal getAmount() {
-        return amount;
-    }
-
-    public void setAmount(BigDecimal amount) {
-        this.amount = amount;
-    }
-
-    public String getCurrency() {
-        return currency;
-    }
-
-    public void setCurrency(String currency) {
-        this.currency = currency;
-    }
-
-    public String getStatus() {
-        return status;
-    }
-
-    public void setStatus(String status) {
-        this.status = status;
-    }
-
-    public String getPaymentMethod() {
-        return paymentMethod;
-    }
-
-    public void setPaymentMethod(String paymentMethod) {
-        this.paymentMethod = paymentMethod;
-    }
-
-    public String getThirdOrderId() {
-        return thirdOrderId;
-    }
-
-    public void setThirdOrderId(String thirdOrderId) {
-        this.thirdOrderId = thirdOrderId;
-    }
-
-    public Date getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(Date createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public Date getPaidAt() {
-        return paidAt;
-    }
-
-    public void setPaidAt(Date paidAt) {
-        this.paidAt = paidAt;
-    }
-
-    public Date getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public void setUpdatedAt(Date updatedAt) {
-        this.updatedAt = updatedAt;
-    }
+    /** 退款原因 */
+    @TableField("refund_reason")
+    private String refundReason;
 }

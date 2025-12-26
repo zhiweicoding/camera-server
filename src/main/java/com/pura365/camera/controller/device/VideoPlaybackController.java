@@ -7,6 +7,8 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.*;
 import com.pura365.camera.model.ApiResponse;
 import com.pura365.camera.repository.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -23,6 +25,8 @@ import java.util.*;
 @RestController
 @RequestMapping("/api/device/videos")
 public class VideoPlaybackController {
+
+    private static final Logger log = LoggerFactory.getLogger(VideoPlaybackController.class);
 
     @Autowired
     private LocalVideoRepository localVideoRepository;
@@ -46,10 +50,12 @@ public class VideoPlaybackController {
     @GetMapping("/{id}/playback")
     public ApiResponse<Map<String, Object>> getPlayback(@RequestAttribute("currentUserId") Long currentUserId,
                                                         @PathVariable("id") String videoId) {
+        log.info("获取回放视频 - userId={}, videoId={}", currentUserId, videoId);
         // 1. 先查本地录像
         LocalVideo local = findLocalVideo(videoId);
         if (local != null) {
             if (!hasUserDevice(currentUserId, local.getDeviceId())) {
+                log.warn("获取回放视频失败 - 无权限, userId={}, videoId={}", currentUserId, videoId);
                 return ApiResponse.error(403, "无权访问该视频");
             }
             Map<String, Object> data = new HashMap<>();
@@ -96,6 +102,7 @@ public class VideoPlaybackController {
             return ApiResponse.success(data);
         }
 
+        log.warn("获取回放视频失败 - 视频不存在, userId={}, videoId={}", currentUserId, videoId);
         return ApiResponse.error(404, "视频不存在");
     }
 
