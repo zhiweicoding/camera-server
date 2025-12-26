@@ -264,7 +264,6 @@ CREATE TABLE IF NOT EXISTS `manufactured_device` (
     `special_req` VARCHAR(4) COMMENT '特殊要求',
     `assembler_code` VARCHAR(8) COMMENT '装机商代码',
     `vendor_code` VARCHAR(8) COMMENT '销售商代码',
-    `salesman_id` BIGINT COMMENT '业务员ID',
     `serial_no` VARCHAR(16) COMMENT '序列号(第9-16位)',
     `mac_address` VARCHAR(32) COMMENT 'MAC地址',
     `status` VARCHAR(20) DEFAULT 'manufactured' COMMENT '状态: manufactured/activated/bound',
@@ -277,51 +276,6 @@ CREATE TABLE IF NOT EXISTS `manufactured_device` (
     INDEX `idx_manufactured_batch` (`batch_id`),
     INDEX `idx_manufactured_mac` (`mac_address`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='生产设备表';
-
-CREATE TABLE IF NOT EXISTS `sys_dict` (
-    `id` BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
-    `category` VARCHAR(50) NOT NULL COMMENT '分类: network_lens/device_form/special_req/reserved/assembler_code',
-    `code` VARCHAR(20) NOT NULL COMMENT '字典代码',
-    `name` VARCHAR(100) NOT NULL COMMENT '显示名称',
-    `sort_order` INT DEFAULT 0 COMMENT '排序',
-    `status` TINYINT DEFAULT 1 COMMENT '状态: 0-禁用 1-启用',
-    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-    
-    UNIQUE KEY `uk_category_code` (`category`, `code`),
-    INDEX `idx_dict_category` (`category`),
-    INDEX `idx_dict_status` (`status`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统字典表';
-
--- 网络+镜头配置
-INSERT INTO `sys_dict` (`category`, `code`, `name`, `sort_order`) VALUES
-('network_lens', 'A1', 'WiFi + 2.8mm', 1),
-('network_lens', 'A2', 'WiFi + 3.6mm', 2),
-('network_lens', 'A3', 'WiFi + 4mm', 3),
-('network_lens', 'B1', '4G + 2.8mm', 4),
-('network_lens', 'B2', '4G + 3.6mm', 5),
-('network_lens', 'B3', '4G + 4mm', 6);
-
--- 设备形态
-INSERT INTO `sys_dict` (`category`, `code`, `name`, `sort_order`) VALUES
-('device_form', '1', '枪机', 1),
-('device_form', '2', '球机', 2),
-('device_form', '3', '半球', 3);
-
--- 特殊要求
-INSERT INTO `sys_dict` (`category`, `code`, `name`, `sort_order`) VALUES
-('special_req', '0', '无', 1),
-('special_req', '1', '防水', 2),
-('special_req', '2', '防爆', 3);
-
--- 预留位
-INSERT INTO `sys_dict` (`category`, `code`, `name`, `sort_order`) VALUES
-('reserved', '0', '默认', 1);
-
--- 装机商代码
-INSERT INTO `sys_dict` (`category`, `code`, `name`, `sort_order`) VALUES
-('assembler_code', '1', '装机商A', 1),
-('assembler_code', '2', '装机商B', 2);
 
 -- ===================================
 -- 10. 云存储与录像相关表
@@ -336,36 +290,9 @@ CREATE TABLE IF NOT EXISTS `cloud_plan` (
     `original_price` DECIMAL(10,2) COMMENT '原价',
     `period` VARCHAR(20) COMMENT '计费周期',
     `features` TEXT COMMENT '特性',
-    `type` VARCHAR(20) DEFAULT 'motion' COMMENT '套餐类型: motion-动态录像, fulltime-全天录像, traffic-4G流量',
-    `sort_order` INT DEFAULT 0 COMMENT '排序序号',
     
-    UNIQUE KEY `uk_cloud_plan_id` (`plan_id`),
-    INDEX `idx_cloud_plan_type` (`type`)
+    UNIQUE KEY `uk_cloud_plan_id` (`plan_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='云存储套餐表';
-
--- 动态录像套餐
-INSERT INTO `cloud_plan` (`plan_id`, `name`, `description`, `storage_days`, `price`, `original_price`, `period`, `features`, `type`, `sort_order`) VALUES
-('motion-year-7d', '年卡【7天循环】', '所有数据，循环存储7天', 7, 98.00, 198.00, 'year', '["动态录像", "7天循环存储", "年卡套餐"]', 'motion', 1),
-('motion-quarter-7d', '三个月【7天循环】', '所有数据，循环存储7天', 7, 98.00, 198.00, 'quarter', '["动态录像", "7天循环存储", "季度套餐"]', 'motion', 2),
-('motion-month-7d', '一个月【7天循环】', '所有数据，循环存储7天', 7, 98.00, 198.00, 'month', '["动态录像", "7天循环存储", "月卡套餐"]', 'motion', 3),
-('motion-year-30d', '年卡【30天循环】', '所有数据，循环存储7天', 30, 98.00, 198.00, 'year', '["动态录像", "30天循环存储", "年卡套餐"]', 'motion', 4),
-('motion-quarter-30d', '三个月【30天循环】', '所有数据，循环存储7天', 30, 98.00, 198.00, 'quarter', '["动态录像", "30天循环存储", "季度套餐"]', 'motion', 5),
-('motion-month-30d', '一个月【30天循环】', '所有数据，循环存储7天', 30, 98.00, 198.00, 'month', '["动态录像", "30天循环存储", "月卡套餐"]', 'motion', 6);
-
--- 全天录像套餐
-INSERT INTO `cloud_plan` (`plan_id`, `name`, `description`, `storage_days`, `price`, `original_price`, `period`, `features`, `type`, `sort_order`) VALUES
-('fulltime-year-7d', '年卡【7天循环】', '所有数据，循环存储7天', 7, 98.00, 198.00, 'year', '["全天录像", "7天循环存储", "年卡套餐"]', 'fulltime', 1),
-('fulltime-quarter-7d', '三个月【7天循环】', '所有数据，循环存储7天', 7, 98.00, 198.00, 'quarter', '["全天录像", "7天循环存储", "季度套餐"]', 'fulltime', 2),
-('fulltime-month-7d', '一个月【7天循环】', '所有数据，循环存储7天', 7, 98.00, 198.00, 'month', '["全天录像", "7天循环存储", "月卡套餐"]', 'fulltime', 3),
-('fulltime-year-30d', '年卡【30天循环】', '所有数据，循环存储7天', 30, 98.00, 198.00, 'year', '["全天录像", "30天循环存储", "年卡套餐"]', 'fulltime', 4),
-('fulltime-quarter-30d', '三个月【30天循环】', '所有数据，循环存储7天', 30, 98.00, 198.00, 'quarter', '["全天录像", "30天循环存储", "季度套餐"]', 'fulltime', 5),
-('fulltime-month-30d', '一个月【30天循环】', '所有数据，循环存储7天', 30, 98.00, 198.00, 'month', '["全天录像", "30天循环存储", "月卡套餐"]', 'fulltime', 6);
-
--- 4G流量套餐
-INSERT INTO `cloud_plan` (`plan_id`, `name`, `description`, `storage_days`, `price`, `original_price`, `period`, `features`, `type`, `sort_order`) VALUES
-('traffic-70g', '70G流量 包月', '所有数据，循环存储7天', NULL, 39.00, 198.00, 'month', '["70G流量", "包月套餐"]', 'traffic', 1),
-('traffic-120g', '120G流量 包月', '所有数据，循环存储7天', NULL, 98.00, 198.00, 'month', '["120G流量", "包月套餐"]', 'traffic', 2),
-('traffic-200g', '200G流量 包月', '所有数据，循环存储7天', NULL, 198.00, 198.00, 'month', '["200G流量", "包月套餐"]', 'traffic', 3);
 
 CREATE TABLE IF NOT EXISTS `cloud_subscription` (
     `id` BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
@@ -566,3 +493,30 @@ CREATE TABLE IF NOT EXISTS `user_token` (
     INDEX `idx_user_token_user` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户Token表';
 
+ALTER TABLE `user`
+    ADD COLUMN `uid` VARCHAR(50) COMMENT '业务用户ID' AFTER `id`,
+    ADD COLUMN `nickname` VARCHAR(100) COMMENT '昵称' AFTER `role`,
+    ADD COLUMN `avatar` VARCHAR(255) COMMENT '头像URL' AFTER `nickname`,
+    CHANGE COLUMN `password` `password_hash` VARCHAR(100) COMMENT '密码（BCrypt加密）',
+    MODIFY COLUMN `username` VARCHAR(50) NULL COMMENT '用户名';
+
+-- ===================================
+-- 插入测试数据（可选）
+-- ===================================
+
+-- 测试设备
+INSERT INTO `device` (`id`, `mac`, `ssid`, `region`, `name`, `enabled`) VALUES
+('test001', '00:11:22:33:44:55', 'AOCCX', 'cn', '测试摄像头1', 1),
+('test002', 'AA:BB:CC:DD:EE:FF', 'TestWiFi', 'cn', '测试摄像头2', 1)
+ON DUPLICATE KEY UPDATE `updated_at` = CURRENT_TIMESTAMP;
+
+-- 测试用户
+INSERT INTO `user` (`username`, `password`, `email`, `role`) VALUES
+('admin', '$2a$10$example_hashed_password', 'admin@example.com', 3),
+('testuser', '$2a$10$example_hashed_password', 'test@example.com', 1)
+ON DUPLICATE KEY UPDATE `updated_at` = CURRENT_TIMESTAMP;
+
+
+INSERT INTO `user` (`uid`, `username`, `password_hash`, `email`, `role`, `nickname`) VALUES
+    ('user_admin', 'admin', '$2a$10$N9qo8uLOickgx2ZMRZoMy.MqrqZv0dXvqKQHQxJqK7KDQX0vXoHKi', 'admin@example.com', 3, '管理员')
+ON DUPLICATE KEY UPDATE `password_hash` = '$2a$10$N9qo8uLOickgx2ZMRZoMy.MqrqZv0dXvqKQHQxJqK7KDQX0vXoHKi';
