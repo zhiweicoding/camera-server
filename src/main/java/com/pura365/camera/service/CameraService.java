@@ -56,10 +56,12 @@ public class CameraService {
                 device.setId(info.getId());
                 device.setMac(info.getMac() != null ? info.getMac() : "UNKNOWN");
                 device.setRegion(info.getRegion());
-                device.setStatus(0); // 默认离线，等待 MQTT 连接后更新为在线
+                device.setStatus(1); // 默认离线，等待 MQTT 连接后更新为在线
                 device.setEnabled(1);
                 device.setCreatedAt(LocalDateTime.now());
                 device.setUpdatedAt(LocalDateTime.now());
+                device.setLastOnlineTime(LocalDateTime.now());
+                device.setLastHeartbeatTime(LocalDateTime.now());
                 deviceRepository.insert(device);
                 log.info("新设备入库成功 - ID: {}, MAC: {}", info.getId(), info.getMac());
             } else {
@@ -73,6 +75,10 @@ public class CameraService {
                     device.setRegion(info.getRegion());
                     needUpdate = true;
                 }
+                device.setStatus(1);
+                device.setUpdatedAt(LocalDateTime.now());
+                device.setLastOnlineTime(LocalDateTime.now());
+                device.setLastHeartbeatTime(LocalDateTime.now());
                 if (needUpdate) {
                     device.setUpdatedAt(LocalDateTime.now());
                     deviceRepository.updateById(device);

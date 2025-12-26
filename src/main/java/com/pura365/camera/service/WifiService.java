@@ -141,15 +141,17 @@ public class WifiService {
 
     private Device createOrUpdateDevice(String deviceSn, BindDeviceRequest request) {
         Device device = deviceRepository.selectById(deviceSn);
-        
+        LocalDateTime now = LocalDateTime.now();
         if (device == null) {
             log.info("设备不存在，创建新设备, deviceSn={}", deviceSn);
             device = new Device();
             device.setId(deviceSn);
             device.setName(request.getDeviceName());
             device.setSsid(request.getWifiSsid());
-            device.setStatus(0);  // 新设备初始为离线，等待MQTT连接后更新为在线
+            device.setStatus(1);  // 新设备初始为离线，等待MQTT连接后更新为在线
             device.setEnabled(1);
+            device.setLastOnlineTime(now);
+            device.setLastHeartbeatTime(now);
             device.setCreatedAt(LocalDateTime.now());
             device.setUpdatedAt(LocalDateTime.now());
             deviceRepository.insert(device);
@@ -166,7 +168,10 @@ public class WifiService {
                 device.setSsid(request.getWifiSsid());
                 needUpdate = true;
             }
-            
+            device.setLastOnlineTime(now);
+            device.setLastHeartbeatTime(now);
+            device.setStatus(1);  // 新设备初始为离线，等待MQTT连接后更新为在线
+            device.setEnabled(1);
             if (needUpdate) {
                 device.setUpdatedAt(LocalDateTime.now());
                 deviceRepository.updateById(device);
