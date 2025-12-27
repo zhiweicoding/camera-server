@@ -90,6 +90,11 @@ public class DeviceListItemVO {
     @JsonProperty("network_type")
     private String networkType;
 
-
+    /**
+     * 上一次预览画面URL
+     */
+    @Schema(description = "上一次预览画面URL")
+    @JsonProperty("last_preview_url")
+    private String lastPreviewUrl;
 
 }

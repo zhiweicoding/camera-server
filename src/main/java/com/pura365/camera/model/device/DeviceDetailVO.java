@@ -137,6 +137,13 @@ public class DeviceDetailVO {
     @Schema(description = "是否已领取7天免费云录像")
     private Boolean freeCloudClaimed;
 
+    /**
+     * 上一次预览画面URL
+     */
+    @JsonProperty("last_preview_url")
+    @Schema(description = "上一次预览画面URL")
+    private String lastPreviewUrl;
+
     // Getters and Setters
 
     public String getId() {
@@ -281,5 +288,13 @@ public class DeviceDetailVO {
 
     public void setLastOnlineAt(String lastOnlineAt) {
         this.lastOnlineAt = lastOnlineAt;
+    }
+
+    public String getLastPreviewUrl() {
+        return lastPreviewUrl;
+    }
+
+    public void setLastPreviewUrl(String lastPreviewUrl) {
+        this.lastPreviewUrl = lastPreviewUrl;
     }
 }

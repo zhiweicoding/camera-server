@@ -27,4 +27,11 @@ public class UpdateDeviceRequest {
     @Schema(description = "AI功能开关，0-关闭，1-开启", example = "1")
     private Integer aiEnabled;
 
+    /**
+     * 上一次预览画面URL
+     */
+    @JsonProperty("last_preview_url")
+    @Schema(description = "上一次预览画面URL")
+    private String lastPreviewUrl;
+
 }

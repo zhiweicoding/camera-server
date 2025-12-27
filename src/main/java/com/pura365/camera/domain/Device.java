@@ -141,6 +141,10 @@ public class Device {
     @TableField("free_cloud_claimed")
     private Integer freeCloudClaimed;
 
+    /** 上一次预览画面URL */
+    @TableField("last_preview_url")
+    private String lastPreviewUrl;
+
     /** 创建时间 */
     @TableField("created_at")
     private LocalDateTime createdAt;

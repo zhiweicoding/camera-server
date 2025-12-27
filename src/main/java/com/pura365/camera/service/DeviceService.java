@@ -199,16 +199,24 @@ public class DeviceService {
             return null;
         }
 
-        // 目前只支持修改名称
+        boolean updated = false;
         if (StringUtils.hasText(request.getName())) {
             device.setName(request.getName());
-            deviceRepository.updateById(device);
+            updated = true;
             log.info("更新设备 {} 名称为: {}", deviceId, request.getName());
         }
         if (request.getAiEnabled() != null) {
             device.setAiEnabled(request.getAiEnabled());
+            updated = true;
+            log.info("更新设备 {} AI开关为: {}", deviceId, request.getAiEnabled());
+        }
+        if (StringUtils.hasText(request.getLastPreviewUrl())) {
+            device.setLastPreviewUrl(request.getLastPreviewUrl());
+            updated = true;
+            log.info("更新设备 {} 预览图", deviceId);
+        }
+        if (updated) {
             deviceRepository.updateById(device);
-            log.info("更新设备 {} 名称为: {}", deviceId, request.getName());
         }
 
         return buildDeviceVO(device);
@@ -350,7 +358,8 @@ public class DeviceService {
         vo.setWifiRssi(device.getWifiRssi());
         // 网络类型
         vo.setNetworkType(device.getNetworkType());
-        vo.setThumbnailUrl(null); // 暂无缩略图字段
+        vo.setThumbnailUrl(null);
+        vo.setLastPreviewUrl(device.getLastPreviewUrl());
         vo.setLastOnlineAt(device.getLastOnlineTime() != null ?
                 device.getLastOnlineTime().toString() : null);
 
@@ -378,6 +387,7 @@ public class DeviceService {
                 formatIsoTime(subscription.getExpireAt()) : null);
 
         vo.setThumbnailUrl(null);
+        vo.setLastPreviewUrl(device.getLastPreviewUrl());
         vo.setWifiSsid(device.getSsid());
         vo.setWifiRssi(device.getWifiRssi());
 
