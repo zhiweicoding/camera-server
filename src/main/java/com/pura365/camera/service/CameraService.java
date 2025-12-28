@@ -17,6 +17,8 @@ import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.repository.DeviceShareRepository;
 import com.pura365.camera.repository.UserDeviceRepository;
 import com.pura365.camera.util.TimeValidator;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -54,6 +56,9 @@ public class CameraService {
     
     @Autowired
     private CloudVideoRepository cloudVideoRepository;
+    
+    @Autowired
+    private MessageService messageService;
     
     /**
      * 获取设备信息
@@ -226,22 +231,52 @@ public class CameraService {
     
     /**
      * 处理摄像头发送的消息通知
-     * 用于接收事件信息或AI结果
-     * 
-     * TODO: 后续需要实现消息推送、存储等逻辑
+     * 用于接收事件信息或AI结果，入库并推送给绑定该设备的所有用户
      */
     public void handleMessage(SendMsgRequest request) {
-        log.info("收到摄像头消息 - Topic: {}, Title: {}, Msg: {}", 
-                request.getTopic(), request.getTitle(), request.getMsg());
+        log.info("收到摄像头消息 - ID: {}, Topic: {}, Title: {}, Msg: {}", 
+                request.getId(), request.getTopic(), request.getTitle(), request.getMsg());
         
-        // TODO: 实现以下逻辑
-        // 1. 将消息存储到数据库（事件表/告警表）
-        // 2. 根据topic判断消息类型并分类处理
-        // 3. 如果是告警消息，推送给相关用户（APP推送、短信、邮件等）
-        // 4. 如果是AI结果，关联到对应的事件记录
-        // 5. 记录消息处理日志
+        String deviceId = request.getId();
+        String topic = request.getTopic();
+        String title = request.getTitle();
+        String content = request.getMsg();
+        String thumbnailUrl = request.getPicurl();
+        String videoUrl = request.getVideourl();
         
-        log.info("消息处理完成 - Topic: {}", request.getTopic());
+        // 根据topic判断消息类型
+        String messageType = "alarm"; // 默认为告警类型
+        if (topic != null) {
+            if (topic.contains("ai")) {
+                messageType = "ai";
+            } else if (topic.contains("system")) {
+                messageType = "system";
+            }
+        }
+        
+        // 查找该设备绑定的所有用户
+        LambdaQueryWrapper<UserDevice> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(UserDevice::getDeviceId, deviceId);
+        List<UserDevice> userDevices = userDeviceRepository.selectList(wrapper);
+        
+        if (userDevices == null || userDevices.isEmpty()) {
+            log.warn("设备 {} 没有绑定用户，跳过推送", deviceId);
+            return;
+        }
+        
+        // 为每个用户创建消息并推送
+        for (UserDevice userDevice : userDevices) {
+            Long userId = userDevice.getUserId();
+            try {
+                messageService.createMessageAndPush(userId, deviceId, messageType, 
+                        title, content, thumbnailUrl, videoUrl);
+                log.info("已为用户 {} 创建设备 {} 的事件消息并推送", userId, deviceId);
+            } catch (Exception e) {
+                log.error("为用户 {} 创建消息失败", userId, e);
+            }
+        }
+        
+        log.info("消息处理完成 - 设备: {}, 推送用户数: {}", deviceId, userDevices.size());
     }
     
     /**

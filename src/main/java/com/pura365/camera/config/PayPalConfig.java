@@ -1,20 +1,19 @@
 package com.pura365.camera.config;
 
-import com.paypal.base.rest.APIContext;
-import com.paypal.base.rest.OAuthTokenCredential;
-import com.paypal.base.rest.PayPalRESTException;
+import com.paypal.core.PayPalEnvironment;
+import com.paypal.core.PayPalHttpClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.HashMap;
-import java.util.Map;
-
 /**
- * PayPal支付配置类
+ * PayPal 支付配置
  */
 @Configuration
-public class PayPalConfig {
+public class PaypalConfig {
+
+    @Value("${paypal.mode:sandbox}")
+    private String mode;
 
     @Value("${paypal.client-id}")
     private String clientId;
@@ -22,26 +21,24 @@ public class PayPalConfig {
     @Value("${paypal.client-secret}")
     private String clientSecret;
 
-    @Value("${paypal.mode}")
-    private String mode;
-
     @Value("${paypal.return-url}")
     private String returnUrl;
 
     @Value("${paypal.cancel-url}")
     private String cancelUrl;
 
-    /**
-     * 创建PayPal API上下文
-     */
+    @Value("${paypal.webhook-id:}")
+    private String webhookId;
+
     @Bean
-    public APIContext apiContext() throws PayPalRESTException {
-        Map<String, String> configMap = new HashMap<>();
-        configMap.put("mode", mode);
-        
-        APIContext context = new APIContext(clientId, clientSecret, mode);
-        context.setConfigurationMap(configMap);
-        return context;
+    public PayPalHttpClient payPalHttpClient() {
+        PayPalEnvironment environment;
+        if ("live".equalsIgnoreCase(mode)) {
+            environment = new PayPalEnvironment.Live(clientId, clientSecret);
+        } else {
+            environment = new PayPalEnvironment.Sandbox(clientId, clientSecret);
+        }
+        return new PayPalHttpClient(environment);
     }
 
     public String getReturnUrl() {
@@ -52,7 +49,19 @@ public class PayPalConfig {
         return cancelUrl;
     }
 
-    public String getMode() {
-        return mode;
+    public String getWebhookId() {
+        return webhookId;
+    }
+
+    public String getClientId() {
+        return clientId;
+    }
+
+    public String getClientSecret() {
+        return clientSecret;
+    }
+
+    public boolean isSandbox() {
+        return !"live".equalsIgnoreCase(mode);
     }
 }
