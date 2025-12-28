@@ -39,9 +39,25 @@ public class User {
     @TableField("password_hash")
     private String passwordHash;
 
-    /** 角色: 1-流通用户 2-经销商 3-管理员 */
+    /** 角色: 1-流通用户 2-经销商 3-管理员 4-装机商 */
     @TableField("role")
     private Integer role;
+
+    /** 关联装机商ID */
+    @TableField("installer_id")
+    private Long installerId;
+
+    /** 关联经销商ID */
+    @TableField("dealer_id")
+    private Long dealerId;
+
+    /** 是否为装机商身份: 0-否 1-是 */
+    @TableField("is_installer")
+    private Integer isInstaller;
+
+    /** 是否为经销商身份: 0-否 1-是 */
+    @TableField("is_dealer")
+    private Integer isDealer;
 
     /** 昵称 */
     @TableField("nickname")

@@ -33,6 +33,9 @@ public class BillingService {
     private SalesmanRepository salesmanRepository;
 
     @Autowired
+    private InstallerRepository installerRepository;
+
+    @Autowired
     private ManufacturedDeviceRepository deviceRepository;
 
     /**
@@ -103,6 +106,85 @@ public class BillingService {
         result.put("totalOrders", totalOrders);
         result.put("totalAmount", totalAmount);
         result.put("totalVendorAmount", totalVendorAmount);
+        return result;
+    }
+
+    /**
+     * 获取装机商账单汇总统计
+     * @param installerId 装机商ID（可选）
+     * @param installerCode 装机商代码（可选）
+     * @param startDate 开始日期
+     * @param endDate 结束日期
+     */
+    public Map<String, Object> getInstallerBillingSummary(Long installerId, String installerCode, Date startDate, Date endDate) {
+        QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
+        qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID)
+                .isNotNull(PaymentOrder::getInstallerId);
+        if (installerId != null) {
+            qw.lambda().eq(PaymentOrder::getInstallerId, installerId);
+        }
+        if (installerCode != null && !installerCode.trim().isEmpty()) {
+            qw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
+        }
+        if (startDate != null) {
+            qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
+        }
+        if (endDate != null) {
+            qw.lambda().le(PaymentOrder::getPaidAt, endDate);
+        }
+
+        List<PaymentOrder> orders = orderRepository.selectList(qw);
+
+        // 按装机商分组统计
+        Map<Long, Map<String, Object>> installerStats = new HashMap<>();
+        BigDecimal totalAmount = BigDecimal.ZERO;
+        BigDecimal totalInstallerAmount = BigDecimal.ZERO;
+        int totalOrders = 0;
+
+        for (PaymentOrder order : orders) {
+            Long iid = order.getInstallerId();
+            if (iid == null) continue;
+
+            Map<String, Object> stat = installerStats.computeIfAbsent(iid, k -> {
+                Map<String, Object> s = new HashMap<>();
+                s.put("installerId", k);
+                s.put("installerCode", order.getInstallerCode());
+                s.put("orderCount", 0);
+                s.put("totalAmount", BigDecimal.ZERO);
+                s.put("installerAmount", BigDecimal.ZERO);
+                return s;
+            });
+
+            stat.put("orderCount", (Integer) stat.get("orderCount") + 1);
+            stat.put("totalAmount", ((BigDecimal) stat.get("totalAmount")).add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO));
+            stat.put("installerAmount", ((BigDecimal) stat.get("installerAmount")).add(order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO));
+
+            totalAmount = totalAmount.add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO);
+            totalInstallerAmount = totalInstallerAmount.add(order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO);
+            totalOrders++;
+        }
+
+        // 补充装机商名称
+        List<Map<String, Object>> installerList = new ArrayList<>(installerStats.values());
+        for (Map<String, Object> stat : installerList) {
+            Long iid = (Long) stat.get("installerId");
+            Installer installer = installerRepository.selectById(iid);
+            if (installer != null) {
+                stat.put("installerName", installer.getInstallerName());
+                // 以数据库为准回填code（避免快照为空）
+                if (stat.get("installerCode") == null || ((String) stat.get("installerCode")).isEmpty()) {
+                    stat.put("installerCode", installer.getInstallerCode());
+                }
+            } else {
+                stat.put("installerName", "未知");
+            }
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("list", installerList);
+        result.put("totalOrders", totalOrders);
+        result.put("totalAmount", totalAmount);
+        result.put("totalInstallerAmount", totalInstallerAmount);
         return result;
     }
 

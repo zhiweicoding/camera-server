@@ -30,13 +30,15 @@ public class UserManageService {
     /**
      * 分页查询用户列表（排除管理员）
      *
-     * @param keyword  搜索关键词（可选，匹配用户名、手机号、邮箱、昵称）
-     * @param role     角色筛选（可选）
-     * @param page     页码（从1开始）
-     * @param pageSize 每页大小
+     * @param keyword     搜索关键词（可选，匹配用户名、手机号、邮箱、昵称）
+     * @param role        角色筛选（可选）
+     * @param isInstaller 是否装机商筛选（可选）
+     * @param isDealer    是否经销商筛选（可选）
+     * @param page        页码（从1开始）
+     * @param pageSize    每页大小
      * @return 分页结果
      */
-    public Map<String, Object> listUsers(String keyword, Integer role, int page, int pageSize) {
+    public Map<String, Object> listUsers(String keyword, Integer role, Integer isInstaller, Integer isDealer, int page, int pageSize) {
         Page<User> pageObj = new Page<>(page, pageSize);
         LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
 
@@ -54,6 +56,16 @@ public class UserManageService {
         // 角色筛选（不允许筛选管理员）
         if (role != null && role != ROLE_ADMIN) {
             wrapper.eq(User::getRole, role);
+        }
+
+        // 装机商身份筛选
+        if (isInstaller != null) {
+            wrapper.eq(User::getIsInstaller, isInstaller);
+        }
+
+        // 经销商身份筛选
+        if (isDealer != null) {
+            wrapper.eq(User::getIsDealer, isDealer);
         }
 
         // 按创建时间倒序
@@ -178,6 +190,19 @@ public class UserManageService {
         if (user.getRole() != null) {
             existing.setRole(user.getRole());
         }
+        // 双重身份字段
+        if (user.getIsInstaller() != null) {
+            existing.setIsInstaller(user.getIsInstaller());
+        }
+        if (user.getIsDealer() != null) {
+            existing.setIsDealer(user.getIsDealer());
+        }
+        if (user.getInstallerId() != null) {
+            existing.setInstallerId(user.getInstallerId());
+        }
+        if (user.getDealerId() != null) {
+            existing.setDealerId(user.getDealerId());
+        }
 
         existing.setUpdatedAt(new Date());
         userRepository.updateById(existing);
@@ -228,10 +253,41 @@ public class UserManageService {
         if (user.getRole() != null && user.getRole() == ROLE_ADMIN) {
             throw new RuntimeException("不允许修改管理员角色");
         }
-        if (role == null || (role != 1 && role != 2)) {
-            throw new RuntimeException("角色值无效，必须为 1-流通用户 2-经销商");
+        if (role == null || (role != 1 && role != 2 && role != 4)) {
+            throw new RuntimeException("角色值无效，必须为 1-流通用户 2-经销商 4-装机商");
         }
         user.setRole(role);
+        user.setUpdatedAt(new Date());
+        userRepository.updateById(user);
+    }
+
+    /**
+     * 更新用户身份标识（装机商/经销商双重身份）
+     */
+    public void updateUserIdentity(Long id, Integer isInstaller, Integer isDealer, Long installerId, Long dealerId) {
+        User user = userRepository.selectById(id);
+        if (user == null) {
+            throw new RuntimeException("用户不存在");
+        }
+        if (user.getRole() != null && user.getRole() == ROLE_ADMIN) {
+            throw new RuntimeException("不允许修改管理员身份");
+        }
+        if (isInstaller != null) {
+            user.setIsInstaller(isInstaller);
+            if (isInstaller == 1 && installerId != null) {
+                user.setInstallerId(installerId);
+            } else if (isInstaller == 0) {
+                user.setInstallerId(null);
+            }
+        }
+        if (isDealer != null) {
+            user.setIsDealer(isDealer);
+            if (isDealer == 1 && dealerId != null) {
+                user.setDealerId(dealerId);
+            } else if (isDealer == 0) {
+                user.setDealerId(null);
+            }
+        }
         user.setUpdatedAt(new Date());
         userRepository.updateById(user);
     }

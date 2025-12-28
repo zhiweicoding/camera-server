@@ -47,6 +47,10 @@ public class CloudPlan {
     @TableField("original_price")
     private BigDecimal originalPrice;
 
+    /** 套餐成本 */
+    @TableField("plan_cost")
+    private BigDecimal planCost;
+
     /** 周期: month-月付, year-年付 */
     @TableField("period")
     private CloudPlanPeriod period;

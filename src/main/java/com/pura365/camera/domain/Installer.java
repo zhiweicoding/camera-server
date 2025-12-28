@@ -11,24 +11,24 @@ import java.math.BigDecimal;
 import java.util.Date;
 
 /**
- * 经销商实体，对应表 vendor
- * 支持多级经销商层级结构
+ * 装机商实体，对应表 installer
+ * 原 Vendor(经销商) 重构为 Installer(装机商)
  */
 @Data
-@TableName("vendor")
-public class Vendor {
+@TableName("installer")
+public class Installer {
 
     /** 主键ID */
     @TableId(type = IdType.AUTO)
     private Long id;
 
-    /** 销售商代码(2位) */
-    @TableField("vendor_code")
-    private String vendorCode;
+    /** 装机商代码(1-4位) */
+    @TableField("installer_code")
+    private String installerCode;
 
-    /** 销售商名称 */
-    @TableField("vendor_name")
-    private String vendorName;
+    /** 装机商名称 */
+    @TableField("installer_name")
+    private String installerName;
 
     /** 联系人 */
     @TableField("contact_person")
@@ -42,23 +42,7 @@ public class Vendor {
     @TableField("address")
     private String address;
 
-    /** 所属装机商ID */
-    @TableField("installer_id")
-    private Long installerId;
-
-    /** 所属装机商代码 */
-    @TableField("installer_code")
-    private String installerCode;
-
-    /** 上级经销商ID（支持多级） */
-    @TableField("parent_vendor_id")
-    private Long parentVendorId;
-
-    /** 层级：1-一级经销商, 2-二级... */
-    @TableField("level")
-    private Integer level;
-
-    /** 分佣比例(基于装机商利润的百分比) */
+    /** 分佣比例(基于可分润金额的百分比) */
     @TableField("commission_rate")
     private BigDecimal commissionRate;
 

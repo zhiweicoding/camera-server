@@ -1,18 +1,24 @@
 package com.pura365.camera.controller.admin;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.Vendor;
+import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.model.ApiResponse;
+import com.pura365.camera.repository.VendorRepository;
 import com.pura365.camera.service.DeviceProductionService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
  * 经销商管理接口
+ * 注意：新增经销商功能已移至用户管理模块
  */
 @Tag(name = "经销商管理", description = "经销商信息管理相关接口")
 @RestController
@@ -22,13 +28,79 @@ public class VendorController {
     @Autowired
     private DeviceProductionService productionService;
 
+    @Autowired
+    private VendorRepository vendorRepository;
+
     /**
-     * 获取启用的经销商列表
+     * 分页查询经销商列表
+     */
+    @Operation(summary = "分页查询经销商", description = "分页查询经销商列表，支持按装机商、名称、状态筛选")
+    @GetMapping
+    public ApiResponse<Map<String, Object>> listVendors(
+            @Parameter(description = "页码") @RequestParam(defaultValue = "1") Integer page,
+            @Parameter(description = "每页数量") @RequestParam(defaultValue = "20") Integer size,
+            @Parameter(description = "装机商ID") @RequestParam(required = false) Long installerId,
+            @Parameter(description = "经销商名称") @RequestParam(required = false) String name,
+            @Parameter(description = "状态") @RequestParam(required = false) Integer status) {
+        
+        QueryWrapper<Vendor> qw = new QueryWrapper<>();
+        if (installerId != null) {
+            qw.lambda().eq(Vendor::getInstallerId, installerId);
+        }
+        if (name != null && !name.trim().isEmpty()) {
+            qw.lambda().like(Vendor::getVendorName, name);
+        }
+        if (status != null) {
+            qw.lambda().eq(Vendor::getStatus, EnableStatus.fromCode(status));
+        }
+        qw.lambda().orderByDesc(Vendor::getCreatedAt);
+
+        // 分页查询
+        int offset = (page - 1) * size;
+        qw.last("LIMIT " + offset + ", " + size);
+        List<Vendor> list = vendorRepository.selectList(qw);
+
+        // 查询总数
+        QueryWrapper<Vendor> countQw = new QueryWrapper<>();
+        if (installerId != null) {
+            countQw.lambda().eq(Vendor::getInstallerId, installerId);
+        }
+        if (name != null && !name.trim().isEmpty()) {
+            countQw.lambda().like(Vendor::getVendorName, name);
+        }
+        if (status != null) {
+            countQw.lambda().eq(Vendor::getStatus, EnableStatus.fromCode(status));
+        }
+        long total = vendorRepository.selectCount(countQw);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("list", list);
+        result.put("total", total);
+        result.put("page", page);
+        result.put("size", size);
+        return ApiResponse.success(result);
+    }
+
+    /**
+     * 获取启用的经销商列表（不分页）
      */
     @Operation(summary = "获取启用的经销商列表", description = "获取所有状态为启用的经销商")
-    @GetMapping
-    public ApiResponse<List<Vendor>> listVendors() {
+    @GetMapping("/enabled")
+    public ApiResponse<List<Vendor>> listEnabledVendors() {
         return ApiResponse.success(productionService.listVendors());
+    }
+
+    /**
+     * 按装机商获取经销商列表
+     */
+    @Operation(summary = "按装机商获取经销商", description = "获取指定装机商下的经销商列表")
+    @GetMapping("/installer/{installerId}")
+    public ApiResponse<List<Vendor>> listByInstaller(@PathVariable Long installerId) {
+        QueryWrapper<Vendor> qw = new QueryWrapper<>();
+        qw.lambda().eq(Vendor::getInstallerId, installerId)
+                .eq(Vendor::getStatus, EnableStatus.ENABLED)
+                .orderByAsc(Vendor::getVendorCode);
+        return ApiResponse.success(vendorRepository.selectList(qw));
     }
 
     /**
@@ -55,24 +127,14 @@ public class VendorController {
 
     /**
      * 新增经销商
-     * 请求体:{
-     *   "vendorCode": "02",
-     *   "vendorName": "经销商名称",
-     *   "contactPerson": "联系人",
-     *   "contactPhone": "13800138000",
-     *   "address": "地址",
-     *   "status": 1
-     * }
+     * 注意：此接口已废弃，新增经销商请通过用户管理模块创建
+     * @deprecated 使用 /api/admin/users 接口创建经销商用户
      */
-    @Operation(summary = "新增经销商", description = "创建新的经销商信息")
+    @Deprecated
+    @Operation(summary = "新增经销商（已废弃）", description = "请使用用户管理模块创建经销商")
     @PostMapping
     public ApiResponse<Vendor> createVendor(@RequestBody Vendor vendor) {
-        try {
-            Vendor created = productionService.createVendor(vendor);
-            return ApiResponse.success(created);
-        } catch (RuntimeException e) {
-            return ApiResponse.error(400, e.getMessage());
-        }
+        return ApiResponse.error(400, "新增经销商请通过用户管理模块创建");
     }
 
     /**

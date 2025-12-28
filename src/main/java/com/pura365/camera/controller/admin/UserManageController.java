@@ -39,10 +39,12 @@ public class UserManageController {
     @GetMapping
     public ApiResponse<Map<String, Object>> listUsers(
             @Parameter(description = "搜索关键词（用户名/手机号/邮箱/昵称）") @RequestParam(required = false) String keyword,
-            @Parameter(description = "角色筛选：1-流通用户 2-经销商 3-管理员") @RequestParam(required = false) Integer role,
+            @Parameter(description = "角色筛选：1-流通用户 2-经销商 3-管理员 4-装机商") @RequestParam(required = false) Integer role,
+            @Parameter(description = "是否装机商：0-否 1-是") @RequestParam(required = false) Integer isInstaller,
+            @Parameter(description = "是否经销商：0-否 1-是") @RequestParam(required = false) Integer isDealer,
             @Parameter(description = "页码（从1开始）") @RequestParam(defaultValue = "1") int page,
             @Parameter(description = "每页大小") @RequestParam(defaultValue = "10") int pageSize) {
-        Map<String, Object> data = userManageService.listUsers(keyword, role, page, pageSize);
+        Map<String, Object> data = userManageService.listUsers(keyword, role, isInstaller, isDealer, page, pageSize);
         return ApiResponse.success(data);
     }
 
@@ -79,10 +81,14 @@ public class UserManageController {
      *   "email": "test@example.com",
      *   "nickname": "测试用户",
      *   "role": 1,
-     *   "password": "123456"
+     *   "password": "123456",
+     *   "isInstaller": 1,
+     *   "isDealer": 1,
+     *   "installerId": 1,
+     *   "dealerId": 2
      * }
      */
-    @Operation(summary = "创建用户", description = "创建新用户")
+    @Operation(summary = "创建用户", description = "创建新用户，支持双重身份（装机商+经销商）")
     @PostMapping
     public ApiResponse<User> createUser(@RequestBody Map<String, Object> body) {
         try {
@@ -94,6 +100,19 @@ public class UserManageController {
             user.setAvatar((String) body.get("avatar"));
             if (body.get("role") != null) {
                 user.setRole(Integer.valueOf(body.get("role").toString()));
+            }
+            // 双重身份支持
+            if (body.get("isInstaller") != null) {
+                user.setIsInstaller(Integer.valueOf(body.get("isInstaller").toString()));
+            }
+            if (body.get("isDealer") != null) {
+                user.setIsDealer(Integer.valueOf(body.get("isDealer").toString()));
+            }
+            if (body.get("installerId") != null) {
+                user.setInstallerId(Long.valueOf(body.get("installerId").toString()));
+            }
+            if (body.get("dealerId") != null) {
+                user.setDealerId(Long.valueOf(body.get("dealerId").toString()));
             }
             String password = (String) body.get("password");
 
@@ -157,12 +176,31 @@ public class UserManageController {
      * 更新用户角色
      * 请求体: { "role": 1 }
      */
-    @Operation(summary = "更新角色", description = "更新用户角色：1-流通用户 2-经销商 3-管理员")
+    @Operation(summary = "更新角色", description = "更新用户角色：1-流通用户 2-经销商 3-管理员 4-装机商")
     @PutMapping("/{id}/role")
     public ApiResponse<Void> updateUserRole(@PathVariable Long id, @RequestBody Map<String, Integer> body) {
         try {
             Integer role = body.get("role");
             userManageService.updateUserRole(id, role);
+            return ApiResponse.success(null);
+        } catch (RuntimeException e) {
+            return ApiResponse.error(400, e.getMessage());
+        }
+    }
+
+    /**
+     * 更新用户身份标识
+     * 请求体: { "isInstaller": 1, "isDealer": 1, "installerId": 1, "dealerId": 2 }
+     */
+    @Operation(summary = "更新身份标识", description = "更新用户的装机商/经销商身份，支持双重身份")
+    @PutMapping("/{id}/identity")
+    public ApiResponse<Void> updateUserIdentity(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        try {
+            Integer isInstaller = body.get("isInstaller") != null ? Integer.valueOf(body.get("isInstaller").toString()) : null;
+            Integer isDealer = body.get("isDealer") != null ? Integer.valueOf(body.get("isDealer").toString()) : null;
+            Long installerId = body.get("installerId") != null ? Long.valueOf(body.get("installerId").toString()) : null;
+            Long dealerId = body.get("dealerId") != null ? Long.valueOf(body.get("dealerId").toString()) : null;
+            userManageService.updateUserIdentity(id, isInstaller, isDealer, installerId, dealerId);
             return ApiResponse.success(null);
         } catch (RuntimeException e) {
             return ApiResponse.error(400, e.getMessage());

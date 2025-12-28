@@ -44,13 +44,21 @@ public class ManufacturedDevice {
     @TableField("assembler_code")
     private String assemblerCode;
 
-    /** 销售商代码(第6-7位) */
+    /** 销售商代码(第6-7位) - 兼容旧数据 */
     @TableField("vendor_code")
     private String vendorCode;
 
-    /** 业务员ID */
+    /** 业务员ID - 兼容旧数据 */
     @TableField("salesman_id")
     private Long salesmanId;
+
+    /** 装机商ID */
+    @TableField("installer_id")
+    private Long installerId;
+
+    /** 当前所属经销商ID */
+    @TableField("current_vendor_id")
+    private Long currentVendorId;
 
     /** 序列号(第9-16位) */
     @TableField("serial_no")

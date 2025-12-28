@@ -11,36 +11,29 @@ import java.math.BigDecimal;
 import java.util.Date;
 
 /**
- * 经销商实体，对应表 vendor
+ * 经销商实体，对应表 dealer
+ * 原 Salesman(业务员) 重构为 Dealer(经销商)
  * 支持多级经销商层级结构
  */
 @Data
-@TableName("vendor")
-public class Vendor {
+@TableName("dealer")
+public class Dealer {
 
     /** 主键ID */
     @TableId(type = IdType.AUTO)
     private Long id;
 
-    /** 销售商代码(2位) */
-    @TableField("vendor_code")
-    private String vendorCode;
+    /** 经销商代号 */
+    @TableField("dealer_code")
+    private String dealerCode;
 
-    /** 销售商名称 */
-    @TableField("vendor_name")
-    private String vendorName;
-
-    /** 联系人 */
-    @TableField("contact_person")
-    private String contactPerson;
+    /** 经销商名称 */
+    @TableField("name")
+    private String name;
 
     /** 联系电话 */
-    @TableField("contact_phone")
-    private String contactPhone;
-
-    /** 地址 */
-    @TableField("address")
-    private String address;
+    @TableField("phone")
+    private String phone;
 
     /** 所属装机商ID */
     @TableField("installer_id")
@@ -50,21 +43,25 @@ public class Vendor {
     @TableField("installer_code")
     private String installerCode;
 
-    /** 上级经销商ID（支持多级） */
-    @TableField("parent_vendor_id")
-    private Long parentVendorId;
+    /** 上级经销商ID（NULL表示直属装机商） */
+    @TableField("parent_dealer_id")
+    private Long parentDealerId;
 
-    /** 层级：1-一级经销商, 2-二级... */
+    /** 层级：1-一级经销商, 2-二级经销商... */
     @TableField("level")
     private Integer level;
 
-    /** 分佣比例(基于装机商利润的百分比) */
+    /** 分润比例(基于上级利润的百分比) */
     @TableField("commission_rate")
     private BigDecimal commissionRate;
 
     /** 状态: DISABLED-禁用, ENABLED-启用 */
     @TableField("status")
     private EnableStatus status;
+
+    /** 备注 */
+    @TableField("remark")
+    private String remark;
 
     /** 创建时间 */
     @TableField("created_at")

@@ -53,9 +53,61 @@ public class PaymentOrder {
     @TableField("salesman_amount")
     private BigDecimal salesmanAmount;
 
-    /** 经销商应得金额 */
+    /** 经销商应得金额 - 兼容旧数据 */
     @TableField("vendor_amount")
     private BigDecimal vendorAmount;
+
+    /** 装机商ID */
+    @TableField("installer_id")
+    private Long installerId;
+
+    /** 装机商代码 */
+    @TableField("installer_code")
+    private String installerCode;
+
+    /** 装机商分润比例（快照） */
+    @TableField("installer_rate")
+    private BigDecimal installerRate;
+
+    /** 装机商分润金额 */
+    @TableField("installer_amount")
+    private BigDecimal installerAmount;
+
+    /** 经销商ID */
+    @TableField("dealer_id")
+    private Long dealerId;
+
+    /** 经销商代号 */
+    @TableField("dealer_code")
+    private String dealerCode;
+
+    /** 经销商分润比例（快照） */
+    @TableField("dealer_rate")
+    private BigDecimal dealerRate;
+
+    /** 经销商分润金额 */
+    @TableField("dealer_amount")
+    private BigDecimal dealerAmount;
+
+    /** 手续费金额 */
+    @TableField("fee_amount")
+    private BigDecimal feeAmount;
+
+    /** 套餐成本 */
+    @TableField("plan_cost")
+    private BigDecimal planCost;
+
+    /** 可分润金额 */
+    @TableField("profit_amount")
+    private BigDecimal profitAmount;
+
+    /** 是否已结算：0-未结算 1-已结算 */
+    @TableField("is_settled")
+    private Integer isSettled;
+
+    /** 设备上线所属国家 */
+    @TableField("online_country")
+    private String onlineCountry;
 
     /** 产品类型 */
     @TableField("product_type")

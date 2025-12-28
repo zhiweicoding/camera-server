@@ -36,16 +36,55 @@ public class BillingController {
     }
 
     /**
-     * 获取业务员账单汇总
+     * 获取装机商账单汇总
      */
-    @Operation(summary = "业务员账单汇总", description = "按业务员维度统计账单汇总")
+    @Operation(summary = "装机商账单汇总", description = "按装机商维度统计账单汇总")
+    @GetMapping("/installer-summary")
+    public ApiResponse<Map<String, Object>> getInstallerBillingSummary(
+            @RequestParam(required = false) Long installerId,
+            @RequestParam(required = false) String installerCode,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM") String month) {
+        // 支持按月查询
+        if (month != null && !month.isEmpty()) {
+            try {
+                java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("yyyy-MM");
+                java.util.Calendar cal = java.util.Calendar.getInstance();
+                cal.setTime(sdf.parse(month));
+                startDate = cal.getTime();
+                cal.add(java.util.Calendar.MONTH, 1);
+                cal.add(java.util.Calendar.DAY_OF_MONTH, -1);
+                cal.set(java.util.Calendar.HOUR_OF_DAY, 23);
+                cal.set(java.util.Calendar.MINUTE, 59);
+                cal.set(java.util.Calendar.SECOND, 59);
+                cal.set(java.util.Calendar.MILLISECOND, 999);
+                endDate = cal.getTime();
+            } catch (Exception e) {
+                // 忽略解析错误
+            }
+        }
+        return ApiResponse.success(billingService.getInstallerBillingSummary(installerId, installerCode, startDate, endDate));
+    }
+
+    /**
+     * 获取业务员账单汇总（已废弃）
+     * @deprecated 使用 /installer-summary 替代
+     */
+    @Deprecated
+    @Operation(summary = "业务员账单汇总（已废弃）", description = "请使用装机商账单汇总接口")
     @GetMapping("/salesman-summary")
     public ApiResponse<Map<String, Object>> getSalesmanBillingSummary(
             @RequestParam(required = false) String vendorCode,
             @RequestParam(required = false) Long salesmanId,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate) {
-        return ApiResponse.success(billingService.getSalesmanBillingSummary(vendorCode, salesmanId, startDate, endDate));
+        // 向后兼容，返空数据
+        Map<String, Object> emptyResult = new java.util.HashMap<>();
+        emptyResult.put("list", new java.util.ArrayList<>());
+        emptyResult.put("totalOrders", 0);
+        emptyResult.put("totalAmount", java.math.BigDecimal.ZERO);
+        return ApiResponse.success(emptyResult);
     }
 
     /**
