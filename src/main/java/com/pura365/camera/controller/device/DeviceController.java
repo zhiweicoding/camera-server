@@ -14,9 +14,12 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.validation.Valid;
+import java.io.File;
+import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 设备管理控制器
@@ -227,8 +230,8 @@ public class DeviceController {
         }
         
         try {
-            // 上传到云存储
-            String previewUrl = cloudStorageService.uploadDevicePreview(deviceId, file);
+            // 保存到本地
+            String previewUrl = savePreviewFile(deviceId, file);
             if (previewUrl == null) {
                 log.error("上传预览图失败 - deviceId={}", deviceId);
                 return ApiResponse.error(HTTP_INTERNAL_ERROR, "上传失败");
@@ -248,6 +251,34 @@ public class DeviceController {
             log.error("上传预览图异常 - userId={}, deviceId={}", currentUserId, deviceId, e);
             return ApiResponse.error(HTTP_INTERNAL_ERROR, "上传失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 保存设备预览图到本地
+     *
+     * @param deviceId 设备ID
+     * @param file     预览图文件
+     * @return 相对URL
+     */
+    private String savePreviewFile(String deviceId, MultipartFile file) throws IOException {
+        String baseDir = System.getProperty("user.dir") + File.separator + "uploads" + File.separator + "previews" + File.separator + deviceId;
+        File dir = new File(baseDir);
+        if (!dir.exists()) {
+            boolean ok = dir.mkdirs();
+            if (!ok) {
+                throw new IOException("无法创建上传目录");
+            }
+        }
+        String original = file.getOriginalFilename();
+        String ext = "";
+        if (original != null && original.contains(".")) {
+            ext = original.substring(original.lastIndexOf('.'));
+        }
+        String filename = "preview_" + System.currentTimeMillis() + ext;
+        File dest = new File(dir, filename);
+        file.transferTo(dest);
+        // 返回相对 URL，前端自行拼接域名
+        return "/uploads/previews/" + deviceId + "/" + filename;
     }
 
     /**
