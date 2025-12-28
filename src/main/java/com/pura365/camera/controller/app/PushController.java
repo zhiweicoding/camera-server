@@ -6,6 +6,7 @@ import com.pura365.camera.domain.UserPushToken;
 import com.pura365.camera.model.ApiResponse;
 import com.pura365.camera.model.push.RegisterPushTokenRequest;
 import com.pura365.camera.repository.UserPushTokenRepository;
+import com.pura365.camera.service.MessageService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
@@ -26,9 +27,12 @@ public class PushController {
     private static final Logger log = LoggerFactory.getLogger(PushController.class);
 
     private final UserPushTokenRepository userPushTokenRepository;
+    private final MessageService messageService;
 
-    public PushController(UserPushTokenRepository userPushTokenRepository) {
+    public PushController(UserPushTokenRepository userPushTokenRepository,
+                          MessageService messageService) {
         this.userPushTokenRepository = userPushTokenRepository;
+        this.messageService = messageService;
     }
 
     /**
@@ -116,5 +120,37 @@ public class PushController {
         log.info("注销推送Token成功 - userId={}, registrationId={}", currentUserId, registrationId);
 
         return ApiResponse.success("注销成功", null);
+    }
+
+    /**
+     * 测试推送
+     * 
+     * 手动触发一条推送消息到当前用户，用于测试推送功能是否正常
+     */
+    @Operation(summary = "测试推送", description = "手动触发一条测试推送消息到当前用户")
+    @PostMapping("/test")
+    public ApiResponse<Long> testPush(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @RequestParam(value = "device_id", required = false) String deviceId,
+            @RequestParam(value = "title", required = false, defaultValue = "测试推送") String title,
+            @RequestParam(value = "content", required = false, defaultValue = "这是一条测试消息") String content) {
+        log.info("测试推送 - userId={}, deviceId={}, title={}, content={}", 
+                currentUserId, deviceId, title, content);
+        
+        try {
+            Long messageId = messageService.createMessageAndPush(
+                    currentUserId, 
+                    deviceId, 
+                    "test", 
+                    title, 
+                    content, 
+                    null, 
+                    null);
+            log.info("测试推送成功 - userId={}, messageId={}", currentUserId, messageId);
+            return ApiResponse.success("推送成功", messageId);
+        } catch (Exception e) {
+            log.error("测试推送失败 - userId={}", currentUserId, e);
+            return ApiResponse.error(500, "推送失败: " + e.getMessage());
+        }
     }
 }
