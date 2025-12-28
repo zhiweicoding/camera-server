@@ -2,6 +2,9 @@ package com.pura365.camera.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pura365.camera.domain.Device;
+import com.pura365.camera.enums.DeviceOnlineStatus;
+import com.pura365.camera.enums.EnableStatus;
+import com.pura365.camera.enums.SdCardStatus;
 import com.pura365.camera.model.mqtt.*;
 import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.util.TimeValidator;
@@ -213,7 +216,7 @@ public class MqttMessageService {
             LocalDateTime now = LocalDateTime.now();
             Device device = deviceRepository.selectById(deviceId);
             if (device != null) {
-                device.setStatus(1); // 1-在线
+                device.setStatus(DeviceOnlineStatus.ONLINE);
                 device.setLastOnlineTime(now);
                 device.setLastHeartbeatTime(now); // MQTT连接也视为心跳
                 device.setUpdatedAt(now);
@@ -224,8 +227,8 @@ public class MqttMessageService {
                 device = new Device();
                 device.setId(msg.getUid());
                 device.setMac("UNKNOWN"); // MAC地址后续通过设备信息更新
-                device.setStatus(1);
-                device.setEnabled(1);
+                device.setStatus(DeviceOnlineStatus.ONLINE);
+                device.setEnabled(EnableStatus.ENABLED);
                 device.setLastOnlineTime(now);
                 device.setLastHeartbeatTime(now);
                 device.setCreatedAt(now);
@@ -263,7 +266,7 @@ public class MqttMessageService {
                 device = new Device();
                 device.setId(deviceId);
                 device.setMac("UNKNOWN");
-                device.setEnabled(1);
+                device.setEnabled(EnableStatus.ENABLED);
                 device.setCreatedAt(LocalDateTime.now());
             }
             
@@ -284,7 +287,7 @@ public class MqttMessageService {
             
             // 更新TF卡信息
             if (msg.getSdstate() != null) {
-                device.setSdState(msg.getSdstate());
+                device.setSdState(SdCardStatus.fromCode(msg.getSdstate()));
             }
             if (msg.getSdcap() != null) {
                 device.setSdCapacity(msg.getSdcap());
@@ -308,7 +311,7 @@ public class MqttMessageService {
             }
             
             // 更新在线状态和心跳时间
-            device.setStatus(1); // 1-在线
+            device.setStatus(DeviceOnlineStatus.ONLINE);
             LocalDateTime now = LocalDateTime.now();
             device.setLastOnlineTime(now);
             device.setLastHeartbeatTime(now); // 收到设备信息即为心跳响应
@@ -437,8 +440,8 @@ public class MqttMessageService {
     public void markDeviceOffline(String deviceId) {
         try {
             Device device = deviceRepository.selectById(deviceId);
-            if (device != null && device.getStatus() != null && device.getStatus() == 1) {
-                device.setStatus(0); // 0-离线
+            if (device != null && device.getStatus() == DeviceOnlineStatus.ONLINE) {
+                device.setStatus(DeviceOnlineStatus.OFFLINE);
                 device.setUpdatedAt(LocalDateTime.now());
                 deviceRepository.updateById(device);
                 log.info("已标记设备 {} 为离线", deviceId);

@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.pura365.camera.enums.PaymentOrderStatus;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -72,9 +73,9 @@ public class PaymentOrder {
     @TableField("currency")
     private String currency;
 
-    /** 订单状态 */
+    /** 订单状态: pending-待支付, paid-已支付, cancelled-已取消, refunded-已退款 */
     @TableField("status")
-    private String status;
+    private PaymentOrderStatus status;
 
     /** 支付方式 */
     @TableField("payment_method")

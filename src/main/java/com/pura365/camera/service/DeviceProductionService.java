@@ -2,6 +2,9 @@ package com.pura365.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.*;
+import com.pura365.camera.enums.EnableStatus;
+import com.pura365.camera.enums.ManufacturedDeviceStatus;
+import com.pura365.camera.enums.ProductionBatchStatus;
 import com.pura365.camera.model.CreateBatchRequest;
 import com.pura365.camera.domain.Salesman;
 import com.pura365.camera.repository.*;
@@ -56,7 +59,7 @@ public class DeviceProductionService {
      */
     public List<Vendor> listVendors() {
         QueryWrapper<Vendor> qw = new QueryWrapper<>();
-        qw.lambda().eq(Vendor::getStatus, 1).orderByAsc(Vendor::getVendorCode);
+        qw.lambda().eq(Vendor::getStatus, EnableStatus.ENABLED).orderByAsc(Vendor::getVendorCode);
         return vendorRepository.selectList(qw);
     }
 
@@ -117,7 +120,7 @@ public class DeviceProductionService {
             throw new RuntimeException("该经销商代码对应的用户已存在");
         }
         if (vendor.getStatus() == null) {
-            vendor.setStatus(1); // 默认启用
+            vendor.setStatus(EnableStatus.ENABLED); // 默认启用
         }
         vendorRepository.insert(vendor);
 
@@ -129,7 +132,7 @@ public class DeviceProductionService {
         user.setRole(2); // 经销商角色
         user.setNickname(vendor.getVendorName());
         user.setPhone(vendor.getContactPhone());
-        user.setEnabled(vendor.getStatus());
+        user.setEnabled(vendor.getStatus() != null ? vendor.getStatus().getCode() : EnableStatus.ENABLED.getCode());
         user.setCreatedAt(new Date());
         user.setUpdatedAt(new Date());
         userRepository.insert(user);
@@ -178,7 +181,7 @@ public class DeviceProductionService {
                 user.setPhone(vendor.getContactPhone());
             }
             if (vendor.getStatus() != null) {
-                user.setEnabled(vendor.getStatus());
+                user.setEnabled(vendor.getStatus().getCode());
             }
             user.setUpdatedAt(new Date());
             userRepository.updateById(user);
@@ -227,7 +230,7 @@ public class DeviceProductionService {
         if (vendor == null) {
             throw new RuntimeException("经销商不存在");
         }
-        vendor.setStatus(status);
+        vendor.setStatus(EnableStatus.fromCode(status));
         vendorRepository.updateById(vendor);
 
         // 同步更新user表状态
@@ -250,7 +253,7 @@ public class DeviceProductionService {
      */
     public List<Assembler> listAssemblers() {
         QueryWrapper<Assembler> qw = new QueryWrapper<>();
-        qw.lambda().eq(Assembler::getStatus, 1).orderByAsc(Assembler::getAssemblerCode);
+        qw.lambda().eq(Assembler::getStatus, EnableStatus.ENABLED).orderByAsc(Assembler::getAssemblerCode);
         return assemblerRepository.selectList(qw);
     }
 
@@ -369,7 +372,7 @@ public class DeviceProductionService {
 
         // 校验经销商是否存在且启用
         QueryWrapper<Vendor> vq = new QueryWrapper<>();
-        vq.lambda().eq(Vendor::getVendorCode, vendorCode).eq(Vendor::getStatus, 1);
+        vq.lambda().eq(Vendor::getVendorCode, vendorCode).eq(Vendor::getStatus, EnableStatus.ENABLED);
         if (vendorRepository.selectCount(vq) == 0) {
             throw new RuntimeException("经销商不存在或未启用");
         }
@@ -402,7 +405,7 @@ public class DeviceProductionService {
         batch.setQuantity(quantity);
         batch.setStartSerial(startSerial);
         batch.setEndSerial(endSerial);
-        batch.setStatus("completed");
+        batch.setStatus(ProductionBatchStatus.COMPLETED);
         batch.setRemark(request.getRemark());
         batch.setCreatedBy(request.getCreatedBy());
         batchRepository.insert(batch);
@@ -468,7 +471,7 @@ public class DeviceProductionService {
             device.setAssemblerCode(assemblerCode);
             device.setVendorCode(vendorCode);
             device.setSerialNo(serial8);
-            device.setStatus("manufactured");
+            device.setStatus(ManufacturedDeviceStatus.MANUFACTURED);
             deviceRepository.insert(device);
         }
     }
@@ -578,7 +581,10 @@ public class DeviceProductionService {
             }
         }
         if (status != null && !status.trim().isEmpty()) {
-            qw.lambda().eq(ManufacturedDevice::getStatus, status);
+            ManufacturedDeviceStatus statusEnum = ManufacturedDeviceStatus.fromCode(status);
+            if (statusEnum != null) {
+                qw.lambda().eq(ManufacturedDevice::getStatus, statusEnum);
+            }
         }
         if (vendorCode != null && !vendorCode.trim().isEmpty()) {
             qw.lambda().eq(ManufacturedDevice::getVendorCode, vendorCode);
@@ -614,7 +620,10 @@ public class DeviceProductionService {
             }
         }
         if (status != null && !status.trim().isEmpty()) {
-            countQw.lambda().eq(ManufacturedDevice::getStatus, status);
+            ManufacturedDeviceStatus statusEnum = ManufacturedDeviceStatus.fromCode(status);
+            if (statusEnum != null) {
+                countQw.lambda().eq(ManufacturedDevice::getStatus, statusEnum);
+            }
         }
         if (vendorCode != null && !vendorCode.trim().isEmpty()) {
             countQw.lambda().eq(ManufacturedDevice::getVendorCode, vendorCode);
@@ -645,8 +654,8 @@ public class DeviceProductionService {
 
         device.setCreatedAt(new Date());
         device.setUpdatedAt(new Date());
-        if (device.getStatus() == null || device.getStatus().trim().isEmpty()) {
-            device.setStatus("manufactured");
+        if (device.getStatus() == null) {
+            device.setStatus(ManufacturedDeviceStatus.MANUFACTURED);
         }
         deviceRepository.insert(device);
         return device;
@@ -700,7 +709,10 @@ public class DeviceProductionService {
             }
         }
         if (status != null && !status.trim().isEmpty()) {
-            qw.lambda().eq(ManufacturedDevice::getStatus, status);
+            ManufacturedDeviceStatus statusEnum = ManufacturedDeviceStatus.fromCode(status);
+            if (statusEnum != null) {
+                qw.lambda().eq(ManufacturedDevice::getStatus, statusEnum);
+            }
         }
         qw.lambda().orderByDesc(ManufacturedDevice::getCreatedAt);
         return deviceRepository.selectList(qw);

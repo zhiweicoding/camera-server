@@ -14,6 +14,7 @@ import cn.jpush.api.push.model.notification.AndroidNotification;
 import cn.jpush.api.push.model.notification.IosNotification;
 import cn.jpush.api.push.model.notification.Notification;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.config.JPushConfig;
 import com.pura365.camera.domain.UserPushToken;
 import com.pura365.camera.repository.UserPushTokenRepository;
@@ -87,7 +88,7 @@ public class JPushService {
         // 获取所有用户的推送token
         LambdaQueryWrapper<UserPushToken> wrapper = new LambdaQueryWrapper<>();
         wrapper.in(UserPushToken::getUserId, userIds)
-               .eq(UserPushToken::getEnabled, 1);
+               .eq(UserPushToken::getEnabled, EnableStatus.ENABLED);
         List<UserPushToken> tokens = userPushTokenRepository.selectList(wrapper);
 
         if (tokens.isEmpty()) {
@@ -168,7 +169,7 @@ public class JPushService {
     private List<UserPushToken> getUserPushTokens(Long userId) {
         LambdaQueryWrapper<UserPushToken> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(UserPushToken::getUserId, userId)
-               .eq(UserPushToken::getEnabled, 1);
+               .eq(UserPushToken::getEnabled, EnableStatus.ENABLED);
         return userPushTokenRepository.selectList(wrapper);
     }
 }

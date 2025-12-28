@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.pura365.camera.enums.DeviceSharePermission;
+import com.pura365.camera.enums.UserDeviceRole;
 import lombok.Data;
 
 import java.util.Date;
@@ -27,13 +29,13 @@ public class UserDevice {
     @TableField("device_id")
     private String deviceId;
 
-    /** 角色: owner/viewer */
+    /** 角色: OWNER-所有者, VIEWER-查看者 */
     @TableField("role")
-    private String role;
+    private UserDeviceRole role;
 
-    /** 权限: view_only-仅查看, full_control-完全控制 */
+    /** 权限: VIEW_ONLY-仅查看, FULL_CONTROL-完全控制 */
     @TableField("permission")
-    private String permission;
+    private DeviceSharePermission permission;
 
     /** 创建时间 */
     @TableField("created_at")

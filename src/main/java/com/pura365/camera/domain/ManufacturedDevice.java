@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.pura365.camera.enums.ManufacturedDeviceStatus;
 import lombok.Data;
 
 import java.util.Date;
@@ -59,9 +60,9 @@ public class ManufacturedDevice {
     @TableField("mac_address")
     private String macAddress;
 
-    /** 状态: manufactured/activated/bound */
+    /** 状态: MANUFACTURED-已生产, ACTIVATED-已激活, BOUND-已绑定 */
     @TableField("status")
-    private String status;
+    private ManufacturedDeviceStatus status;
 
     /** 生产时间 */
     @TableField("manufactured_at")

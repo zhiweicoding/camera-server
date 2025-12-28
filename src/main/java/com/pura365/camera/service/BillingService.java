@@ -2,6 +2,7 @@ package com.pura365.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.*;
+import com.pura365.camera.enums.PaymentOrderStatus;
 import com.pura365.camera.repository.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,7 +43,7 @@ public class BillingService {
      */
     public Map<String, Object> getVendorBillingSummary(String vendorCode, Date startDate, Date endDate) {
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
-        qw.lambda().eq(PaymentOrder::getStatus, "paid");
+        qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
         if (vendorCode != null && !vendorCode.trim().isEmpty()) {
             qw.lambda().eq(PaymentOrder::getVendorCode, vendorCode);
         }
@@ -114,7 +115,7 @@ public class BillingService {
      */
     public Map<String, Object> getSalesmanBillingSummary(String vendorCode, Long salesmanId, Date startDate, Date endDate) {
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
-        qw.lambda().eq(PaymentOrder::getStatus, "paid")
+        qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID)
                 .isNotNull(PaymentOrder::getSalesmanId);
         if (vendorCode != null && !vendorCode.trim().isEmpty()) {
             qw.lambda().eq(PaymentOrder::getVendorCode, vendorCode);
@@ -180,7 +181,7 @@ public class BillingService {
      */
     public List<Map<String, Object>> getOrderDetails(String vendorCode, Long salesmanId, Date startDate, Date endDate) {
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
-        qw.lambda().eq(PaymentOrder::getStatus, "paid");
+        qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
         if (vendorCode != null && !vendorCode.trim().isEmpty()) {
             qw.lambda().eq(PaymentOrder::getVendorCode, vendorCode);
         }
@@ -237,7 +238,10 @@ public class BillingService {
             qw.lambda().like(PaymentOrder::getDeviceId, deviceId);
         }
         if (status != null && !status.trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getStatus, status);
+            PaymentOrderStatus statusEnum = PaymentOrderStatus.fromCode(status);
+            if (statusEnum != null) {
+                qw.lambda().eq(PaymentOrder::getStatus, statusEnum);
+            }
         }
         if (startDate != null) {
             qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
@@ -264,7 +268,10 @@ public class BillingService {
             countQw.lambda().like(PaymentOrder::getDeviceId, deviceId);
         }
         if (status != null && !status.trim().isEmpty()) {
-            countQw.lambda().eq(PaymentOrder::getStatus, status);
+            PaymentOrderStatus statusEnum = PaymentOrderStatus.fromCode(status);
+            if (statusEnum != null) {
+                countQw.lambda().eq(PaymentOrder::getStatus, statusEnum);
+            }
         }
         if (startDate != null) {
             countQw.lambda().ge(PaymentOrder::getPaidAt, startDate);
@@ -295,10 +302,10 @@ public class BillingService {
         if (order == null) {
             throw new RuntimeException("订单不存在");
         }
-        if (!"paid".equals(order.getStatus())) {
+        if (order.getStatus() != PaymentOrderStatus.PAID) {
             throw new RuntimeException("只有已支付的订单才能退款");
         }
-        order.setStatus("refunded");
+        order.setStatus(PaymentOrderStatus.REFUNDED);
         order.setRefundAt(new Date());
         order.setRefundReason(reason);
         order.setUpdatedAt(new Date());
@@ -325,7 +332,7 @@ public class BillingService {
         for (ManufacturedDevice device : devices) {
             QueryWrapper<PaymentOrder> orderQw = new QueryWrapper<>();
             orderQw.lambda().eq(PaymentOrder::getDeviceId, device.getDeviceId())
-                    .eq(PaymentOrder::getStatus, "paid");
+                    .eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
             if (startDate != null) {
                 orderQw.lambda().ge(PaymentOrder::getPaidAt, startDate);
             }

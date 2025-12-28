@@ -2,6 +2,7 @@ package com.pura365.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.SysDict;
+import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.repository.SysDictRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,7 +31,7 @@ public class SysDictService {
     public List<SysDict> listByCategory(String category) {
         QueryWrapper<SysDict> qw = new QueryWrapper<>();
         qw.lambda().eq(SysDict::getCategory, category)
-                .eq(SysDict::getStatus, 1)
+                .eq(SysDict::getStatus, EnableStatus.ENABLED)
                 .orderByAsc(SysDict::getSortOrder);
         return dictRepository.selectList(qw);
     }
@@ -64,7 +65,7 @@ public class SysDictService {
             qw.lambda().like(SysDict::getCode, code);
         }
         if (status != null) {
-            qw.lambda().eq(SysDict::getStatus, status);
+            qw.lambda().eq(SysDict::getStatus, EnableStatus.fromCode(status));
         }
         qw.lambda().orderByAsc(SysDict::getCategory).orderByAsc(SysDict::getSortOrder);
 
@@ -82,7 +83,7 @@ public class SysDictService {
             countQw.lambda().like(SysDict::getCode, code);
         }
         if (status != null) {
-            countQw.lambda().eq(SysDict::getStatus, status);
+            countQw.lambda().eq(SysDict::getStatus, EnableStatus.fromCode(status));
         }
         long total = dictRepository.selectCount(countQw);
 
@@ -128,7 +129,7 @@ public class SysDictService {
             throw new RuntimeException("该分类下代码已存在");
         }
         if (dict.getStatus() == null) {
-            dict.setStatus(1);
+            dict.setStatus(EnableStatus.ENABLED);
         }
         if (dict.getSortOrder() == null) {
             // 获取当前分类下最大排序号
@@ -193,7 +194,7 @@ public class SysDictService {
         if (dict == null) {
             throw new RuntimeException("字典项不存在");
         }
-        dict.setStatus(status);
+        dict.setStatus(EnableStatus.fromCode(status));
         dict.setUpdatedAt(new Date());
         dictRepository.updateById(dict);
         log.info("更新字典项状态: id={}, status={}", id, status);

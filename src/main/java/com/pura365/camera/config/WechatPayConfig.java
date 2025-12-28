@@ -31,6 +31,10 @@ public class WechatPayConfig {
     @Value("${wechat.pay.use-sandbox:true}")
     private Boolean useSandbox;
 
+    /** 是否跳过回调验证（开发测试用，生产环境必须为false） */
+    @Value("${wechat.pay.skip-verify:false}")
+    private Boolean skipVerify;
+
     /**
      * 创建WxPayService Bean
      */
@@ -67,5 +71,9 @@ public class WechatPayConfig {
     
     public Boolean getUseSandbox() {
         return useSandbox;
+    }
+
+    public Boolean getSkipVerify() {
+        return skipVerify != null && skipVerify;
     }
 }

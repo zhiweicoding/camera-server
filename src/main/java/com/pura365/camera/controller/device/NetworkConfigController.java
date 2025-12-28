@@ -6,6 +6,8 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.Device;
 import com.pura365.camera.domain.NetworkConfig;
+import com.pura365.camera.enums.DeviceOnlineStatus;
+import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.model.NetworkConfigRequest;
 import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.repository.NetworkConfigRepository;
@@ -57,7 +59,7 @@ public class NetworkConfigController {
             }
             device.setSsid(request.getSsid());
             device.setRegion(request.getRegion());
-            device.setEnabled(1);
+            device.setEnabled(EnableStatus.ENABLED);
 
             if (deviceRepository.selectById(device.getId()) == null) {
                 deviceRepository.insert(device);
@@ -125,7 +127,7 @@ public class NetworkConfigController {
             if (status == 1) {
                 Device device = deviceRepository.selectById(deviceId);
                 if (device != null) {
-                    device.setStatus(1); // 在线/已激活
+                    device.setStatus(DeviceOnlineStatus.ONLINE);
                     deviceRepository.updateById(device);
                 }
             }

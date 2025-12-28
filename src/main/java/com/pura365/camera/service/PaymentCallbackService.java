@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.pura365.camera.domain.CloudSubscription;
 import com.pura365.camera.domain.Device;
 import com.pura365.camera.domain.PaymentOrder;
+import com.pura365.camera.enums.PaymentOrderStatus;
 import com.pura365.camera.repository.CloudSubscriptionRepository;
 import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.repository.PaymentOrderRepository;
@@ -64,13 +65,13 @@ public class PaymentCallbackService {
         }
 
         // 防止重复处理
-        if ("paid".equals(order.getStatus())) {
+        if (PaymentOrderStatus.PAID == order.getStatus()) {
             logger.warn("订单已支付,跳过处理: orderId={}", orderId);
             return true;
         }
 
         // 更新订单状态
-        order.setStatus("paid");
+        order.setStatus(PaymentOrderStatus.PAID);
         order.setThirdOrderId(transactionId);
         order.setPaidAt(new Date());
         order.setUpdatedAt(new Date());

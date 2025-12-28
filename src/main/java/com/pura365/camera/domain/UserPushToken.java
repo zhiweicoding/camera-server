@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.pura365.camera.enums.EnableStatus;
 import lombok.Data;
 
 import java.util.Date;
@@ -45,7 +46,7 @@ public class UserPushToken {
 
     /** 是否启用: 0-禁用 1-启用 */
     @TableField("enabled")
-    private Integer enabled;
+    private EnableStatus enabled;
 
     /** 创建时间 */
     @TableField("created_at")

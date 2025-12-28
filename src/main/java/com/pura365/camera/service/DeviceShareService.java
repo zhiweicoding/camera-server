@@ -4,6 +4,9 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.DeviceShare;
 import com.pura365.camera.domain.User;
 import com.pura365.camera.domain.UserDevice;
+import com.pura365.camera.enums.DeviceSharePermission;
+import com.pura365.camera.enums.DeviceShareStatus;
+import com.pura365.camera.enums.UserDeviceRole;
 import com.pura365.camera.repository.DeviceShareRepository;
 import com.pura365.camera.repository.UserDeviceRepository;
 import com.pura365.camera.repository.UserRepository;
@@ -42,7 +45,7 @@ public class DeviceShareService {
         QueryWrapper<UserDevice> qw = new QueryWrapper<>();
         qw.lambda().eq(UserDevice::getUserId, userId)
                 .eq(UserDevice::getDeviceId, deviceId)
-                .eq(UserDevice::getRole, "owner");
+                .eq(UserDevice::getRole, UserDeviceRole.OWNER);
         return userDeviceRepository.selectCount(qw) > 0;
     }
 
@@ -56,8 +59,9 @@ public class DeviceShareService {
      */
     public Map<String, Object> generateShareCode(Long ownerUserId, String deviceId, String permission, String targetAccount) {
         // 验证权限参数
-        if (!"view_only".equals(permission) && !"full_control".equals(permission)) {
-            permission = "view_only"; // 默认仅查看
+        DeviceSharePermission sharePermission = DeviceSharePermission.fromCode(permission);
+        if (sharePermission == null) {
+            sharePermission = DeviceSharePermission.VIEW_ONLY; // 默认仅查看
         }
 
         User targetUser = null;
@@ -88,8 +92,8 @@ public class DeviceShareService {
         share.setShareCode(shareCode);
         share.setDeviceId(deviceId);
         share.setOwnerUserId(ownerUserId);
-        share.setPermission(permission);
-        share.setStatus("pending");
+        share.setPermission(sharePermission);
+        share.setStatus(DeviceShareStatus.PENDING);
         // 如果指定了目标用户，则在生成时就锁定 shared_user_id
         if (targetUser != null) {
             share.setSharedUserId(targetUser.getId());
@@ -104,11 +108,11 @@ public class DeviceShareService {
         deviceShareRepository.insert(share);
 
         log.info("生成分享码 - ownerUserId: {}, deviceId: {}, shareCode: {}, permission: {}, targetUserId: {}",
-                ownerUserId, deviceId, shareCode, permission, targetUser != null ? targetUser.getId() : null);
+                ownerUserId, deviceId, shareCode, sharePermission.getCode(), targetUser != null ? targetUser.getId() : null);
 
         Map<String, Object> result = new HashMap<>();
         result.put("share_code", shareCode);
-        result.put("permission", permission);
+        result.put("permission", sharePermission.getCode());
         result.put("expire_at", share.getExpireAt());
         // 二维码内容：可以是分享码本身，前端生成二维码
         result.put("qrcode_content", "PURA365_SHARE:" + shareCode);
@@ -141,13 +145,13 @@ public class DeviceShareService {
         }
 
         // 检查状态
-        if (!"pending".equals(share.getStatus())) {
+        if (DeviceShareStatus.PENDING != share.getStatus()) {
             throw new RuntimeException("分享码已使用或已失效");
         }
 
         // 检查是否过期
         if (share.getExpireAt() != null && share.getExpireAt().before(new Date())) {
-            share.setStatus("expired");
+            share.setStatus(DeviceShareStatus.EXPIRED);
             deviceShareRepository.updateById(share);
             throw new RuntimeException("分享码已过期");
         }
@@ -174,14 +178,14 @@ public class DeviceShareService {
         UserDevice userDevice = new UserDevice();
         userDevice.setUserId(userId);
         userDevice.setDeviceId(share.getDeviceId());
-        userDevice.setRole("viewer"); // 被分享者角色为viewer
+        userDevice.setRole(UserDeviceRole.VIEWER); // 被分享者角色为viewer
         userDevice.setPermission(share.getPermission());
         userDevice.setCreatedAt(new Date());
 
         userDeviceRepository.insert(userDevice);
 
         // 更新分享记录状态
-        share.setStatus("used");
+        share.setStatus(DeviceShareStatus.USED);
         // 如果之前未指定 shared_user_id，则在此时写入扫码用户ID
         if (share.getSharedUserId() == null) {
             share.setSharedUserId(userId);
@@ -195,7 +199,7 @@ public class DeviceShareService {
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
         result.put("device_id", share.getDeviceId());
-        result.put("permission", share.getPermission());
+        result.put("permission", share.getPermission() != null ? share.getPermission().getCode() : null);
 
         return result;
     }
@@ -207,14 +211,14 @@ public class DeviceShareService {
         // 查询所有被分享的用户
         QueryWrapper<UserDevice> qw = new QueryWrapper<>();
         qw.lambda().eq(UserDevice::getDeviceId, deviceId)
-                .eq(UserDevice::getRole, "viewer");
+                .eq(UserDevice::getRole, UserDeviceRole.VIEWER);
         List<UserDevice> viewers = userDeviceRepository.selectList(qw);
 
         List<Map<String, Object>> result = new ArrayList<>();
         for (UserDevice ud : viewers) {
             Map<String, Object> item = new HashMap<>();
             item.put("user_id", ud.getUserId());
-            item.put("permission", ud.getPermission());
+            item.put("permission", ud.getPermission() != null ? ud.getPermission().getCode() : null);
             item.put("created_at", ud.getCreatedAt());
 
             // 获取用户信息
@@ -245,7 +249,7 @@ public class DeviceShareService {
         QueryWrapper<UserDevice> qw = new QueryWrapper<>();
         qw.lambda().eq(UserDevice::getUserId, targetUserId)
                 .eq(UserDevice::getDeviceId, deviceId)
-                .eq(UserDevice::getRole, "viewer");
+                .eq(UserDevice::getRole, UserDeviceRole.VIEWER);
         int deleted = userDeviceRepository.delete(qw);
 
         if (deleted > 0) {
@@ -275,14 +279,14 @@ public class DeviceShareService {
         QueryWrapper<UserDevice> qw = new QueryWrapper<>();
         qw.lambda().eq(UserDevice::getUserId, targetUserId)
                 .eq(UserDevice::getDeviceId, deviceId)
-                .eq(UserDevice::getRole, "viewer");
+                .eq(UserDevice::getRole, UserDeviceRole.VIEWER);
         UserDevice ud = userDeviceRepository.selectOne(qw);
 
         if (ud == null) {
             throw new RuntimeException("分享记录不存在");
         }
 
-        ud.setPermission(permission);
+        ud.setPermission(DeviceSharePermission.fromCode(permission));
         userDeviceRepository.updateById(ud);
 
         log.info("更新分享权限 - deviceId: {}, targetUserId: {}, permission: {}",
@@ -305,11 +309,11 @@ public class DeviceShareService {
             return null;
         }
 
-        if ("owner".equals(ud.getRole())) {
+        if (UserDeviceRole.OWNER == ud.getRole()) {
             return "owner";
         }
 
-        return ud.getPermission();
+        return ud.getPermission() != null ? ud.getPermission().getCode() : null;
     }
 
     /**

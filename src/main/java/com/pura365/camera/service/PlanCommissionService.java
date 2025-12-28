@@ -3,6 +3,9 @@ package com.pura365.camera.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.CloudPlan;
 import com.pura365.camera.domain.PlanCommission;
+import com.pura365.camera.enums.CommissionFeeType;
+import com.pura365.camera.enums.CommissionProfitMode;
+import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.model.report.PageResult;
 import com.pura365.camera.model.report.PlanCommissionRequest;
 import com.pura365.camera.model.report.PlanCommissionVO;
@@ -51,7 +54,7 @@ public class PlanCommissionService {
             qw.lambda().like(PlanCommission::getPlanId, planId);
         }
         if (status != null) {
-            qw.lambda().eq(PlanCommission::getStatus, status);
+            qw.lambda().eq(PlanCommission::getStatus, EnableStatus.fromCode(status));
         }
         qw.lambda().orderByDesc(PlanCommission::getCreatedAt);
 
@@ -66,7 +69,7 @@ public class PlanCommissionService {
             countQw.lambda().like(PlanCommission::getPlanId, planId);
         }
         if (status != null) {
-            countQw.lambda().eq(PlanCommission::getStatus, status);
+            countQw.lambda().eq(PlanCommission::getStatus, EnableStatus.fromCode(status));
         }
         long total = commissionRepository.selectCount(countQw);
 
@@ -91,7 +94,7 @@ public class PlanCommissionService {
      */
     public List<PlanCommissionVO> listActiveCommissions() {
         QueryWrapper<PlanCommission> qw = new QueryWrapper<>();
-        qw.lambda().eq(PlanCommission::getStatus, 1);
+        qw.lambda().eq(PlanCommission::getStatus, EnableStatus.ENABLED);
         List<PlanCommission> list = commissionRepository.selectList(qw);
 
         List<PlanCommissionVO> voList = new ArrayList<>();
@@ -152,20 +155,24 @@ public class PlanCommissionService {
         }
 
         PlanCommission commission = new PlanCommission();
-        BeanUtils.copyProperties(request, commission);
+        // 手动复制属性，避免类型不匹配
+        commission.setPlanId(request.getPlanId());
+        commission.setPayeeEntity(request.getPayeeEntity());
+        commission.setFeeRate(request.getFeeRate());
+        commission.setFeeFixed(request.getFeeFixed());
+        commission.setRebateRate(request.getRebateRate());
+        commission.setPlanCost(request.getPlanCost());
+        commission.setInstallerRate(request.getInstallerRate());
+        commission.setLevel1Rate(request.getLevel1Rate());
+        commission.setLevel2Rate(request.getLevel2Rate());
+        commission.setRemark(request.getRemark());
         commission.setCreatedAt(new Date());
         commission.setUpdatedAt(new Date());
 
-        // 设置默认值
-        if (commission.getStatus() == null) {
-            commission.setStatus(1);
-        }
-        if (commission.getFeeType() == null) {
-            commission.setFeeType("fixed");
-        }
-        if (commission.getProfitMode() == null) {
-            commission.setProfitMode("profit");
-        }
+        // 设置枚举类型字段（从字符串转换）
+        commission.setStatus(request.getStatus() != null ? EnableStatus.fromCode(request.getStatus()) : EnableStatus.ENABLED);
+        commission.setFeeType(request.getFeeType() != null ? CommissionFeeType.fromCode(request.getFeeType()) : CommissionFeeType.FIXED);
+        commission.setProfitMode(request.getProfitMode() != null ? CommissionProfitMode.fromCode(request.getProfitMode()) : CommissionProfitMode.PROFIT);
 
         commissionRepository.insert(commission);
         log.info("创建套餐分润配置: planId={}, id={}", request.getPlanId(), commission.getId());
@@ -207,7 +214,7 @@ public class PlanCommissionService {
             existing.setPayeeEntity(request.getPayeeEntity());
         }
         if (request.getFeeType() != null) {
-            existing.setFeeType(request.getFeeType());
+            existing.setFeeType(CommissionFeeType.fromCode(request.getFeeType()));
         }
         if (request.getFeeRate() != null) {
             existing.setFeeRate(request.getFeeRate());
@@ -222,7 +229,7 @@ public class PlanCommissionService {
             existing.setPlanCost(request.getPlanCost());
         }
         if (request.getProfitMode() != null) {
-            existing.setProfitMode(request.getProfitMode());
+            existing.setProfitMode(CommissionProfitMode.fromCode(request.getProfitMode()));
         }
         if (request.getInstallerRate() != null) {
             existing.setInstallerRate(request.getInstallerRate());
@@ -234,7 +241,7 @@ public class PlanCommissionService {
             existing.setLevel2Rate(request.getLevel2Rate());
         }
         if (request.getStatus() != null) {
-            existing.setStatus(request.getStatus());
+            existing.setStatus(EnableStatus.fromCode(request.getStatus()));
         }
         if (request.getRemark() != null) {
             existing.setRemark(request.getRemark());
@@ -271,7 +278,7 @@ public class PlanCommissionService {
             throw new RuntimeException("套餐分润配置不存在");
         }
 
-        existing.setStatus(status);
+        existing.setStatus(EnableStatus.fromCode(status));
         existing.setUpdatedAt(new Date());
         commissionRepository.updateById(existing);
         log.info("更新套餐分润配置状态: id={}, status={}", id, status);
@@ -282,7 +289,25 @@ public class PlanCommissionService {
      */
     private PlanCommissionVO convertToVO(PlanCommission commission) {
         PlanCommissionVO vo = new PlanCommissionVO();
-        BeanUtils.copyProperties(commission, vo);
+        // 手动设置基本字段（避免 BeanUtils 无法处理枚举类型转换）
+        vo.setId(commission.getId());
+        vo.setPlanId(commission.getPlanId());
+        vo.setPayeeEntity(commission.getPayeeEntity());
+        vo.setFeeRate(commission.getFeeRate());
+        vo.setFeeFixed(commission.getFeeFixed());
+        vo.setRebateRate(commission.getRebateRate());
+        vo.setPlanCost(commission.getPlanCost());
+        vo.setInstallerRate(commission.getInstallerRate());
+        vo.setLevel1Rate(commission.getLevel1Rate());
+        vo.setLevel2Rate(commission.getLevel2Rate());
+        vo.setRemark(commission.getRemark());
+        vo.setCreatedAt(commission.getCreatedAt());
+        vo.setUpdatedAt(commission.getUpdatedAt());
+
+        // 枚举类型字段转换为 String/Integer
+        vo.setFeeType(commission.getFeeType() != null ? commission.getFeeType().getCode() : null);
+        vo.setProfitMode(commission.getProfitMode() != null ? commission.getProfitMode().getCode() : null);
+        vo.setStatus(commission.getStatus() != null ? commission.getStatus().getCode() : null);
 
         // 查询套餐信息
         QueryWrapper<CloudPlan> planQw = new QueryWrapper<>();
@@ -290,7 +315,7 @@ public class PlanCommissionService {
         CloudPlan plan = planRepository.selectOne(planQw);
         if (plan != null) {
             vo.setPlanName(plan.getName());
-            vo.setPlanType(plan.getType());
+            vo.setPlanType(plan.getType() != null ? plan.getType().getCode() : null);
             vo.setPlanTypeName(getPlanTypeName(plan.getType()));
             vo.setPlanPrice(plan.getPrice());
         }
@@ -303,7 +328,7 @@ public class PlanCommissionService {
         vo.setProfitModeName(getProfitModeName(commission.getProfitMode()));
 
         // 状态名称
-        vo.setStatusName(commission.getStatus() != null && commission.getStatus() == 1 ? "启用" : "禁用");
+        vo.setStatusName(commission.getStatus() == EnableStatus.ENABLED ? "启用" : "禁用");
 
         return vo;
     }
@@ -316,11 +341,11 @@ public class PlanCommissionService {
             return "-";
         }
 
-        String feeType = commission.getFeeType();
+        CommissionFeeType feeType = commission.getFeeType();
         BigDecimal feeRate = commission.getFeeRate();
         BigDecimal feeFixed = commission.getFeeFixed();
 
-        if ("mixed".equals(feeType) && feeRate != null && feeFixed != null) {
+        if (CommissionFeeType.MIXED == feeType && feeRate != null && feeFixed != null) {
             // 混合类型：如 4.4% + 0.3USD
             return feeRate + "% + " + feeFixed + "USD";
         } else if (feeRate != null) {
@@ -334,11 +359,12 @@ public class PlanCommissionService {
     /**
      * 获取套餐类型名称
      */
-    public String getPlanTypeName(String type) {
+    public String getPlanTypeName(Object type) {
         if (type == null) {
             return "未知";
         }
-        switch (type) {
+        String typeStr = type.toString();
+        switch (typeStr) {
             case "motion":
                 return "动态录像";
             case "fulltime":
@@ -346,41 +372,27 @@ public class PlanCommissionService {
             case "traffic":
                 return "4G流量";
             default:
-                return type;
+                return typeStr;
         }
     }
 
     /**
      * 获取手续费类型名称
      */
-    private String getFeeTypeName(String feeType) {
+    private String getFeeTypeName(CommissionFeeType feeType) {
         if (feeType == null) {
             return "未知";
         }
-        switch (feeType) {
-            case "fixed":
-                return "固定比例";
-            case "mixed":
-                return "混合";
-            default:
-                return feeType;
-        }
+        return feeType.getDescription();
     }
 
     /**
      * 获取分润模式名称
      */
-    public String getProfitModeName(String profitMode) {
+    public String getProfitModeName(CommissionProfitMode profitMode) {
         if (profitMode == null) {
             return "未知";
         }
-        switch (profitMode) {
-            case "profit":
-                return "按营收利润分润";
-            case "revenue":
-                return "按营收分润";
-            default:
-                return profitMode;
-        }
+        return profitMode.getDescription();
     }
 }

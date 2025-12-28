@@ -3,6 +3,7 @@ package com.pura365.camera.controller.app;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.pura365.camera.domain.UserPushToken;
+import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.model.ApiResponse;
 import com.pura365.camera.model.push.RegisterPushTokenRequest;
 import com.pura365.camera.repository.UserPushTokenRepository;
@@ -70,7 +71,7 @@ public class PushController {
             existingToken.setAppVersion(request.getAppVersion());
             existingToken.setDeviceModel(request.getDeviceModel());
             existingToken.setOsVersion(request.getOsVersion());
-            existingToken.setEnabled(1);
+            existingToken.setEnabled(EnableStatus.ENABLED);
             existingToken.setUpdatedAt(new Date());
             userPushTokenRepository.updateById(existingToken);
             log.info("更新推送Token成功 - userId={}, tokenId={}", currentUserId, existingToken.getId());
@@ -83,7 +84,7 @@ public class PushController {
             token.setAppVersion(request.getAppVersion());
             token.setDeviceModel(request.getDeviceModel());
             token.setOsVersion(request.getOsVersion());
-            token.setEnabled(1);
+            token.setEnabled(EnableStatus.ENABLED);
             token.setCreatedAt(new Date());
             token.setUpdatedAt(new Date());
             userPushTokenRepository.insert(token);
@@ -114,7 +115,7 @@ public class PushController {
         LambdaUpdateWrapper<UserPushToken> wrapper = new LambdaUpdateWrapper<>();
         wrapper.eq(UserPushToken::getUserId, currentUserId)
                .eq(UserPushToken::getRegistrationId, registrationId)
-               .set(UserPushToken::getEnabled, 0);
+               .set(UserPushToken::getEnabled, EnableStatus.DISABLED);
         
         userPushTokenRepository.update(null, wrapper);
         log.info("注销推送Token成功 - userId={}, registrationId={}", currentUserId, registrationId);

@@ -4,6 +4,9 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.pura365.camera.enums.CommissionFeeType;
+import com.pura365.camera.enums.CommissionProfitMode;
+import com.pura365.camera.enums.EnableStatus;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -29,9 +32,9 @@ public class PlanCommission {
     @TableField("payee_entity")
     private String payeeEntity;
 
-    /** 手续费类型：fixed-固定比例，mixed-混合（百分比+固定金额） */
+    /** 手续费类型: FIXED-固定比例, MIXED-混合（百分比+固定金额） */
     @TableField("fee_type")
-    private String feeType;
+    private CommissionFeeType feeType;
 
     /** 手续费比例（百分比，如30表示30%） */
     @TableField("fee_rate")
@@ -49,9 +52,9 @@ public class PlanCommission {
     @TableField("plan_cost")
     private BigDecimal planCost;
 
-    /** 分润模式：profit-按营收利润分润，revenue-按营收分润 */
+    /** 分润模式: PROFIT-按营收利润分润, REVENUE-按营收分润 */
     @TableField("profit_mode")
-    private String profitMode;
+    private CommissionProfitMode profitMode;
 
     /** 装机商分润比例（百分比） */
     @TableField("installer_rate")
@@ -65,9 +68,9 @@ public class PlanCommission {
     @TableField("level2_rate")
     private BigDecimal level2Rate;
 
-    /** 状态: 1-启用, 0-禁用 */
+    /** 状态: ENABLED-启用, DISABLED-禁用 */
     @TableField("status")
-    private Integer status;
+    private EnableStatus status;
 
     /** 备注说明 */
     @TableField("remark")

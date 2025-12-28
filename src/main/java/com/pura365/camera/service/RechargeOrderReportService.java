@@ -2,6 +2,9 @@ package com.pura365.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.*;
+import com.pura365.camera.enums.CloudPlanType;
+import com.pura365.camera.enums.CommissionFeeType;
+import com.pura365.camera.enums.PaymentOrderStatus;
 import com.pura365.camera.model.report.PageResult;
 import com.pura365.camera.model.report.RechargeOrderQueryRequest;
 import com.pura365.camera.model.report.RechargeOrderReportVO;
@@ -266,7 +269,10 @@ public class RechargeOrderReportService {
             qw.lambda().eq(PaymentOrder::getCurrency, request.getCurrency());
         }
         if (request.getStatus() != null && !request.getStatus().trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getStatus, request.getStatus());
+            PaymentOrderStatus statusEnum = PaymentOrderStatus.fromCode(request.getStatus());
+            if (statusEnum != null) {
+                qw.lambda().eq(PaymentOrder::getStatus, statusEnum);
+            }
         }
 
         // 下单时间范围
@@ -300,7 +306,7 @@ public class RechargeOrderReportService {
         vo.setOrderId(order.getOrderId());
         vo.setCreatedAt(order.getCreatedAt());
         vo.setDeviceId(order.getDeviceId());
-        vo.setStatus(order.getStatus());
+        vo.setStatus(order.getStatus() != null ? order.getStatus().getCode() : null);
         vo.setStatusName(getStatusName(order.getStatus()));
 
         // 优先使用订单表的快照字段
@@ -323,7 +329,7 @@ public class RechargeOrderReportService {
         CloudPlan plan = getPlanByPlanId(order.getProductId());
         if (plan != null) {
             vo.setPlanName(plan.getName());
-            vo.setPlanType(plan.getType());
+            vo.setPlanType(plan.getType() != null ? plan.getType().getCode() : null);
             vo.setPlanTypeName(commissionService.getPlanTypeName(plan.getType()));
             vo.setCloudType(getCloudType(plan.getType()));
             vo.setOriginalPrice(plan.getPrice());
@@ -359,7 +365,7 @@ public class RechargeOrderReportService {
             vo.setProfitAmount(profitAmount);
 
             // 分润模式
-            vo.setProfitMode(commission.getProfitMode());
+            vo.setProfitMode(commission.getProfitMode() != null ? commission.getProfitMode().getCode() : null);
             vo.setProfitModeName(commissionService.getProfitModeName(commission.getProfitMode()));
 
             // 分润比例和金额
@@ -401,11 +407,11 @@ public class RechargeOrderReportService {
         }
 
         BigDecimal fee = BigDecimal.ZERO;
-        String feeType = commission.getFeeType();
+        CommissionFeeType feeType = commission.getFeeType();
         BigDecimal feeRate = commission.getFeeRate();
         BigDecimal feeFixed = commission.getFeeFixed();
 
-        if ("mixed".equals(feeType) && feeRate != null && feeFixed != null) {
+        if (CommissionFeeType.MIXED == feeType && feeRate != null && feeFixed != null) {
             // 混合类型：百分比 + 固定金额
             fee = amount.multiply(feeRate).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP)
                     .add(feeFixed);
@@ -478,8 +484,8 @@ public class RechargeOrderReportService {
     /**
      * 获取云存类型
      */
-    private String getCloudType(String planType) {
-        if ("traffic".equals(planType)) {
+    private String getCloudType(CloudPlanType planType) {
+        if (CloudPlanType.TRAFFIC == planType) {
             return "流量";
         }
         return "云存";
@@ -526,20 +532,11 @@ public class RechargeOrderReportService {
     /**
      * 获取订单状态名称
      */
-    private String getStatusName(String status) {
+    private String getStatusName(PaymentOrderStatus status) {
         if (status == null) {
             return "未知";
         }
-        switch (status.toLowerCase()) {
-            case "pending":
-                return "待支付";
-            case "paid":
-                return "已支付";
-            case "refunded":
-                return "已退款";
-            default:
-                return status;
-        }
+        return status.getDescription();
     }
 
     /**

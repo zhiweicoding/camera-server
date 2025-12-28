@@ -7,6 +7,7 @@ import com.pura365.camera.domain.PaymentOrder;
 import com.pura365.camera.domain.PaymentWechat;
 import com.pura365.camera.domain.Salesman;
 import com.pura365.camera.domain.UserDevice;
+import com.pura365.camera.enums.PaymentOrderStatus;
 import com.pura365.camera.model.payment.*;
 import com.pura365.camera.repository.CloudPlanRepository;
 import com.pura365.camera.repository.ManufacturedDeviceRepository;
@@ -145,7 +146,7 @@ public class PaymentService {
         order.setProductId(request.getProductId());
         order.setAmount(amount);
         order.setCurrency(DEFAULT_CURRENCY);
-        order.setStatus("pending");
+        order.setStatus(PaymentOrderStatus.PENDING);
         order.setPaymentMethod(paymentMethod);
         order.setCreatedAt(new Date());
 
@@ -177,7 +178,7 @@ public class PaymentService {
                .eq(PaymentOrder::getDeviceId, deviceId)
                .eq(PaymentOrder::getProductType, productType)
                .eq(PaymentOrder::getProductId, productId)
-               .eq(PaymentOrder::getStatus, "pending")
+               .eq(PaymentOrder::getStatus, PaymentOrderStatus.PENDING)
                .last("LIMIT 1");
         return paymentOrderRepository.selectOne(wrapper);
     }
@@ -189,10 +190,10 @@ public class PaymentService {
         LambdaQueryWrapper<PaymentOrder> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(PaymentOrder::getUserId, userId)
                .eq(PaymentOrder::getDeviceId, deviceId)
-               .eq(PaymentOrder::getStatus, "pending");
+               .eq(PaymentOrder::getStatus, PaymentOrderStatus.PENDING);
         
         PaymentOrder update = new PaymentOrder();
-        update.setStatus("cancelled");
+        update.setStatus(PaymentOrderStatus.CANCELLED);
         update.setUpdatedAt(new Date());
         
         int count = paymentOrderRepository.update(update, wrapper);
@@ -216,7 +217,7 @@ public class PaymentService {
 
         OrderVO vo = new OrderVO();
         vo.setOrderId(order.getOrderId());
-        vo.setStatus(order.getStatus());
+        vo.setStatus(order.getStatus() != null ? order.getStatus().getCode() : null);
         vo.setAmount(order.getAmount());
         vo.setPaidAt(order.getPaidAt() != null ? formatIsoTime(order.getPaidAt()) : null);
         return vo;
@@ -345,7 +346,7 @@ public class PaymentService {
 
         // 更新订单状态
         if ("COMPLETED".equals(captureResult.getStatus())) {
-            order.setStatus("paid");
+            order.setStatus(PaymentOrderStatus.PAID);
             order.setPaidAt(new Date());
             order.setUpdatedAt(new Date());
             paymentOrderRepository.updateById(order);
@@ -383,13 +384,13 @@ public class PaymentService {
             return;
         }
 
-        if ("paid".equals(order.getStatus())) {
+        if (PaymentOrderStatus.PAID == order.getStatus()) {
             log.info("Order {} already paid, skip webhook", order.getOrderId());
             return;
         }
 
         // 更新订单状态
-        order.setStatus("paid");
+        order.setStatus(PaymentOrderStatus.PAID);
         order.setPaidAt(new Date());
         order.setUpdatedAt(new Date());
         paymentOrderRepository.updateById(order);
@@ -439,7 +440,7 @@ public class PaymentService {
         }
 
         // 模拟支付成功，更新订单状态
-        order.setStatus("paid");
+        order.setStatus(PaymentOrderStatus.PAID);
         order.setThirdOrderId("apple_" + order.getOrderId());
         order.setPaidAt(new Date());
         order.setUpdatedAt(new Date());

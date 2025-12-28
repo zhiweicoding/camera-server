@@ -94,12 +94,12 @@ public class CloudController {
                 item.setStorageDays(plan.getStorageDays());
                 item.setPrice(plan.getPrice());
                 item.setOriginalPrice(plan.getOriginalPrice());
-                item.setPeriod(plan.getPeriod());
+                item.setPeriod(plan.getPeriod() != null ? plan.getPeriod().getCode() : null);
                 item.setFeatures(parseFeatures(plan.getFeatures()));
-                item.setType(plan.getType());
+                item.setType(plan.getType() != null ? plan.getType().getCode() : null);
                 item.setSortOrder(plan.getSortOrder());
                 
-                String type = plan.getType() != null ? plan.getType() : "motion";
+                String type = plan.getType() != null ? plan.getType().getCode() : "motion";
                 if (groupedPlans.containsKey(type)) {
                     groupedPlans.get(type).add(item);
                 } else {

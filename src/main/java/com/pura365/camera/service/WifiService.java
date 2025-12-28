@@ -5,6 +5,10 @@ import com.pura365.camera.domain.Device;
 import com.pura365.camera.domain.DeviceBinding;
 import com.pura365.camera.domain.UserDevice;
 import com.pura365.camera.domain.WifiHistory;
+import com.pura365.camera.enums.DeviceBindingStatus;
+import com.pura365.camera.enums.DeviceOnlineStatus;
+import com.pura365.camera.enums.EnableStatus;
+import com.pura365.camera.enums.UserDeviceRole;
 import com.pura365.camera.model.wifi.BindDeviceRequest;
 import com.pura365.camera.model.wifi.BindingStatusVO;
 import com.pura365.camera.model.wifi.WifiInfoVO;
@@ -92,7 +96,7 @@ public class WifiService {
         return BindingStatusVO.builder()
                 .deviceId(device.getId())
                 .deviceName(device.getName())
-                .status("binding")
+                .status(DeviceBindingStatus.BINDING.getCode())
                 .progress(0)
                 .message("正在配置WiFi")
                 .build();
@@ -120,7 +124,7 @@ public class WifiService {
             log.warn("未找到绑定记录, userId={}, deviceId={}", userId, deviceId);
             return BindingStatusVO.builder()
                     .deviceId(deviceId)
-                    .status("binding")
+                    .status(DeviceBindingStatus.BINDING.getCode())
                     .progress(0)
                     .message("未找到绑定记录")
                     .build();
@@ -131,7 +135,7 @@ public class WifiService {
         
         return BindingStatusVO.builder()
                 .deviceId(deviceId)
-                .status(binding.getStatus())
+                .status(binding.getStatus() != null ? binding.getStatus().getCode() : null)
                 .progress(binding.getProgress())
                 .message(binding.getMessage())
                 .build();
@@ -148,8 +152,8 @@ public class WifiService {
             device.setId(deviceSn);
             device.setName(request.getDeviceName());
             device.setSsid(request.getWifiSsid());
-            device.setStatus(1);  // 新设备初始为离线，等待MQTT连接后更新为在线
-            device.setEnabled(1);
+            device.setStatus(DeviceOnlineStatus.ONLINE);  // 新设备初始为在线
+            device.setEnabled(EnableStatus.ENABLED);
             device.setLastOnlineTime(now);
             device.setLastHeartbeatTime(now);
             device.setCreatedAt(LocalDateTime.now());
@@ -170,8 +174,8 @@ public class WifiService {
             }
             device.setLastOnlineTime(now);
             device.setLastHeartbeatTime(now);
-            device.setStatus(1);  // 新设备初始为离线，等待MQTT连接后更新为在线
-            device.setEnabled(1);
+            device.setStatus(DeviceOnlineStatus.ONLINE);  // 新设备初始为在线
+            device.setEnabled(EnableStatus.ENABLED);
             if (needUpdate) {
                 device.setUpdatedAt(LocalDateTime.now());
                 deviceRepository.updateById(device);
@@ -192,7 +196,7 @@ public class WifiService {
             UserDevice ud = new UserDevice();
             ud.setUserId(userId);
             ud.setDeviceId(deviceSn);
-            ud.setRole("owner");
+            ud.setRole(UserDeviceRole.OWNER);
             userDeviceRepository.insert(ud);
         } else {
             log.debug("用户设备绑定关系已存在, userId={}, deviceSn={}", userId, deviceSn);
@@ -206,7 +210,7 @@ public class WifiService {
         binding.setUserId(userId);
         binding.setWifiSsid(request.getWifiSsid());
         binding.setWifiPassword(request.getWifiPassword());
-        binding.setStatus("binding");
+        binding.setStatus(DeviceBindingStatus.BINDING);
         binding.setProgress(0);
         binding.setMessage("正在配置WiFi");
         deviceBindingRepository.insert(binding);

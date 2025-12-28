@@ -3,6 +3,10 @@ package com.pura365.camera.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.*;
+import com.pura365.camera.enums.DeviceBindingStatus;
+import com.pura365.camera.enums.DeviceOnlineStatus;
+import com.pura365.camera.enums.EnableStatus;
+import com.pura365.camera.enums.UserDeviceRole;
 import com.pura365.camera.model.device.*;
 import com.pura365.camera.repository.*;
 import com.pura365.camera.util.TimeValidator;
@@ -30,30 +34,6 @@ public class DeviceService {
 
     private static final Logger log = LoggerFactory.getLogger(DeviceService.class);
 
-    /**
-     * 设备状态：在线
-     */
-    private static final int DEVICE_STATUS_ONLINE = 1;
-
-    /**
-     * 设备状态：离线
-     */
-    private static final int DEVICE_STATUS_OFFLINE = 0;
-
-    /**
-     * 设备启用状态：启用
-     */
-    private static final int DEVICE_ENABLED = 1;
-
-    /**
-     * 用户设备角色：所有者
-     */
-    private static final String USER_DEVICE_ROLE_OWNER = "owner";
-
-    /**
-     * 绑定状态：成功
-     */
-    private static final String BINDING_STATUS_SUCCESS = "success";
 
     /**
      * 绑定进度：完成
@@ -342,7 +322,7 @@ public class DeviceService {
         vo.setId(device.getId());
         vo.setName(device.getName());
         vo.setModel(null); // 暂无型号字段
-        vo.setStatus(isOnline(device) ? "online" : "offline");
+        vo.setStatus(device.getStatus() != null ? device.getStatus().toDisplayValue() : "offline");
         // 云存储状态
 //        CloudSubscription subscription = findActiveSubscription(userId, device.getId());
 //        boolean hasCloud = subscription != null &&
@@ -376,7 +356,7 @@ public class DeviceService {
         vo.setModel(null); // 暂无型号字段
         vo.setMac(device.getMac());
         vo.setFirmwareVersion(device.getFirmwareVersion());
-        vo.setStatus(isOnline(device) ? "online" : "offline");
+        vo.setStatus(device.getStatus() != null ? device.getStatus().toDisplayValue() : "offline");
 
         // 云存储状态
         CloudSubscription subscription = findActiveSubscription(userId, device.getId());
@@ -414,7 +394,7 @@ public class DeviceService {
      */
     private SdCardInfoVO buildSdCardInfo(Device device) {
         SdCardInfoVO sdCardInfo = new SdCardInfoVO();
-        sdCardInfo.setState(device.getSdState() != null ? device.getSdState() : 0);
+        sdCardInfo.setState(device.getSdState() != null ? device.getSdState().getCode() : 0);
 
         // 计算SD卡容量（字节）
         if (device.getSdCapacity() != null && device.getSdBlockSize() != null) {
@@ -439,7 +419,7 @@ public class DeviceService {
         vo.setId(device.getId());
         vo.setName(device.getName());
         vo.setModel(null);
-        vo.setStatus(isOnline(device) ? "online" : "offline");
+        vo.setStatus(device.getStatus() != null ? device.getStatus().toDisplayValue() : "offline");
         return vo;
     }
 
@@ -470,8 +450,8 @@ public class DeviceService {
         device.setSsid(request.getWifiSsid());
         device.setMac(request.getMac());
         device.setNetworkType("wifi");
-        device.setStatus(DEVICE_STATUS_OFFLINE);
-        device.setEnabled(DEVICE_ENABLED);
+        device.setStatus(DeviceOnlineStatus.OFFLINE);
+        device.setEnabled(EnableStatus.ENABLED);
         return device;
     }
 
@@ -498,7 +478,7 @@ public class DeviceService {
             UserDevice userDevice = new UserDevice();
             userDevice.setUserId(userId);
             userDevice.setDeviceId(deviceId);
-            userDevice.setRole(USER_DEVICE_ROLE_OWNER);
+            userDevice.setRole(UserDeviceRole.OWNER);
             userDeviceRepository.insert(userDevice);
             log.info("绑定用户 {} 与设备 {}", userId, deviceId);
         }
@@ -515,9 +495,9 @@ public class DeviceService {
             binding.setUserId(userId);
             binding.setWifiSsid(request.getWifiSsid());
             binding.setWifiPassword(request.getWifiPassword());
-            binding.setStatus(BINDING_STATUS_SUCCESS);
-            binding.setProgress(BINDING_PROGRESS_COMPLETE);
-            binding.setMessage(BINDING_SUCCESS_MESSAGE);
+            binding.setStatus(DeviceBindingStatus.SUCCESS);
+            binding.setProgress(100);
+            binding.setMessage("绑定成功");
             deviceBindingRepository.insert(binding);
         } catch (Exception e) {
             // 绑定记录插入失败不影响主流程
@@ -541,7 +521,7 @@ public class DeviceService {
      * 判断设备是否在线
      */
     private boolean isOnline(Device device) {
-        return device.getStatus() != null && device.getStatus() == DEVICE_STATUS_ONLINE;
+        return device.getStatus() == DeviceOnlineStatus.ONLINE;
     }
 
     /**

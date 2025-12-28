@@ -3,6 +3,8 @@ package com.pura365.camera.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.pura365.camera.domain.Device;
+import com.pura365.camera.enums.DeviceOnlineStatus;
+import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.repository.DeviceRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -85,10 +87,10 @@ public class DeviceHealthCheckService {
         // 条件1: 状态为在线(1)
         // 条件2: 最后心跳时间不为空且早于阈值
         LambdaUpdateWrapper<Device> updateWrapper = new LambdaUpdateWrapper<>();
-        updateWrapper.eq(Device::getStatus, 1) // 当前状态为在线
+        updateWrapper.eq(Device::getStatus, DeviceOnlineStatus.ONLINE)
                 .isNotNull(Device::getLastHeartbeatTime) // 有过心跳记录
                 .lt(Device::getLastHeartbeatTime, threshold) // 心跳超时
-                .set(Device::getStatus, 0) // 设置为离线
+                .set(Device::getStatus, DeviceOnlineStatus.OFFLINE)
                 .set(Device::getUpdatedAt, LocalDateTime.now());
 
         int updatedCount = deviceRepository.update(null, updateWrapper);
@@ -104,9 +106,9 @@ public class DeviceHealthCheckService {
     private void markNeverHeartbeatDevicesOffline() {
         // 查找在线但从未有心跳的设备
         LambdaUpdateWrapper<Device> updateWrapper = new LambdaUpdateWrapper<>();
-        updateWrapper.eq(Device::getStatus, 1) // 当前状态为在线
+        updateWrapper.eq(Device::getStatus, DeviceOnlineStatus.ONLINE)
                 .isNull(Device::getLastHeartbeatTime) // 从未有心跳记录
-                .set(Device::getStatus, 0) // 设置为离线
+                .set(Device::getStatus, DeviceOnlineStatus.OFFLINE)
                 .set(Device::getUpdatedAt, LocalDateTime.now());
 
         int updatedCount = deviceRepository.update(null, updateWrapper);
@@ -121,8 +123,8 @@ public class DeviceHealthCheckService {
     private void sendHeartbeatToOnlineDevices() {
         // 查询所有在线设备（必须有过心跳记录才发送，避免向虚假设备发送）
         LambdaQueryWrapper<Device> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(Device::getStatus, 1) // 状态为在线
-                .eq(Device::getEnabled, 1)  // 且启用状态
+        queryWrapper.eq(Device::getStatus, DeviceOnlineStatus.ONLINE)
+                .eq(Device::getEnabled, EnableStatus.ENABLED)
                 .isNotNull(Device::getLastHeartbeatTime); // 有过心跳记录
 
         List<Device> onlineDevices = deviceRepository.selectList(queryWrapper);
@@ -161,11 +163,11 @@ public class DeviceHealthCheckService {
      */
     public DeviceStatusStats getDeviceStatusStats() {
         LambdaQueryWrapper<Device> onlineWrapper = new LambdaQueryWrapper<>();
-        onlineWrapper.eq(Device::getStatus, 1);
+        onlineWrapper.eq(Device::getStatus, DeviceOnlineStatus.ONLINE);
         long onlineCount = deviceRepository.selectCount(onlineWrapper);
 
         LambdaQueryWrapper<Device> offlineWrapper = new LambdaQueryWrapper<>();
-        offlineWrapper.eq(Device::getStatus, 0);
+        offlineWrapper.eq(Device::getStatus, DeviceOnlineStatus.OFFLINE);
         long offlineCount = deviceRepository.selectCount(offlineWrapper);
 
         long totalCount = deviceRepository.selectCount(null);

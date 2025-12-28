@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.pura365.camera.enums.ProductionBatchStatus;
 import lombok.Data;
 
 import java.util.Date;
@@ -59,9 +60,9 @@ public class DeviceProductionBatch {
     @TableField("end_serial")
     private Integer endSerial;
 
-    /** 状态: pending/producing/completed */
+    /** 状态: PENDING-待生产, PRODUCING-生产中, COMPLETED-已完成 */
     @TableField("status")
-    private String status;
+    private ProductionBatchStatus status;
 
     /** 备注 */
     @TableField("remark")

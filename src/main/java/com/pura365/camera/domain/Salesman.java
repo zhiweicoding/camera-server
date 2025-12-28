@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.pura365.camera.enums.EnableStatus;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -40,9 +41,9 @@ public class Salesman {
     @TableField("commission_rate")
     private BigDecimal commissionRate;
 
-    /** 状态: 0-禁用 1-启用 */
+    /** 状态: DISABLED-禁用, ENABLED-启用 */
     @TableField("status")
-    private Integer status;
+    private EnableStatus status;
 
     /** 备注 */
     @TableField("remark")

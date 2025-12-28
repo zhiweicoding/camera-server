@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.pura365.camera.enums.DeviceSharePermission;
+import com.pura365.camera.enums.DeviceShareStatus;
 import lombok.Data;
 
 import java.util.Date;
@@ -35,13 +37,13 @@ public class DeviceShare {
     @TableField("shared_user_id")
     private Long sharedUserId;
 
-    /** 权限: view_only-仅查看, full_control-完全控制 */
+    /** 权限: VIEW_ONLY-仅查看, FULL_CONTROL-完全控制 */
     @TableField("permission")
-    private String permission;
+    private DeviceSharePermission permission;
 
-    /** 状态: pending-待使用, used-已使用, expired-已过期, revoked-已撤销 */
+    /** 状态: PENDING-待使用, USED-已使用, EXPIRED-已过期, REVOKED-已撤销 */
     @TableField("status")
-    private String status;
+    private DeviceShareStatus status;
 
     /** 过期时间 */
     @TableField("expire_at")

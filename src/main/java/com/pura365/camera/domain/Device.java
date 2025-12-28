@@ -4,6 +4,9 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.pura365.camera.enums.DeviceOnlineStatus;
+import com.pura365.camera.enums.EnableStatus;
+import com.pura365.camera.enums.SdCardStatus;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -39,13 +42,13 @@ public class Device {
     @TableField("firmware_version")
     private String firmwareVersion;
 
-    /** 状态: 0-离线 1-在线 */
+    /** 状态: OFFLINE-离线, ONLINE-在线 */
     @TableField("status")
-    private Integer status;
+    private DeviceOnlineStatus status;
 
-    /** 启用状态: 0-禁用 1-启用 */
+    /** 启用状态: DISABLED-禁用, ENABLED-启用 */
     @TableField("enabled")
-    private Integer enabled;
+    private EnableStatus enabled;
 
     /** 云存储开关 */
     @TableField("cloud_storage")
@@ -105,9 +108,9 @@ public class Device {
     @TableField("wifi_rssi")
     private Integer wifiRssi;
 
-    /** TF卡状态: 0-无 1-有 */
+    /** TF卡状态: NOT_PRESENT-无, PRESENT-有 */
     @TableField("sd_state")
-    private Integer sdState;
+    private SdCardStatus sdState;
 
     /** TF卡总块数 */
     @TableField("sd_capacity")

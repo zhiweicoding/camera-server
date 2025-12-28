@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.pura365.camera.enums.EnableStatus;
 import lombok.Data;
 
 import java.util.Date;
@@ -39,9 +40,9 @@ public class Vendor {
     @TableField("address")
     private String address;
 
-    /** 状态: 0-禁用 1-启用 */
+    /** 状态: DISABLED-禁用, ENABLED-启用 */
     @TableField("status")
-    private Integer status;
+    private EnableStatus status;
 
     /** 创建时间 */
     @TableField("created_at")

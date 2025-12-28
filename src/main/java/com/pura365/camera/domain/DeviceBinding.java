@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.pura365.camera.enums.DeviceBindingStatus;
 import lombok.Data;
 
 import java.util.Date;
@@ -39,9 +40,9 @@ public class DeviceBinding {
     @TableField("wifi_password")
     private String wifiPassword;
 
-    /** 绑定状态 */
+    /** 绑定状态: BINDING-绑定中, SUCCESS-绑定成功, FAILED-绑定失败, TIMEOUT-绑定超时 */
     @TableField("status")
-    private String status;
+    private DeviceBindingStatus status;
 
     /** 绑定进度 */
     @TableField("progress")

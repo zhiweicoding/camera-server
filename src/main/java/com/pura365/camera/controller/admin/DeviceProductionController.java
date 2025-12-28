@@ -253,7 +253,7 @@ public class DeviceProductionController {
                 row.createCell(7).setCellValue(device.getVendorCode());
                 row.createCell(8).setCellValue(device.getSerialNo());
                 row.createCell(9).setCellValue(device.getMacAddress());
-                row.createCell(10).setCellValue(device.getStatus());
+                row.createCell(10).setCellValue(device.getStatus() != null ? device.getStatus().getCode() : "");
                 row.createCell(11).setCellValue(device.getManufacturedAt() != null ? 
                     sdf.format(device.getManufacturedAt()) : "");
                 row.createCell(12).setCellValue(device.getActivatedAt() != null ? 

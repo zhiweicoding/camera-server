@@ -1,10 +1,11 @@
 package com.pura365.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.pura365.camera.domain.Salesman;
 import com.pura365.camera.domain.ManufacturedDevice;
-import com.pura365.camera.repository.SalesmanRepository;
+import com.pura365.camera.domain.Salesman;
+import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.repository.ManufacturedDeviceRepository;
+import com.pura365.camera.repository.SalesmanRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,7 +48,7 @@ public class SalesmanService {
     public List<Salesman> listActiveByVendor(Long vendorId) {
         QueryWrapper<Salesman> qw = new QueryWrapper<>();
         qw.lambda().eq(Salesman::getVendorId, vendorId)
-                .eq(Salesman::getStatus, 1)
+                .eq(Salesman::getStatus, EnableStatus.ENABLED)
                 .orderByAsc(Salesman::getName);
         return salesmanRepository.selectList(qw);
     }
@@ -60,7 +61,7 @@ public class SalesmanService {
     public List<Salesman> listByVendorCode(String vendorCode) {
         QueryWrapper<Salesman> qw = new QueryWrapper<>();
         qw.lambda().eq(Salesman::getVendorCode, vendorCode)
-                .eq(Salesman::getStatus, 1)
+                .eq(Salesman::getStatus, EnableStatus.ENABLED)
                 .orderByAsc(Salesman::getName);
         return salesmanRepository.selectList(qw);
     }
@@ -80,7 +81,7 @@ public class SalesmanService {
             qw.lambda().like(Salesman::getName, name);
         }
         if (status != null) {
-            qw.lambda().eq(Salesman::getStatus, status);
+            qw.lambda().eq(Salesman::getStatus, EnableStatus.fromCode(status));
         }
         qw.lambda().orderByDesc(Salesman::getCreatedAt);
 
@@ -101,7 +102,7 @@ public class SalesmanService {
             countQw.lambda().like(Salesman::getName, name);
         }
         if (status != null) {
-            countQw.lambda().eq(Salesman::getStatus, status);
+            countQw.lambda().eq(Salesman::getStatus, EnableStatus.fromCode(status));
         }
         long total = salesmanRepository.selectCount(countQw);
 
@@ -135,7 +136,7 @@ public class SalesmanService {
             throw new RuntimeException("佣金比例不能为空");
         }
         if (salesman.getStatus() == null) {
-            salesman.setStatus(1);
+            salesman.setStatus(EnableStatus.ENABLED);
         }
         salesman.setCreatedAt(new Date());
         salesman.setUpdatedAt(new Date());
@@ -191,7 +192,7 @@ public class SalesmanService {
         if (salesman == null) {
             throw new RuntimeException("业务员不存在");
         }
-        salesman.setStatus(status);
+        salesman.setStatus(EnableStatus.fromCode(status));
         salesman.setUpdatedAt(new Date());
         salesmanRepository.updateById(salesman);
         log.info("更新业务员状态: id={}, status={}", id, status);

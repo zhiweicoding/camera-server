@@ -2,6 +2,7 @@ package com.pura365.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.CloudPlan;
+import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.repository.CloudPlanRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,7 +28,7 @@ public class CloudPlanService {
      */
     public List<CloudPlan> listActivePlans() {
         QueryWrapper<CloudPlan> qw = new QueryWrapper<>();
-        qw.lambda().eq(CloudPlan::getStatus, 1)
+        qw.lambda().eq(CloudPlan::getStatus, EnableStatus.ENABLED)
                 .orderByAsc(CloudPlan::getType)
                 .orderByAsc(CloudPlan::getSortOrder);
         return planRepository.selectList(qw);
@@ -40,7 +41,7 @@ public class CloudPlanService {
     public List<CloudPlan> listActivePlansByType(String type) {
         QueryWrapper<CloudPlan> qw = new QueryWrapper<>();
         qw.lambda().eq(CloudPlan::getType, type)
-                .eq(CloudPlan::getStatus, 1)
+                .eq(CloudPlan::getStatus, EnableStatus.ENABLED)
                 .orderByAsc(CloudPlan::getSortOrder);
         return planRepository.selectList(qw);
     }
@@ -57,7 +58,7 @@ public class CloudPlanService {
             qw.lambda().like(CloudPlan::getName, name);
         }
         if (status != null) {
-            qw.lambda().eq(CloudPlan::getStatus, status);
+            qw.lambda().eq(CloudPlan::getStatus, EnableStatus.fromCode(status));
         }
         qw.lambda().orderByAsc(CloudPlan::getType).orderByAsc(CloudPlan::getSortOrder);
 
@@ -75,7 +76,7 @@ public class CloudPlanService {
             countQw.lambda().like(CloudPlan::getName, name);
         }
         if (status != null) {
-            countQw.lambda().eq(CloudPlan::getStatus, status);
+            countQw.lambda().eq(CloudPlan::getStatus, EnableStatus.fromCode(status));
         }
         long total = planRepository.selectCount(countQw);
 
@@ -122,7 +123,7 @@ public class CloudPlanService {
             throw new RuntimeException("套餐ID已存在");
         }
         if (plan.getStatus() == null) {
-            plan.setStatus(1);
+            plan.setStatus(EnableStatus.ENABLED);
         }
         if (plan.getSortOrder() == null) {
             // 获取当前类型下最大排序号
@@ -187,7 +188,7 @@ public class CloudPlanService {
         if (plan == null) {
             throw new RuntimeException("套餐不存在");
         }
-        plan.setStatus(status);
+        plan.setStatus(EnableStatus.fromCode(status));
         plan.setUpdatedAt(new Date());
         planRepository.updateById(plan);
         log.info("更新套餐状态: id={}, status={}", id, status);

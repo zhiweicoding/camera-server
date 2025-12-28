@@ -4,6 +4,9 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.pura365.camera.enums.CloudPlanPeriod;
+import com.pura365.camera.enums.CloudPlanType;
+import com.pura365.camera.enums.EnableStatus;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -44,9 +47,9 @@ public class CloudPlan {
     @TableField("original_price")
     private BigDecimal originalPrice;
 
-    /** 周期: month/year */
+    /** 周期: month-月付, year-年付 */
     @TableField("period")
-    private String period;
+    private CloudPlanPeriod period;
 
     /** 套餐特性(JSON) */
     @TableField("features")
@@ -54,15 +57,15 @@ public class CloudPlan {
 
     /** 套餐类型: motion-动态录像, fulltime-全天录像, traffic-4G流量 */
     @TableField("type")
-    private String type;
+    private CloudPlanType type;
 
     /** 排序序号 */
     @TableField("sort_order")
     private Integer sortOrder;
 
-    /** 状态: 1-启用, 0-禁用 */
+    /** 状态: ENABLED-启用, DISABLED-禁用 */
     @TableField("status")
-    private Integer status;
+    private EnableStatus status;
 
     /** 创建时间 */
     @TableField("created_at")
