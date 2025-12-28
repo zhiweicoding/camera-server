@@ -234,25 +234,18 @@ public class CameraService {
      * 用于接收事件信息或AI结果，入库并推送给绑定该设备的所有用户
      */
     public void handleMessage(SendMsgRequest request) {
-        log.info("收到摄像头消息 - ID: {}, Topic: {}, Title: {}, Msg: {}", 
-                request.getId(), request.getTopic(), request.getTitle(), request.getMsg());
-        
         String deviceId = request.getId();
-        String topic = request.getTopic();
         String title = request.getTitle();
         String content = request.getMsg();
         String thumbnailUrl = request.getPicurl();
         String videoUrl = request.getVideourl();
         
-        // 根据topic判断消息类型
-        String messageType = "alarm"; // 默认为告警类型
-        if (topic != null) {
-            if (topic.contains("ai")) {
-                messageType = "ai";
-            } else if (topic.contains("system")) {
-                messageType = "system";
-            }
-        }
+        // 内容翻译：英文转中文
+        content = translateContent(content);
+        title = translateContent(title);
+        
+        // 消息类型
+        String messageType = "event";
         
         // 查找该设备绑定的所有用户
         LambdaQueryWrapper<UserDevice> wrapper = new LambdaQueryWrapper<>();
@@ -260,23 +253,39 @@ public class CameraService {
         List<UserDevice> userDevices = userDeviceRepository.selectList(wrapper);
         
         if (userDevices == null || userDevices.isEmpty()) {
-            log.warn("设备 {} 没有绑定用户，跳过推送", deviceId);
+            log.warn("[handleMessage] 设备={} 未绑定用户，跳过推送", deviceId);
             return;
         }
         
         // 为每个用户创建消息并推送
+        int successCount = 0;
         for (UserDevice userDevice : userDevices) {
             Long userId = userDevice.getUserId();
             try {
                 messageService.createMessageAndPush(userId, deviceId, messageType, 
                         title, content, thumbnailUrl, videoUrl);
-                log.info("已为用户 {} 创建设备 {} 的事件消息并推送", userId, deviceId);
+                successCount++;
             } catch (Exception e) {
-                log.error("为用户 {} 创建消息失败", userId, e);
+                log.error("[handleMessage] 推送失败 - 设备={}, 用户={}", deviceId, userId, e);
             }
         }
         
-        log.info("消息处理完成 - 设备: {}, 推送用户数: {}", deviceId, userDevices.size());
+        log.info("[handleMessage] 完成 - 设备={}, 标题={}, 推送成功={}/{}", 
+                deviceId, title, successCount, userDevices.size());
+    }
+    
+    /**
+     * 翻译消息内容（英文转中文）
+     */
+    private String translateContent(String content) {
+        if (content == null) {
+            return null;
+        }
+        // Motion detected -> 检测到物体移动
+        if (content.contains("Motion detected")) {
+            content = content.replace("Motion detected", "检测到物体移动");
+        }
+        return content;
     }
     
     /**

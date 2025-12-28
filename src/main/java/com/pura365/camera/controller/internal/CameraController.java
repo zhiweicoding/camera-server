@@ -277,37 +277,30 @@ public class CameraController {
     @PostMapping(value = "/send_msg",
             consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
     public ResponseEntity<Void> sendMsg(HttpServletRequest request) {
-        log.info("=== /send_msg 请求 ===");
-
         try {
             String rawBody = getRequestBody(request);
-            log.debug("请求体: {}", rawBody);
-
             String token = extractJwtToken(request, rawBody);
             if (token == null) {
-                log.warn("无法解析 token，忽略该消息");
+                log.warn("[send_msg] 无法解析token，忽略该消息");
                 return ResponseEntity.ok().build();
             }
-            log.info("接收到的 token: {}", token);
 
             SendMsgRequest msgRequest = parseSendMsgRequestFromToken(token);
-            log.info("解析出的消息: {}", msgRequest);
+            log.info("[send_msg] 设备={}, 主题={}, 标题={}, 内容={}", 
+                    msgRequest.getId(), msgRequest.getTopic(), msgRequest.getTitle(), msgRequest.getMsg());
 
-            // 验证时间戳（如果时间戳不在认可范围，则忽略请求）
+            // 验证时间戳
             if (!TimeValidator.isValid(msgRequest.getExp())) {
-                log.warn("消息时间戳已过期，忽略该消息");
+                log.warn("[send_msg] 时间戳过期，忽略 - 设备={}", msgRequest.getId());
                 return ResponseEntity.ok().build();
             }
 
-            // 处理消息（异步处理，不阻塞响应）
+            // 处理消息
             cameraService.handleMessage(msgRequest);
-
-            log.info("=== /send_msg 处理完成 ===");
             return ResponseEntity.ok().build();
 
         } catch (Exception e) {
-            log.error("/send_msg 异常", e);
-            // 即使异常也返回 200，避免摄像头重试
+            log.error("[send_msg] 处理异常", e);
             return ResponseEntity.ok().build();
         }
     }
