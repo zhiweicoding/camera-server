@@ -85,83 +85,146 @@
 
 ---
 
-## 三、设备转让模块（新增）
+## 三、设备分配与转让模块（新增）
 
-### 1. 设备转让 API
+### 1. 设备分配/转让 API
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/admin/device-transfer` | 创建设备转让 |
-| GET | `/api/admin/device-transfer/list` | 分页查询转让记录 |
-| GET | `/api/admin/device-transfer/{id}` | 获取转让详情 |
-| PUT | `/api/admin/device-transfer/{id}/confirm` | 确认转让 |
-| PUT | `/api/admin/device-transfer/{id}/cancel` | 取消转让 |
-| GET | `/api/admin/device-transfer/device/{deviceId}/chain` | 查询设备所有权链 |
+| **POST** | `/api/admin/device-transfers/assign` | **装机商分配设备给经销商**（指定佣金比例） |
+| POST | `/api/admin/device-transfers` | 经销商之间转让设备 |
+| GET | `/api/admin/device-transfers` | 分页查询转让记录 |
+| GET | `/api/admin/device-transfers/{id}` | 获取转让详情 |
+| GET | `/api/admin/device-transfers/no/{transferNo}` | 根据单号获取转让 |
+| GET | `/api/admin/device-transfers/vendor/{vendorId}/devices` | 获取经销商名下设备 |
+| GET | `/api/admin/device-transfers/device/{deviceId}/chain` | 查询设备分销链路 |
 
-### 2. 列表查询参数
+### 2. 装机商分配设备给经销商（重点）
+
+**场景**：将已生产的设备指定给经销商，并设置佣金比例
+
+**接口**：`POST /api/admin/device-transfers/assign`
+
+**请求体**：
+```json
+{
+  "installerId": 1,
+  "vendorId": 2,
+  "deviceIds": ["A110000000000001", "A110000000000002"],
+  "commissionRate": 50.00,
+  "remark": "初始分配"
+}
+```
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| fromVendorId | Long | 否 | 转出方经销商ID |
-| toVendorId | Long | 否 | 转入方经销商ID |
-| status | String | 否 | 状态：PENDING / CONFIRMED / CANCELLED |
-| page | Integer | 否 | 页码，默认 1 |
-| size | Integer | 否 | 每页条数，默认 10 |
+| installerId | Long | 是 | 装机商ID |
+| vendorId | Long | 是 | 经销商ID（必须属于该装机商） |
+| deviceIds | List | 是 | 设备ID列表（必须是未分配的设备） |
+| commissionRate | BigDecimal | 是 | 佣金比例（0-100） |
+| remark | String | 否 | 备注 |
 
-### 3. 创建转让请求体
+### 3. 经销商之间转让设备
 
+**场景**：经销商将自己名下的设备转让给另一个经销商
+
+**接口**：`POST /api/admin/device-transfers`
+
+**请求体**：
 ```json
 {
   "fromVendorId": 1,
   "toVendorId": 2,
-  "deviceIds": ["device001", "device002"],
-  "commissionRate": 20.00,
-  "remark": "备注说明"
+  "deviceIds": ["A110000000000001", "A110000000000002"],
+  "commissionRate": 30.00,
+  "remark": "批量转让"
 }
 ```
 
-### 4. 转让记录字段
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| fromVendorId | Long | 是 | 转出经销商ID |
+| toVendorId | Long | 是 | 转入经销商ID（必须同属一个装机商） |
+| deviceIds | List | 是 | 设备ID列表（必须属于转出经销商） |
+| commissionRate | BigDecimal | 是 | 佣金比例（0-100） |
+| remark | String | 否 | 备注 |
+
+### 4. 列表查询参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| vendorId | Long | 否 | 经销商ID（查询该经销商相关的转让） |
+| installerId | Long | 否 | 装机商ID |
+| status | String | 否 | 状态：COMPLETED / PENDING / CANCELLED |
+| page | Integer | 否 | 页码，默认 1 |
+| size | Integer | 否 | 每页条数，默认 20 |
+
+### 5. 转让记录字段
 
 ```json
 {
   "id": 1,
-  "transferNo": "TF202512280001",
+  "transferNo": "TF20251228143000001",
   "fromVendorId": 1,
-  "fromVendorName": "经销商A",
+  "fromVendorCode": "V001",
   "toVendorId": 2,
-  "toVendorName": "经销商B",
+  "toVendorCode": "V002",
   "deviceCount": 2,
-  "commissionRate": 20.00,
-  "status": "PENDING",
+  "deviceIds": "[\"A110000000000001\",\"A110000000000002\"]",
+  "commissionRate": 50.00,
+  "installerId": 1,
+  "installerCode": "I001",
+  "status": "COMPLETED",
   "remark": "备注",
-  "createdAt": "2025-12-28T00:00:00",
-  "confirmedAt": null
+  "createdAt": "2025-12-28T14:30:00",
+  "updatedAt": "2025-12-28T14:30:00"
 }
 ```
 
-### 5. 设备所有权链返回
+**说明**：
+- `fromVendorId` 为 `null` 表示装机商直接分配
+- `status` 目前默认为 `COMPLETED`（即时生效）
+
+### 6. 设备分销链路返回
+
+`GET /api/admin/device-transfers/device/{deviceId}/chain`
+
+返回设备从装机商到各级经销商的完整分销链：
 
 ```json
-{
-  "deviceId": "device001",
-  "chain": [
-    {
-      "vendorId": 1,
-      "vendorName": "经销商A",
-      "commissionRate": 30.00,
-      "level": 1,
-      "acquiredAt": "2025-12-01T00:00:00"
-    },
-    {
-      "vendorId": 2,
-      "vendorName": "经销商B",
-      "commissionRate": 20.00,
-      "level": 2,
-      "acquiredAt": "2025-12-15T00:00:00"
-    }
-  ]
-}
+[
+  {
+    "id": 1,
+    "deviceId": "A110000000000001",
+    "installerId": 1,
+    "installerCode": "I001",
+    "vendorId": 1,
+    "vendorCode": "V001",
+    "parentVendorId": null,
+    "commissionRate": 50.00,
+    "level": 1,
+    "createdAt": "2025-12-01T00:00:00"
+  },
+  {
+    "id": 2,
+    "deviceId": "A110000000000001",
+    "installerId": 1,
+    "installerCode": "I001",
+    "vendorId": 2,
+    "vendorCode": "V002",
+    "parentVendorId": 1,
+    "commissionRate": 30.00,
+    "level": 2,
+    "createdAt": "2025-12-15T00:00:00"
+  }
+]
 ```
+
+### 7. 获取经销商名下设备
+
+`GET /api/admin/device-transfers/vendor/{vendorId}/devices`
+
+返回该经销商拥有的所有设备归属记录。
 
 ---
 
