@@ -90,11 +90,19 @@ public class UserController {
         }
         String nickname = body.get("nickname");
         String avatar = body.get("avatar");
+        String phone = body.get("phone");
+        String email = body.get("email");
         if (nickname != null) {
             user.setNickname(nickname);
         }
         if (avatar != null) {
             user.setAvatar(avatar);
+        }
+        if (phone != null) {
+            user.setPhone(phone);
+        }
+        if (email != null) {
+            user.setEmail(email);
         }
         userRepository.updateById(user);
         log.info("更新用户信息成功 - userId={}", currentUserId);
