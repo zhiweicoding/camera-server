@@ -4,9 +4,11 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.User;
 import com.pura365.camera.domain.UserAuth;
 import com.pura365.camera.domain.UserToken;
+import com.pura365.camera.domain.Vendor;
 import com.pura365.camera.repository.UserAuthRepository;
 import com.pura365.camera.repository.UserRepository;
 import com.pura365.camera.repository.UserTokenRepository;
+import com.pura365.camera.repository.VendorRepository;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
@@ -48,6 +50,9 @@ public class AuthService {
 
     @Autowired
     private OAuthService oAuthService;
+
+    @Autowired
+    private VendorRepository vendorRepository;
 
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
@@ -256,9 +261,17 @@ public class AuthService {
         userMap.put("nickname", user.getNickname());
         userMap.put("avatar", user.getAvatar());
         userMap.put("role", user.getRole());
-        // 经销商用户返回vendorCode
+        // 经销商用户返回vendorCode和vendorId
         if (user.getRole() != null && user.getRole() == 2) {
-            userMap.put("vendorCode", user.getUsername());
+            String vendorCode = user.getUsername();
+            userMap.put("vendorCode", vendorCode);
+            // 查询vendorId
+            QueryWrapper<Vendor> vendorQw = new QueryWrapper<>();
+            vendorQw.lambda().eq(Vendor::getVendorCode, vendorCode);
+            Vendor vendor = vendorRepository.selectOne(vendorQw);
+            if (vendor != null) {
+                userMap.put("vendorId", vendor.getId());
+            }
         }
         data.put("user", userMap);
 

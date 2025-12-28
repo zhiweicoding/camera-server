@@ -840,6 +840,91 @@ public class CloudStorageService {
     }
 
     /**
+     * 上传设备预览图到云存储
+     * 
+     * @param deviceId 设备ID
+     * @param file 上传的文件
+     * @return 上传后的URL，失败返回null
+     */
+    public String uploadDevicePreview(String deviceId, org.springframework.web.multipart.MultipartFile file) {
+        Device device = deviceRepository.selectById(deviceId);
+        if (device == null) {
+            log.warn("设备不存在: {}", deviceId);
+            return null;
+        }
+        
+        try {
+            // 生成文件名: previews/{deviceId}/preview_{timestamp}.jpg
+            String timestamp = String.valueOf(System.currentTimeMillis());
+            String originalFilename = file.getOriginalFilename();
+            String ext = ".jpg";
+            if (originalFilename != null && originalFilename.contains(".")) {
+                ext = originalFilename.substring(originalFilename.lastIndexOf('.'));
+            }
+            String key = "previews/" + deviceId + "/preview_" + timestamp + ext;
+            
+            boolean china = isChina(device.getRegion());
+            String endpoint;
+            String region;
+            String accessKey;
+            String secretKey;
+            String bucket;
+            
+            if (china) {
+                endpoint = "https://s3.cn-south-1.qiniucs.com";
+                region = "cn-south-1";
+                accessKey = qiniuConfig.getAccessKey();
+                secretKey = qiniuConfig.getSecretKey();
+                bucket = qiniuConfig.getBucket();
+            } else {
+                endpoint = vultrConfig.getEndpoint();
+                region = vultrConfig.getRegion();
+                accessKey = vultrConfig.getAccessKey();
+                secretKey = vultrConfig.getSecretKey();
+                bucket = vultrConfig.getBucket();
+            }
+            
+            AwsBasicCredentials credentials = AwsBasicCredentials.create(accessKey, secretKey);
+            S3Client s3Client = S3Client.builder()
+                .region(Region.of(region))
+                .endpointOverride(URI.create(endpoint))
+                .credentialsProvider(StaticCredentialsProvider.create(credentials))
+                .build();
+            
+            try {
+                String contentType = file.getContentType();
+                if (contentType == null || contentType.isEmpty()) {
+                    contentType = "image/jpeg";
+                }
+                
+                PutObjectRequest putRequest = PutObjectRequest.builder()
+                    .bucket(bucket)
+                    .key(key)
+                    .contentType(contentType)
+                    .build();
+                
+                s3Client.putObject(putRequest, RequestBody.fromInputStream(file.getInputStream(), file.getSize()));
+                
+                // 构建访问 URL
+                String url;
+                if (china) {
+                    url = "https://" + qiniuConfig.getDomain() + "/" + key;
+                } else {
+                    url = endpoint.replaceAll("/$", "") + "/" + bucket + "/" + key;
+                }
+                
+                log.info("上传设备预览图成功 - deviceId: {}, key: {}, url: {}", deviceId, key, url);
+                return url;
+            } finally {
+                s3Client.close();
+            }
+        } catch (Exception e) {
+            log.error("上传设备预览图失败 - deviceId: {}", deviceId, e);
+            return null;
+        }
+    }
+
+    /**
      * 手动上传对象到云存储（用于测试）
      * - 国内：七牛云 S3 兼容接口
      * - 国外：Vultr S3 兼容接口

@@ -11,9 +11,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import javax.validation.Valid;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 设备管理控制器
@@ -81,6 +84,9 @@ public class DeviceController {
 
     @Autowired
     private DeviceService deviceService;
+    
+    @Autowired
+    private com.pura365.camera.service.CloudStorageService cloudStorageService;
 
     /**
      * 获取当前用户的设备列表
@@ -183,6 +189,65 @@ public class DeviceController {
         }
         log.info("更新设备成功 - userId={}, deviceId={}", currentUserId, deviceId);
         return ApiResponse.success(device);
+    }
+
+    /**
+     * 上传设备预览图
+     *
+     * @param currentUserId 当前登录用户ID
+     * @param deviceId      设备ID
+     * @param file          预览图文件
+     * @return 上传后的图片URL
+     */
+    @Operation(summary = "上传设备预览图", description = "上传设备的预览截图，用于在设备列表中展示")
+    @PostMapping("/{id}/preview")
+    public ApiResponse<Map<String, String>> uploadPreview(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @Parameter(description = "设备ID") @PathVariable("id") String deviceId,
+            @RequestParam("file") MultipartFile file) {
+        log.info("上传设备预览图 - userId={}, deviceId={}, fileName={}", 
+                currentUserId, deviceId, file != null ? file.getOriginalFilename() : null);
+        
+        // 检查用户是否有该设备的权限
+        if (!deviceService.hasUserDevice(currentUserId, deviceId)) {
+            log.warn("上传预览图失败，无权限 - userId={}, deviceId={}", currentUserId, deviceId);
+            return ApiResponse.error(HTTP_FORBIDDEN, MSG_NO_PERMISSION);
+        }
+        
+        // 检查设备是否存在
+        if (!deviceService.deviceExists(deviceId)) {
+            log.warn("上传预览图失败，设备不存在 - deviceId={}", deviceId);
+            return ApiResponse.error(HTTP_NOT_FOUND, MSG_DEVICE_NOT_FOUND);
+        }
+        
+        // 检查文件
+        if (file == null || file.isEmpty()) {
+            log.warn("上传预览图失败，文件为空 - userId={}, deviceId={}", currentUserId, deviceId);
+            return ApiResponse.error(HTTP_BAD_REQUEST, "文件不能为空");
+        }
+        
+        try {
+            // 上传到云存储
+            String previewUrl = cloudStorageService.uploadDevicePreview(deviceId, file);
+            if (previewUrl == null) {
+                log.error("上传预览图失败 - deviceId={}", deviceId);
+                return ApiResponse.error(HTTP_INTERNAL_ERROR, "上传失败");
+            }
+            
+            // 更新设备的预览图URL
+            UpdateDeviceRequest updateRequest = new UpdateDeviceRequest();
+            updateRequest.setLastPreviewUrl(previewUrl);
+            deviceService.updateDevice(deviceId, updateRequest);
+            
+            log.info("上传设备预览图成功 - userId={}, deviceId={}, url={}", currentUserId, deviceId, previewUrl);
+            
+            Map<String, String> data = new HashMap<>();
+            data.put("url", previewUrl);
+            return ApiResponse.success(data);
+        } catch (Exception e) {
+            log.error("上传预览图异常 - userId={}, deviceId={}", currentUserId, deviceId, e);
+            return ApiResponse.error(HTTP_INTERNAL_ERROR, "上传失败: " + e.getMessage());
+        }
     }
 
     /**
