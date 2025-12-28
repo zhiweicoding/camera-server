@@ -236,6 +236,12 @@ public class PaymentService {
             return null;
         }
 
+        // 校验订单状态：只有待支付的订单才能发起支付
+        if (PaymentOrderStatus.PENDING != order.getStatus()) {
+            log.warn("订单状态不允许支付: orderId={}, status={}", orderId, order.getStatus());
+            return null;
+        }
+
         // 创建微信预支付记录 (mock)
         PaymentWechat pw = new PaymentWechat();
         pw.setOrderId(order.getOrderId());
@@ -266,6 +272,12 @@ public class PaymentService {
     public PaypalPayVO paypalPay(Long userId, String orderId) {
         PaymentOrder order = getOrderByIdAndUser(orderId, userId);
         if (order == null) {
+            return null;
+        }
+
+        // 校验订单状态：只有待支付的订单才能发起支付
+        if (PaymentOrderStatus.PENDING != order.getStatus()) {
+            log.warn("订单状态不允许支付: orderId={}, status={}", orderId, order.getStatus());
             return null;
         }
 
@@ -326,6 +338,16 @@ public class PaymentService {
         PaymentOrder order = findOrderByOrderId(orderId);
         if (order == null) {
             log.warn("PayPal return: order not found: {}", orderId);
+            return false;
+        }
+
+        // 校验订单状态：防止重复处理
+        if (PaymentOrderStatus.PAID == order.getStatus()) {
+            log.info("订单已支付，跳过处理: orderId={}", orderId);
+            return true;
+        }
+        if (PaymentOrderStatus.PENDING != order.getStatus()) {
+            log.warn("订单状态不允许支付: orderId={}, status={}", orderId, order.getStatus());
             return false;
         }
 
@@ -436,6 +458,12 @@ public class PaymentService {
     public ApplePayVO applePay(Long userId, ApplePayRequest request) {
         PaymentOrder order = getOrderByIdAndUser(request.getOrderId(), userId);
         if (order == null) {
+            return null;
+        }
+
+        // 校验订单状态：只有待支付的订单才能发起支付
+        if (PaymentOrderStatus.PENDING != order.getStatus()) {
+            log.warn("订单状态不允许支付: orderId={}, status={}", request.getOrderId(), order.getStatus());
             return null;
         }
 
