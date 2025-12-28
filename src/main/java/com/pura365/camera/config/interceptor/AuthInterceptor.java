@@ -69,8 +69,8 @@ public class AuthInterceptor implements HandlerInterceptor {
                 || path.startsWith("/api/internal/datachannel")) {
             return true;
         }
-        // 静态资源、文档、错误页
-        if (path.startsWith("/static/") || path.startsWith("/docs/") || path.startsWith("/pics/") || path.startsWith("/webrtc-demo")) {
+        // 静态资源、文档、上传文件、错误页
+        if (path.startsWith("/static/") || path.startsWith("/docs/") || path.startsWith("/pics/") || path.startsWith("/webrtc-demo") || path.startsWith("/uploads/")) {
             return true;
         }
         // 机身号工具页面 & 接口放行

@@ -17,8 +17,10 @@ import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * App 用户相关接口
@@ -58,6 +60,20 @@ public class UserController {
     }
 
     /**
+     * 获取所有用户信息
+     */
+    @Operation(summary = "获取所有用户", description = "获取所有用户的基本信息列表")
+    @GetMapping("/list")
+    public ApiResponse<List<Map<String, Object>>> getAllUsers() {
+        log.info("获取所有用户信息");
+        List<User> users = userRepository.selectList(null);
+        List<Map<String, Object>> data = users.stream()
+                .map(this::buildUserInfo)
+                .collect(Collectors.toList());
+        return ApiResponse.success(data);
+    }
+
+    /**
      * 更新用户信息（昵称、头像）
      */
     @PutMapping("/update")
@@ -82,6 +98,44 @@ public class UserController {
         }
         userRepository.updateById(user);
         log.info("更新用户信息成功 - userId={}", currentUserId);
+        Map<String, Object> data = buildUserInfo(user);
+        return ApiResponse.success(data);
+    }
+
+    /**
+     * 根据ID更新任意用户信息
+     */
+    @Operation(summary = "更新指定用户", description = "根据用户ID更新用户信息")
+    @PutMapping("/update/{userId}")
+    public ApiResponse<Map<String, Object>> updateUserById(@PathVariable("userId") Long userId,
+                                                          @RequestBody Map<String, String> body) {
+        log.info("更新指定用户信息 - userId={}, body={}", userId, body);
+        if (userId == null) {
+            return ApiResponse.error(400, "用户ID不能为空");
+        }
+        User user = userRepository.selectById(userId);
+        if (user == null) {
+            log.warn("更新用户信息失败 - 用户不存在, userId={}", userId);
+            return ApiResponse.error(404, "用户不存在");
+        }
+        String nickname = body.get("nickname");
+        String avatar = body.get("avatar");
+        String phone = body.get("phone");
+        String email = body.get("email");
+        if (nickname != null) {
+            user.setNickname(nickname);
+        }
+        if (avatar != null) {
+            user.setAvatar(avatar);
+        }
+        if (phone != null) {
+            user.setPhone(phone);
+        }
+        if (email != null) {
+            user.setEmail(email);
+        }
+        userRepository.updateById(user);
+        log.info("更新指定用户信息成功 - userId={}", userId);
         Map<String, Object> data = buildUserInfo(user);
         return ApiResponse.success(data);
     }
