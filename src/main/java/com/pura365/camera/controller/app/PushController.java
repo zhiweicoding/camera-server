@@ -8,6 +8,8 @@ import com.pura365.camera.model.push.RegisterPushTokenRequest;
 import com.pura365.camera.repository.UserPushTokenRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
@@ -20,6 +22,8 @@ import java.util.Date;
 @RestController
 @RequestMapping("/api/app/push")
 public class PushController {
+
+    private static final Logger log = LoggerFactory.getLogger(PushController.class);
 
     private final UserPushTokenRepository userPushTokenRepository;
 
@@ -37,11 +41,16 @@ public class PushController {
     public ApiResponse<Void> registerPushToken(
             @RequestAttribute("currentUserId") Long currentUserId,
             @RequestBody RegisterPushTokenRequest request) {
+        log.info("注册推送Token - userId={}, deviceType={}, registrationId={}, deviceModel={}, osVersion={}, appVersion={}",
+                currentUserId, request.getDeviceType(), request.getRegistrationId(),
+                request.getDeviceModel(), request.getOsVersion(), request.getAppVersion());
 
         if (!StringUtils.hasText(request.getDeviceType())) {
+            log.warn("注册推送Token失败，device_type为空 - userId={}", currentUserId);
             return ApiResponse.error(400, "device_type 不能为空");
         }
         if (!StringUtils.hasText(request.getRegistrationId())) {
+            log.warn("注册推送Token失败，registration_id为空 - userId={}", currentUserId);
             return ApiResponse.error(400, "registration_id 不能为空");
         }
 
@@ -60,6 +69,7 @@ public class PushController {
             existingToken.setEnabled(1);
             existingToken.setUpdatedAt(new Date());
             userPushTokenRepository.updateById(existingToken);
+            log.info("更新推送Token成功 - userId={}, tokenId={}", currentUserId, existingToken.getId());
         } else {
             // 创建新记录
             UserPushToken token = new UserPushToken();
@@ -73,6 +83,7 @@ public class PushController {
             token.setCreatedAt(new Date());
             token.setUpdatedAt(new Date());
             userPushTokenRepository.insert(token);
+            log.info("新增推送Token成功 - userId={}, tokenId={}", currentUserId, token.getId());
         }
 
         return ApiResponse.success("注册成功", null);
@@ -88,8 +99,10 @@ public class PushController {
     public ApiResponse<Void> unregisterPushToken(
             @RequestAttribute("currentUserId") Long currentUserId,
             @RequestParam("registration_id") String registrationId) {
+        log.info("注销推送Token - userId={}, registrationId={}", currentUserId, registrationId);
 
         if (!StringUtils.hasText(registrationId)) {
+            log.warn("注销推送Token失败，registration_id为空 - userId={}", currentUserId);
             return ApiResponse.error(400, "registration_id 不能为空");
         }
 
@@ -100,6 +113,7 @@ public class PushController {
                .set(UserPushToken::getEnabled, 0);
         
         userPushTokenRepository.update(null, wrapper);
+        log.info("注销推送Token成功 - userId={}, registrationId={}", currentUserId, registrationId);
 
         return ApiResponse.success("注销成功", null);
     }
