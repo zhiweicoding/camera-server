@@ -39,7 +39,7 @@ public class UserOperationLogService {
                 operationLog.setCreatedAt(new Date());
             }
             userOperationLogRepository.insert(operationLog);
-            log.debug("用户操作日志记录成功 - userId: {}, module: {}, action: {}", 
+            log.info("用户操作日志记录成功 - userId: {}, module: {}, action: {}", 
                 operationLog.getUserId(), operationLog.getModule(), operationLog.getAction());
         } catch (Exception e) {
             log.error("记录用户操作日志失败", e);

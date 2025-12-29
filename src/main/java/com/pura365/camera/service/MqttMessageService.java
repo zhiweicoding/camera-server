@@ -139,7 +139,7 @@ public class MqttMessageService {
      */
     private void handleIncomingMessage(String topic, byte[] payload) {
         try {
-            log.debug("收到MQTT消息 - Topic: {}, 长度: {} bytes", topic, payload.length);
+            log.info("收到MQTT消息 - Topic: {}, 长度: {} bytes", topic, payload.length);
             
             // 从topic提取设备序列号: camera/pura365/{deviceId}/device
             String deviceId = extractDeviceIdFromTopic(topic);
@@ -428,7 +428,7 @@ public class MqttMessageService {
             }
             log.info("已通知 {} 个监听者，设备: {}, 类型: {}", listeners.size(), deviceId, type);
         } else {
-            log.debug("设备 {} 没有注册监听器，消息类型: {}", deviceId, type);
+            log.info("设备 {} 没有注册监听器，消息类型: {}", deviceId, type);
         }
     }
     
@@ -477,7 +477,7 @@ public class MqttMessageService {
         mqttMessage.setRetained(false);
         
         mqttClient.publish(topic, mqttMessage);
-        log.debug("已发送消息到设备 {} - Topic: {}, 大小: {} bytes", deviceId, topic, encrypted.length);
+        log.info("已发送消息到设备 {} - Topic: {}, 大小: {} bytes", deviceId, topic, encrypted.length);
     }
     
     /**

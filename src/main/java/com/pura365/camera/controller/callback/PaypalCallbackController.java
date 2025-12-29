@@ -93,7 +93,7 @@ public class PaypalCallbackController {
             @RequestHeader(value = "PAYPAL-AUTH-ALGO", required = false) String authAlgo) {
 
         log.info("Received PayPal webhook: transmissionId={}", transmissionId);
-        log.debug("PayPal webhook payload: {}", payload);
+        log.info("PayPal webhook payload: {}", payload);
 
         try {
             // 解析事件

@@ -225,7 +225,7 @@ public class CommissionCalculateService {
         // 检查双重身份：装机商和经销商是否为同一用户
         checkAndMergeDualIdentity(result, installer, vendorChain);
 
-        log.debug("分润计算完成: deviceId={}, payAmount={}, profitAmount={}, installerAmount={}, vendorDetails={}, hasDualIdentity={}",
+        log.info("分润计算完成: deviceId={}, payAmount={}, profitAmount={}, installerAmount={}, vendorDetails={}, hasDualIdentity={}",
                 deviceId, payAmount, profitAmount, installerActualAmount, result.getDetails().size(), result.isHasDualIdentity());
 
         return result;

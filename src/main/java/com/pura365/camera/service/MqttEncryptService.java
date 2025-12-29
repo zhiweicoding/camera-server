@@ -51,11 +51,11 @@ public class MqttEncryptService {
     public byte[] encrypt(Object message, String ssid) throws Exception {
         // 1. 序列化为JSON
         String json = objectMapper.writeValueAsString(message);
-        log.debug("加密前JSON: {}", json);
+        log.info("加密前JSON: {}", json);
         
         // 2. 生成AES密钥：MD5(SSID)的原始16字节
         String actualSsid = (ssid != null && !ssid.isEmpty()) ? ssid : DEFAULT_SSID;
-        log.debug("使用SSID加密: {}", actualSsid);
+        log.info("使用SSID加密: {}", actualSsid);
         byte[] keyBytes = md5(actualSsid);
         SecretKeySpec keySpec = new SecretKeySpec(keyBytes, "AES");
         
@@ -65,7 +65,7 @@ public class MqttEncryptService {
         cipher.init(Cipher.ENCRYPT_MODE, keySpec);
         byte[] encrypted = cipher.doFinal(plainPadded);
         
-        log.debug("加密后字节长度: {}", encrypted.length);
+        log.info("加密后字节长度: {}", encrypted.length);
         return encrypted;
     }
     
@@ -89,7 +89,7 @@ public class MqttEncryptService {
     public String decrypt(byte[] encryptedBytes, String ssid) throws Exception {
         // 1. 生成AES密钥
         String actualSsid = (ssid != null && !ssid.isEmpty()) ? ssid : DEFAULT_SSID;
-        log.debug("使用SSID解密: {}", actualSsid);
+        log.info("使用SSID解密: {}", actualSsid);
         byte[] keyBytes = md5(actualSsid);
         SecretKeySpec keySpec = new SecretKeySpec(keyBytes, "AES");
         
@@ -100,7 +100,7 @@ public class MqttEncryptService {
         
         // 3. 去掉右侧补齐的空格
         String json = new String(plainBytes, StandardCharsets.UTF_8).trim();
-        log.debug("解密后JSON: {}", json);
+        log.info("解密后JSON: {}", json);
         return json;
     }
     
@@ -134,7 +134,7 @@ public class MqttEncryptService {
         try {
             Device device = deviceRepository.selectById(deviceId);
             if (device != null && device.getSsid() != null && !device.getSsid().isEmpty()) {
-                log.debug("从数据库获取设备SSID, deviceId={}, ssid={}", deviceId, device.getSsid());
+                log.info("从数据库获取设备SSID, deviceId={}, ssid={}", deviceId, device.getSsid());
                 return device.getSsid();
             } else {
                 log.warn("设备SSID为空或设备不存在, deviceId={}, 使用默认SSID: {}", deviceId, DEFAULT_SSID);

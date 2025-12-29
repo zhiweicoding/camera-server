@@ -59,7 +59,7 @@ public class DeviceHealthCheckService {
             return;
         }
 
-        log.debug("开始执行设备健康检查...");
+        log.info("开始执行设备健康检查...");
 
         try {
             // 1. 检查超时未响应的设备，标记为离线
@@ -130,7 +130,7 @@ public class DeviceHealthCheckService {
         List<Device> onlineDevices = deviceRepository.selectList(queryWrapper);
 
         if (onlineDevices.isEmpty()) {
-            log.debug("当前没有在线设备，跳过心跳检测");
+            log.info("当前没有在线设备，跳过心跳检测");
             return;
         }
 
@@ -139,7 +139,7 @@ public class DeviceHealthCheckService {
         for (Device device : onlineDevices) {
             try {
                 mqttMessageService.requestDeviceInfo(device.getId());
-                log.debug("已向设备 {} 发送心跳请求", device.getId());
+                log.info("已向设备 {} 发送心跳请求", device.getId());
             } catch (Exception e) {
                 log.warn("向设备 {} 发送心跳请求失败: {}", device.getId(), e.getMessage());
             }

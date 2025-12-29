@@ -87,11 +87,11 @@ public class WifiController {
     public ApiResponse<BindingStatusVO> getBindingStatus(
             @RequestAttribute("currentUserId") Long currentUserId,
             @PathVariable("id") String deviceId) {
-        log.debug("[WiFi] 查询绑定状态, userId={}, deviceId={}", currentUserId, deviceId);
+        log.info("[WiFi] 查询绑定状态, userId={}, deviceId={}", currentUserId, deviceId);
         
         try {
             BindingStatusVO result = wifiService.getBindingStatus(currentUserId, deviceId);
-            log.debug("[WiFi] 查询绑定状态成功, deviceId={}, status={}", deviceId, result.getStatus());
+            log.info("[WiFi] 查询绑定状态成功, deviceId={}, status={}", deviceId, result.getStatus());
             return ApiResponse.success(result);
         } catch (Exception e) {
             log.error("[WiFi] 查询绑定状态失败, userId={}, deviceId={}", currentUserId, deviceId, e);

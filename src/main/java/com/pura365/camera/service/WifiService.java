@@ -110,7 +110,7 @@ public class WifiService {
      * @return 绑定状态
      */
     public BindingStatusVO getBindingStatus(Long userId, String deviceId) {
-        log.debug("查询绑定状态, userId={}, deviceId={}", userId, deviceId);
+        log.info("查询绑定状态, userId={}, deviceId={}", userId, deviceId);
         
         QueryWrapper<DeviceBinding> qw = new QueryWrapper<>();
         qw.lambda().eq(DeviceBinding::getUserId, userId)
@@ -130,7 +130,7 @@ public class WifiService {
                     .build();
         }
         
-        log.debug("查询到绑定状态, deviceId={}, status={}, progress={}", 
+        log.info("查询到绑定状态, deviceId={}, status={}, progress={}", 
                 deviceId, binding.getStatus(), binding.getProgress());
         
         return BindingStatusVO.builder()
@@ -199,7 +199,7 @@ public class WifiService {
             ud.setRole(UserDeviceRole.OWNER);
             userDeviceRepository.insert(ud);
         } else {
-            log.debug("用户设备绑定关系已存在, userId={}, deviceSn={}", userId, deviceSn);
+            log.info("用户设备绑定关系已存在, userId={}, deviceSn={}", userId, deviceSn);
         }
     }
 
@@ -225,7 +225,7 @@ public class WifiService {
             return;
         }
         
-        log.debug("保存WiFi历史记录, userId={}, ssid={}", userId, wifiSsid);
+        log.info("保存WiFi历史记录, userId={}, ssid={}", userId, wifiSsid);
         WifiHistory history = new WifiHistory();
         history.setUserId(userId);
         history.setSsid(wifiSsid);

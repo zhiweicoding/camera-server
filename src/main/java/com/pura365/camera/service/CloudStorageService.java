@@ -508,7 +508,7 @@ public class CloudStorageService {
         CloudSubscription subscription = cloudSubscriptionRepository.selectOne(subWrapper);
         
         if (subscription == null) {
-            log.debug("设备 {} 没有有效的云存储订阅", deviceId);
+            log.info("设备 {} 没有有效的云存储订阅", deviceId);
             return 0;
         }
         
@@ -535,7 +535,7 @@ public class CloudStorageService {
     public int cleanupExpiredVideos(String deviceId) {
         int storageDays = getStorageDaysForDevice(deviceId);
         if (storageDays <= 0) {
-            log.debug("设备 {} 没有有效订阅或存储天数为0，跳过清理", deviceId);
+            log.info("设备 {} 没有有效订阅或存储天数为0，跳过清理", deviceId);
             return 0;
         }
         
@@ -821,7 +821,7 @@ public class CloudStorageService {
                         .build();
                     s3Client.deleteObject(deleteRequest);
                     deletedCount++;
-                    log.debug("已删除对象: {}", obj.key());
+                    log.info("已删除对象: {}", obj.key());
                 } catch (Exception e) {
                     log.warn("删除对象失败: {}", obj.key(), e);
                 }

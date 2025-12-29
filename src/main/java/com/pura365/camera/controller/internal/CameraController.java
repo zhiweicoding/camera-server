@@ -68,7 +68,7 @@ public class CameraController {
 
         try {
             String rawBody = getRequestBody(request);
-            log.debug("请求体: {}", rawBody);
+            log.info("请求体: {}", rawBody);
 
             String token = extractJwtToken(request, rawBody);
             if (token == null) {
@@ -163,7 +163,7 @@ public class CameraController {
         String[] possibleParamNames = {"data", "token", "jwt", "payload", "encrypted_data"};
         for (String paramName : possibleParamNames) {
             String paramValue = request.getParameter(paramName);
-            log.debug("检查参数 '{}' : {}", paramName, (paramValue != null ? "存在" : "不存在"));
+            log.info("检查参数 '{}' : {}", paramName, (paramValue != null ? "存在" : "不存在"));
             if (paramValue != null && !paramValue.trim().isEmpty()) {
                 String value = paramValue.trim();
                 if (value.contains(".")) {
@@ -199,7 +199,7 @@ public class CameraController {
 
         byte[] decoded = Base64.getDecoder().decode(payloadPart);
         String json = new String(decoded, StandardCharsets.UTF_8);
-        log.debug("解码后的 payload JSON: {}", json);
+        log.info("解码后的 payload JSON: {}", json);
 
         ObjectMapper mapper = new ObjectMapper();
         return mapper.readValue(json, GetInfoRequest.class);
@@ -230,7 +230,7 @@ public class CameraController {
 
         try {
             String rawBody = getRequestBody(request);
-            log.debug("请求体: {}", rawBody);
+            log.info("请求体: {}", rawBody);
 
             String token = extractJwtToken(request, rawBody);
             if (token == null) {
@@ -324,7 +324,7 @@ public class CameraController {
 
         byte[] decoded = Base64.getDecoder().decode(payloadPart);
         String json = new String(decoded, StandardCharsets.UTF_8);
-        log.debug("解码后的 payload JSON: {}", json);
+        log.info("解码后的 payload JSON: {}", json);
 
         ObjectMapper mapper = new ObjectMapper();
         return mapper.readValue(json, ResetDeviceRequest.class);
@@ -349,7 +349,7 @@ public class CameraController {
 
         byte[] decoded = Base64.getDecoder().decode(payloadPart);
         String json = new String(decoded, StandardCharsets.UTF_8);
-        log.debug("解码后的 payload JSON: {}", json);
+        log.info("解码后的 payload JSON: {}", json);
 
         ObjectMapper mapper = new ObjectMapper();
         return mapper.readValue(json, SendMsgRequest.class);
