@@ -159,11 +159,16 @@ public class DeviceService {
      * @param deviceId 设备ID
      */
     public void deleteDevice(Long userId, String deviceId) {
+        // 删除用户设备绑定关系
         LambdaQueryWrapper<UserDevice> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(UserDevice::getUserId, userId)
                 .eq(UserDevice::getDeviceId, deviceId);
         userDeviceRepository.delete(queryWrapper);
         log.info("用户 {} 解绑设备 {}", userId, deviceId);
+        
+        // 删除设备表数据
+        deviceRepository.deleteById(deviceId);
+        log.info("删除设备表数据 deviceId={}", deviceId);
     }
 
     /**
