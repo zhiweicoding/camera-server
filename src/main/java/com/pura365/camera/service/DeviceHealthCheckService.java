@@ -123,9 +123,10 @@ public class DeviceHealthCheckService {
     private void sendHeartbeatToOnlineDevices() {
         // 查询所有在线设备（必须有过心跳记录才发送，避免向虚假设备发送）
         LambdaQueryWrapper<Device> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(Device::getStatus, DeviceOnlineStatus.ONLINE)
-                .eq(Device::getEnabled, EnableStatus.ENABLED)
-                .isNotNull(Device::getLastHeartbeatTime); // 有过心跳记录
+        queryWrapper
+                .isNotNull(Device::getLastHeartbeatTime) // 有过心跳记录
+                .isNotNull(Device::getSsid) // 过滤ssid为空的设备
+                .ne(Device::getSsid, ""); // 过滤ssid为空字符串的设备
 
         List<Device> onlineDevices = deviceRepository.selectList(queryWrapper);
 

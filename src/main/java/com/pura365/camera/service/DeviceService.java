@@ -54,6 +54,17 @@ public class DeviceService {
      * MQTT PTZ 控制指令码
      */
     private static final int MQTT_CODE_PTZ = 99;
+    
+    /**
+     * 设备信息请求超时时间（毫秒）
+     */
+    private static final long DEVICE_INFO_TIMEOUT_MS = 500;
+    
+    /**
+     * 设备信息请求线程池
+     */
+    private static final java.util.concurrent.ExecutorService DEVICE_INFO_EXECUTOR = 
+            java.util.concurrent.Executors.newCachedThreadPool();
 
     /**
      * ISO8601 时间格式化器
@@ -97,10 +108,22 @@ public class DeviceService {
             return Collections.emptyList();
         }
 
-        // 构建设备列表响应
-        return bindings.stream()
-                .map(ud -> deviceRepository.selectById(ud.getDeviceId()))
+        // 获取设备ID列表
+        List<String> deviceIds = bindings.stream()
+                .map(UserDevice::getDeviceId)
+                .collect(Collectors.toList());
+        
+        // 并行向所有设备发送 MQTT CODE 11，然后统一等待
+        requestDeviceInfoParallel(deviceIds);
+        
+        // 从数据库重新查询最新数据
+        List<Device> devices = deviceIds.stream()
+                .map(deviceRepository::selectById)
                 .filter(Objects::nonNull)
+                .collect(Collectors.toList());
+
+        // 构建设备列表响应
+        return devices.stream()
                 .map(device -> buildDeviceListItem(userId, device))
                 .collect(Collectors.toList());
     }
@@ -117,6 +140,16 @@ public class DeviceService {
         if (device == null) {
             return null;
         }
+        
+        // 发送 MQTT CODE 11 并等待响应（包括离线设备，用于唤醒低功耗设备）
+        requestDeviceInfoSync(deviceId);
+        
+        // 从数据库重新查询最新数据
+        device = deviceRepository.selectById(deviceId);
+        if (device == null) {
+            return null;
+        }
+        
         return buildDeviceDetail(userId, device);
     }
 
@@ -318,6 +351,72 @@ public class DeviceService {
     }
 
     // ==================== 私有方法 ====================
+
+    /**
+     * 同步发送 MQTT CODE 11 获取设备最新信息并等待响应
+     * ssid 为空的设备不发送（会解密失败）
+     */
+    private void requestDeviceInfoSync(String deviceId) {
+        if (deviceId == null) {
+            return;
+        }
+        Device device = deviceRepository.selectById(deviceId);
+        if (device == null) {
+            return;
+        }
+        String ssid = device.getSsid();
+        if (ssid == null || ssid.isEmpty()) {
+            log.debug("设备 {} ssid为空，跳过发送 MQTT CODE 11", deviceId);
+            return;
+        }
+        boolean responded = mqttMessageService.requestDeviceInfoAndWait(deviceId, DEVICE_INFO_TIMEOUT_MS);
+        if (responded) {
+            log.debug("设备 {} 已响应 CODE 11", deviceId);
+        } else {
+            log.debug("设备 {} 响应超时", deviceId);
+        }
+    }
+    
+    /**
+     * 并行向多个设备发送 MQTT CODE 11，统一等待响应
+     * 所有设备同时发送，总共只等待 DEVICE_INFO_TIMEOUT_MS
+     */
+    private void requestDeviceInfoParallel(List<String> deviceIds) {
+        if (deviceIds == null || deviceIds.isEmpty()) {
+            return;
+        }
+        
+        // 筛选有效设备（ssid不为空）
+        List<String> validDeviceIds = new java.util.ArrayList<>();
+        for (String deviceId : deviceIds) {
+            Device device = deviceRepository.selectById(deviceId);
+            if (device != null && device.getSsid() != null && !device.getSsid().isEmpty()) {
+                validDeviceIds.add(deviceId);
+            }
+        }
+        
+        if (validDeviceIds.isEmpty()) {
+            return;
+        }
+        
+        // 多线程并行发送所有请求
+        List<java.util.concurrent.CompletableFuture<Boolean>> futures = new java.util.ArrayList<>();
+        for (String deviceId : validDeviceIds) {
+            java.util.concurrent.CompletableFuture<Boolean> future = java.util.concurrent.CompletableFuture.supplyAsync(
+                () -> mqttMessageService.requestDeviceInfoAndWait(deviceId, DEVICE_INFO_TIMEOUT_MS),
+                DEVICE_INFO_EXECUTOR
+            );
+            futures.add(future);
+        }
+        
+        // 等待所有请求完成（最多等待超时时间）
+        try {
+            java.util.concurrent.CompletableFuture.allOf(futures.toArray(new java.util.concurrent.CompletableFuture[0]))
+                    .get(DEVICE_INFO_TIMEOUT_MS + 100, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            log.debug("部分设备响应超时");
+        }
+    }
 
     /**
      * 构建设备列表项VO

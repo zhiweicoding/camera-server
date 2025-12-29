@@ -23,8 +23,10 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 
 /**
  * MQTT 消息服务
@@ -60,6 +62,8 @@ public class MqttMessageService {
     private final Map<String, WebRtcMessage> webrtcOfferCache = new ConcurrentHashMap<>();
     // 缓存 WebRTC Candidate：sid -> List<WebRtcMessage>（待拉取的远端 Candidate）
     private final Map<String, List<WebRtcMessage>> webrtcCandidateCache = new ConcurrentHashMap<>();
+    // 等待设备响应的 Future：deviceId -> CompletableFuture
+    private final Map<String, CompletableFuture<Boolean>> deviceInfoWaiters = new ConcurrentHashMap<>();
     
     private MqttClient mqttClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -144,15 +148,19 @@ public class MqttMessageService {
             // 从topic提取设备序列号: camera/pura365/{deviceId}/device
             String deviceId = extractDeviceIdFromTopic(topic);
             if (deviceId == null) {
-                log.warn("无法从topic提取设备ID: {}", topic);
+                log.error("无法从topic提取设备ID: {}", topic);
                 return;
             }
             
             // 获取设备的SSID
-            Device ssid = deviceRepository.selectById(deviceId);
+            Device device = deviceRepository.selectById(deviceId);
+            if (device == null || device.getSsid() == null || device.getSsid().isEmpty()) {
+                log.error("设备 {} 不存在或ssid为空，跳过消息处理", deviceId);
+                return;
+            }
             
             // 解密消息
-            String json = encryptService.decrypt(payload, ssid.getSsid());
+            String json = encryptService.decrypt(payload, device.getSsid());
             log.info("解密后的消息: {}", json);
             
             // 解析基础消息获取code
@@ -160,7 +168,7 @@ public class MqttMessageService {
             Integer code = baseMsg.getCode();
             
             if (code == null) {
-                log.warn("消息中没有code字段");
+                log.error("消息中没有code字段");
                 return;
             }
             
@@ -322,8 +330,15 @@ public class MqttMessageService {
                 log.info("已创建设备 {} 信息记录", deviceId);
             } else {
                 deviceRepository.updateById(device);
-                log.info("已更新设备 {} 状态: SSID={}, RSSI={}, 版本={}, TF卡状态={}", 
+            log.info("已更新设备 {} 状态: SSID={}, RSSI={}, 版本={}, TF卡状态={}", 
                         deviceId, msg.getWifiname(), msg.getWifirssi(), msg.getVer(), msg.getSdstate());
+            }
+            
+            // 通知等待者设备已响应
+            CompletableFuture<Boolean> waiter = deviceInfoWaiters.remove(deviceId);
+            if (waiter != null) {
+                waiter.complete(true);
+                log.debug("设备 {} 响应已通知等待者", deviceId);
             }
             
             // 记录TF卡容量信息(用于调试)
@@ -487,9 +502,33 @@ public class MqttMessageService {
         Map<String, Object> msg = new HashMap<>();
         msg.put("code", 11);
         msg.put("time", TimeValidator.getCurrentTimestamp());
-        log.info("当前时间 {}",System.currentTimeMillis());
         sendToDevice(deviceId, msg, null);
-        log.info("已请求设备 {} 的信息", deviceId);
+        log.debug("已请求设备 {} 的信息", deviceId);
+    }
+    
+    /**
+     * 请求设备信息并等待响应（CODE 11）
+     * 
+     * @param deviceId 设备ID
+     * @param timeoutMs 超时时间（毫秒）
+     * @return true=设备已响应，false=超时或失败
+     */
+    public boolean requestDeviceInfoAndWait(String deviceId, long timeoutMs) {
+        try {
+            // 创建等待 Future
+            CompletableFuture<Boolean> future = new CompletableFuture<>();
+            deviceInfoWaiters.put(deviceId, future);
+            
+            // 发送请求
+            requestDeviceInfo(deviceId);
+            
+            // 等待响应
+            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            log.debug("设备 {} 响应超时或失败: {}", deviceId, e.getMessage());
+            deviceInfoWaiters.remove(deviceId);
+            return false;
+        }
     }
     
     /**
