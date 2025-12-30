@@ -4,6 +4,10 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
 import com.pura365.camera.domain.Device;
+import com.pura365.camera.dto.BulbConfigRequest;
+import com.pura365.camera.dto.BulbConfigResponse;
+import com.pura365.camera.model.ApiResponse;
+import com.pura365.camera.model.mqtt.MqttBulbConfigMessage;
 import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.service.MqttMessageService;
 import com.pura365.camera.util.TimeValidator;
@@ -13,6 +17,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import javax.validation.Valid;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -26,6 +32,9 @@ import java.util.Map;
 public class MqttControlController {
 
     private static final Logger log = LoggerFactory.getLogger(MqttControlController.class);
+    
+    // 等待设备响应超时时间（毫秒）
+    private static final long DEVICE_RESPONSE_TIMEOUT = 5000;
 
     @Autowired
     private MqttMessageService mqttMessageService;
@@ -304,88 +313,178 @@ public class MqttControlController {
      */
     @Operation(summary = "设置灯泡参数", description = "配置灯泡工作模式、亮度、定时等参数")
     @PostMapping("/device/{deviceId}/bulb/config")
-    public ResponseEntity<Map<String, Object>> setBulbConfig(
+    public ApiResponse<BulbConfigResponse> setBulbConfig(
             @PathVariable String deviceId,
-            @RequestParam Integer detect, // 0:手动 1:环境光自动 2:定时
-            @RequestParam(required = false) Integer brightness, // 亮度 1-100
-            @RequestParam(required = false) Integer enable, // 手动模式: 0关闭 1开启
-            @RequestParam(required = false) String timeOn1, // 定时一开启时间 hh:mm
-            @RequestParam(required = false) String timeOff1, // 定时一关闭时间 hh:mm
-            @RequestParam(required = false) String timeOn2, // 定时二开启时间 hh:mm
-            @RequestParam(required = false) String timeOff2) { // 定时二关闭时间 hh:mm
+            @Valid @RequestBody BulbConfigRequest request) {
 
-        log.info("设置设备 {} 灯泡参数: detect={}", deviceId, detect);
+        log.info("设置设备 {} 灯泡参数: detect={}, brightness={}", 
+                deviceId, request.getDetect(), request.getBrightness());
+
+        // 检查设备是否存在
+        Device device = deviceRepository.selectById(deviceId);
+        if (device == null) {
+            return ApiResponse.error(404, "设备不存在");
+        }
 
         try {
-            Map<String, Object> msg = new HashMap<>();
-            msg.put("code", 29);
-            msg.put("time", TimeValidator.getCurrentTimestamp());
-            msg.put("detect", detect);
+            // 构建 MQTT 消息参数
+            Map<String, Object> config = new HashMap<>();
+            config.put("detect", request.getDetect());
 
-            if (brightness != null) {
-                msg.put("brightness", brightness);
+            if (request.getBrightness() != null) {
+                config.put("brightness", request.getBrightness());
             }
-            if (enable != null) {
-                msg.put("enable", enable);
+            if (request.getEnable() != null) {
+                config.put("enable", request.getEnable());
             }
-            if (timeOn1 != null) {
-                msg.put("time_on1", timeOn1);
+            if (request.getTimeOn1() != null) {
+                config.put("time_on1", request.getTimeOn1());
             }
-            if (timeOff1 != null) {
-                msg.put("time_off1", timeOff1);
+            if (request.getTimeOff1() != null) {
+                config.put("time_off1", request.getTimeOff1());
             }
-            if (timeOn2 != null) {
-                msg.put("time_o2", timeOn2);
+            if (request.getTimeOn2() != null) {
+                config.put("time_o2", request.getTimeOn2());  // 注意接口文档中是 time_o2
             }
-            if (timeOff2 != null) {
-                msg.put("time_off2", timeOff2);
+            if (request.getTimeOff2() != null) {
+                config.put("time_off2", request.getTimeOff2());
             }
 
-            mqttMessageService.sendToDevice(deviceId, msg, null);
+            // 发送 MQTT 消息并等待响应
+            MqttBulbConfigMessage response = mqttMessageService.setBulbConfigAndWait(
+                    deviceId, config, DEVICE_RESPONSE_TIMEOUT);
 
-            Map<String, Object> result = new HashMap<>();
-            result.put("success", true);
-            result.put("message", "已发送灯泡配置");
-            return ResponseEntity.ok(result);
+            if (response == null) {
+                // 超时，但乐观更新数据库
+                updateDeviceBulbConfig(device, request);
+                log.warn("设备 {} 响应超时，已乐观更新数据库", deviceId);
+                
+                BulbConfigResponse result = buildResponseFromRequest(request);
+                return ApiResponse.success(result);
+            }
+
+            if (response.getStatus() != null && response.getStatus() == 1) {
+                // 配置成功，更新数据库
+                updateDeviceBulbConfig(device, request);
+                
+                BulbConfigResponse result = buildResponseFromRequest(request);
+                return ApiResponse.success(result);
+            } else {
+                return ApiResponse.error(500, "设备配置失败");
+            }
 
         } catch (Exception e) {
             log.error("设置灯泡参数失败", e);
-            Map<String, Object> result = new HashMap<>();
-            result.put("success", false);
-            result.put("message", e.getMessage());
-            return ResponseEntity.badRequest().body(result);
+            return ApiResponse.error(500, "设置失败: " + e.getMessage());
         }
     }
 
     /**
-     * 获取灯泡配置参数（CODE 30）
+     * 获取灯泡配置（CODE 30）
      */
     @Operation(summary = "获取灯泡配置", description = "获取灯泡当前的配置参数")
-    @PostMapping("/device/{deviceId}/bulb/info")
-    public ResponseEntity<Map<String, Object>> getBulbConfig(
+    @GetMapping("/device/{deviceId}/bulb/config")
+    public ApiResponse<BulbConfigResponse> getBulbConfig(
             @PathVariable String deviceId) {
 
         log.info("获取设备 {} 灯泡配置", deviceId);
 
-        try {
-            Map<String, Object> msg = new HashMap<>();
-            msg.put("code", 30);
-            msg.put("time", TimeValidator.getCurrentTimestamp());
-
-            mqttMessageService.sendToDevice(deviceId, msg, null);
-
-            Map<String, Object> result = new HashMap<>();
-            result.put("success", true);
-            result.put("message", "已发送获取灯泡配置请求");
-            return ResponseEntity.ok(result);
-
-        } catch (Exception e) {
-            log.error("获取灯泡配置失败", e);
-            Map<String, Object> result = new HashMap<>();
-            result.put("success", false);
-            result.put("message", e.getMessage());
-            return ResponseEntity.badRequest().body(result);
+        // 检查设备是否存在
+        Device device = deviceRepository.selectById(deviceId);
+        if (device == null) {
+            return ApiResponse.error(404, "设备不存在");
         }
+
+        try {
+            MqttBulbConfigMessage response = mqttMessageService.getBulbConfigAndWait(
+                    deviceId, DEVICE_RESPONSE_TIMEOUT);
+
+            if (response != null && response.getStatus() != null && response.getStatus() == 1) {
+                // 设备返回了最新配置，已在 MqttMessageService 中更新数据库
+                BulbConfigResponse result = buildResponseFromMqtt(response);
+                return ApiResponse.success(result);
+            }
+            // 超时或失败，继续返回数据库中的数据
+            log.warn("设备 {} 响应超时，返回数据库缓存配置", deviceId);
+        } catch (Exception e) {
+            log.warn("获取设备 {} 最新配置失败: {}", deviceId, e.getMessage());
+        }
+
+        // 从数据库返回缓存的配置
+        BulbConfigResponse result = buildResponseFromDevice(device);
+        return ApiResponse.success(result);
+    }
+
+    /**
+     * 更新数据库中的灯泡配置
+     */
+    private void updateDeviceBulbConfig(Device device, BulbConfigRequest request) {
+        device.setBulbDetect(request.getDetect());
+        if (request.getBrightness() != null) {
+            device.setBulbBrightness(request.getBrightness());
+        }
+        if (request.getEnable() != null) {
+            device.setBulbEnable(request.getEnable());
+        }
+        if (request.getTimeOn1() != null) {
+            device.setBulbTimeOn1(request.getTimeOn1());
+        }
+        if (request.getTimeOff1() != null) {
+            device.setBulbTimeOff1(request.getTimeOff1());
+        }
+        if (request.getTimeOn2() != null) {
+            device.setBulbTimeOn2(request.getTimeOn2());
+        }
+        if (request.getTimeOff2() != null) {
+            device.setBulbTimeOff2(request.getTimeOff2());
+        }
+        device.setUpdatedAt(LocalDateTime.now());
+        deviceRepository.updateById(device);
+    }
+
+    /**
+     * 从请求构建响应
+     */
+    private BulbConfigResponse buildResponseFromRequest(BulbConfigRequest request) {
+        BulbConfigResponse response = new BulbConfigResponse();
+        response.setDetect(request.getDetect());
+        response.setBrightness(request.getBrightness());
+        response.setEnable(request.getEnable());
+        response.setTimeOn1(request.getTimeOn1());
+        response.setTimeOff1(request.getTimeOff1());
+        response.setTimeOn2(request.getTimeOn2());
+        response.setTimeOff2(request.getTimeOff2());
+        return response;
+    }
+
+    /**
+     * 从 MQTT 响应构建返回对象
+     */
+    private BulbConfigResponse buildResponseFromMqtt(MqttBulbConfigMessage msg) {
+        BulbConfigResponse response = new BulbConfigResponse();
+        response.setDetect(msg.getDetect());
+        response.setBrightness(msg.getBrightness());
+        response.setEnable(msg.getEnable());
+        response.setTimeOn1(msg.getTimeOn1());
+        response.setTimeOff1(msg.getTimeOff1());
+        response.setTimeOn2(msg.getTimeOn2());
+        response.setTimeOff2(msg.getTimeOff2());
+        return response;
+    }
+
+    /**
+     * 从数据库设备对象构建返回对象
+     */
+    private BulbConfigResponse buildResponseFromDevice(Device device) {
+        BulbConfigResponse response = new BulbConfigResponse();
+        response.setDetect(device.getBulbDetect());
+        response.setBrightness(device.getBulbBrightness());
+        response.setEnable(device.getBulbEnable());
+        response.setTimeOn1(device.getBulbTimeOn1());
+        response.setTimeOff1(device.getBulbTimeOff1());
+        response.setTimeOn2(device.getBulbTimeOn2());
+        response.setTimeOff2(device.getBulbTimeOff2());
+        return response;
     }
 
     /**

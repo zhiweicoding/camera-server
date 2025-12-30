@@ -148,6 +148,36 @@ public class Device {
     @TableField("last_preview_url")
     private String lastPreviewUrl;
 
+    // ==================== 灯泡配置字段 ====================
+
+    /** 灯泡工作模式: 0-手动控制, 1-环境光自动控制, 2-定时控制 */
+    @TableField("bulb_detect")
+    private Integer bulbDetect;
+
+    /** 灯泡亮度: 0-100 */
+    @TableField("bulb_brightness")
+    private Integer bulbBrightness;
+
+    /** 灯泡开关状态: 0-关闭, 1-开启 */
+    @TableField("bulb_enable")
+    private Integer bulbEnable;
+
+    /** 定时一: 开启时间 hh:mm */
+    @TableField("bulb_time_on1")
+    private String bulbTimeOn1;
+
+    /** 定时一: 关闭时间 hh:mm */
+    @TableField("bulb_time_off1")
+    private String bulbTimeOff1;
+
+    /** 定时二: 开启时间 hh:mm */
+    @TableField("bulb_time_on2")
+    private String bulbTimeOn2;
+
+    /** 定时二: 关闭时间 hh:mm */
+    @TableField("bulb_time_off2")
+    private String bulbTimeOff2;
+
     /** 创建时间 */
     @TableField("created_at")
     private LocalDateTime createdAt;

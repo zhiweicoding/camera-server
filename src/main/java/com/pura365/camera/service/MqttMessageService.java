@@ -64,6 +64,8 @@ public class MqttMessageService {
     private final Map<String, List<WebRtcMessage>> webrtcCandidateCache = new ConcurrentHashMap<>();
     // 等待设备响应的 Future：deviceId -> CompletableFuture
     private final Map<String, CompletableFuture<Boolean>> deviceInfoWaiters = new ConcurrentHashMap<>();
+    // 等待灯泡配置响应的 Future
+    private final Map<String, CompletableFuture<MqttBulbConfigMessage>> bulbConfigWaiters = new ConcurrentHashMap<>();
     
     private MqttClient mqttClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -209,6 +211,14 @@ public class MqttMessageService {
                 break;
             case 148: // CODE 20 + 128: 遗言消息（设备断开连接）
                 handleDeviceWill(deviceId);
+                break;
+            case 157: // CODE 29 + 128: 灯泡配置设置响应
+                MqttBulbConfigMessage code29Resp = objectMapper.readValue(json, MqttBulbConfigMessage.class);
+                handleBulbConfigSetResponse(code29Resp, deviceId);
+                break;
+            case 158: // CODE 30 + 128: 灯泡配置查询响应
+                MqttBulbConfigMessage code30Resp = objectMapper.readValue(json, MqttBulbConfigMessage.class);
+                handleBulbConfigQueryResponse(code30Resp, deviceId);
                 break;
             default:
                 log.warn("未处理的消息CODE: {}", code);
@@ -405,6 +415,61 @@ public class MqttMessageService {
         markDeviceOffline(deviceId);
     }
     
+    /**
+     * 处理灯泡配置设置响应(CODE 157)
+     */
+    private void handleBulbConfigSetResponse(MqttBulbConfigMessage msg, String deviceId) {
+        log.info("收到设备 {} 灯泡配置设置响应 - Status: {}", deviceId, msg.getStatus());
+        
+        if (msg.getStatus() != null && msg.getStatus() == 1) {
+            log.info("设备 {} 灯泡配置设置成功", deviceId);
+        } else {
+            log.warn("设备 {} 灯泡配置设置失败", deviceId);
+        }
+        
+        // 通知等待者
+        CompletableFuture<MqttBulbConfigMessage> waiter = bulbConfigWaiters.remove(deviceId);
+        if (waiter != null) {
+            waiter.complete(msg);
+        }
+    }
+    
+    /**
+     * 处理灯泡配置查询响应(CODE 158)
+     * 更新设备的灯泡配置到数据库
+     */
+    private void handleBulbConfigQueryResponse(MqttBulbConfigMessage msg, String deviceId) {
+        log.info("收到设备 {} 灯泡配置查询响应 - Status: {}, Detect: {}, Brightness: {}", 
+                deviceId, msg.getStatus(), msg.getDetect(), msg.getBrightness());
+        
+        if (msg.getStatus() != null && msg.getStatus() == 1) {
+            try {
+                Device device = deviceRepository.selectById(deviceId);
+                if (device != null) {
+                    // 更新灯泡配置字段
+                    device.setBulbDetect(msg.getDetect());
+                    device.setBulbBrightness(msg.getBrightness());
+                    device.setBulbEnable(msg.getEnable());
+                    device.setBulbTimeOn1(msg.getTimeOn1());
+                    device.setBulbTimeOff1(msg.getTimeOff1());
+                    device.setBulbTimeOn2(msg.getTimeOn2());
+                    device.setBulbTimeOff2(msg.getTimeOff2());
+                    device.setUpdatedAt(LocalDateTime.now());
+                    deviceRepository.updateById(device);
+                    log.info("已更新设备 {} 灯泡配置到数据库", deviceId);
+                }
+            } catch (Exception e) {
+                log.error("更新设备 {} 灯泡配置失败", deviceId, e);
+            }
+        }
+        
+        // 通知等待者
+        CompletableFuture<MqttBulbConfigMessage> waiter = bulbConfigWaiters.remove(deviceId);
+        if (waiter != null) {
+            waiter.complete(msg);
+        }
+    }
+    
     // ==================== WebSocket 通知相关 ====================
     
     // WebSocket 会话管理：deviceId -> List<WebSocketSession>
@@ -599,7 +664,60 @@ public class MqttMessageService {
     }
     
     /**
-     * 从topic提取设备ID
+     * 设置灯泡配置并等待响应（CODE 29）
+     * 
+     * @param deviceId 设备ID
+     * @param config 灯泡配置参数
+     * @param timeoutMs 超时时间（毫秒）
+     * @return 设备响应消息，超时返回 null
+     */
+    public MqttBulbConfigMessage setBulbConfigAndWait(String deviceId, Map<String, Object> config, long timeoutMs) {
+        try {
+            CompletableFuture<MqttBulbConfigMessage> future = new CompletableFuture<>();
+            bulbConfigWaiters.put(deviceId, future);
+            
+            // 发送配置请求
+            Map<String, Object> msg = new HashMap<>(config);
+            msg.put("code", 29);
+            msg.put("time", TimeValidator.getCurrentTimestamp());
+            sendToDevice(deviceId, msg, null);
+            
+            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            log.debug("设备 {} 灯泡配置响应超时或失败: {}", deviceId, e.getMessage());
+            bulbConfigWaiters.remove(deviceId);
+            return null;
+        }
+    }
+    
+    /**
+     * 获取灯泡配置并等待响应（CODE 30）
+     * 
+     * @param deviceId 设备ID
+     * @param timeoutMs 超时时间（毫秒）
+     * @return 设备响应消息，超时返回 null
+     */
+    public MqttBulbConfigMessage getBulbConfigAndWait(String deviceId, long timeoutMs) {
+        try {
+            CompletableFuture<MqttBulbConfigMessage> future = new CompletableFuture<>();
+            bulbConfigWaiters.put(deviceId, future);
+            
+            // 发送查询请求
+            Map<String, Object> msg = new HashMap<>();
+            msg.put("code", 30);
+            msg.put("time", TimeValidator.getCurrentTimestamp());
+            sendToDevice(deviceId, msg, null);
+            
+            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            log.debug("设备 {} 灯泡配置查询响应超时或失败: {}", deviceId, e.getMessage());
+            bulbConfigWaiters.remove(deviceId);
+            return null;
+        }
+    }
+    
+    /**
+     * 从 topic 提取设备ID
      */
     private String extractDeviceIdFromTopic(String topic) {
         // camera/pura365/{deviceId}/device
