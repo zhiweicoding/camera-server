@@ -161,7 +161,7 @@ public class MqttMessageService {
             
             // 解密消息
             String json = encryptService.decrypt(payload, device.getSsid());
-            log.info("解密后的消息: {}", json);
+            //log.info("解密后的消息: {}", json);
             
             // 解析基础消息获取code
             MqttBaseMessage baseMsg = objectMapper.readValue(json, MqttBaseMessage.class);
