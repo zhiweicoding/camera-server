@@ -355,6 +355,7 @@ public class DeviceService {
     /**
      * 同步发送 MQTT CODE 11 获取设备最新信息并等待响应
      * ssid 为空的设备不发送（会解密失败）
+     * 超时未响应则标记设备离线
      */
     private void requestDeviceInfoSync(String deviceId) {
         if (deviceId == null) {
@@ -373,13 +374,16 @@ public class DeviceService {
         if (responded) {
             log.debug("设备 {} 已响应 CODE 11", deviceId);
         } else {
-            log.debug("设备 {} 响应超时", deviceId);
+            // 超时未响应，标记设备离线
+            log.info("设备 {} 响应超时，标记为离线", deviceId);
+            mqttMessageService.markDeviceOffline(deviceId);
         }
     }
     
     /**
      * 并行向多个设备发送 MQTT CODE 11，统一等待响应
      * 所有设备同时发送，总共只等待 DEVICE_INFO_TIMEOUT_MS
+     * 超时未响应的设备标记为离线
      */
     private void requestDeviceInfoParallel(List<String> deviceIds) {
         if (deviceIds == null || deviceIds.isEmpty()) {
@@ -399,22 +403,37 @@ public class DeviceService {
             return;
         }
         
-        // 多线程并行发送所有请求
-        List<java.util.concurrent.CompletableFuture<Boolean>> futures = new java.util.ArrayList<>();
+        // 多线程并行发送所有请求，记录每个设备的响应结果
+        Map<String, java.util.concurrent.CompletableFuture<Boolean>> futureMap = new java.util.LinkedHashMap<>();
         for (String deviceId : validDeviceIds) {
             java.util.concurrent.CompletableFuture<Boolean> future = java.util.concurrent.CompletableFuture.supplyAsync(
                 () -> mqttMessageService.requestDeviceInfoAndWait(deviceId, DEVICE_INFO_TIMEOUT_MS),
                 DEVICE_INFO_EXECUTOR
             );
-            futures.add(future);
+            futureMap.put(deviceId, future);
         }
         
         // 等待所有请求完成（最多等待超时时间）
         try {
-            java.util.concurrent.CompletableFuture.allOf(futures.toArray(new java.util.concurrent.CompletableFuture[0]))
+            java.util.concurrent.CompletableFuture.allOf(futureMap.values().toArray(new java.util.concurrent.CompletableFuture[0]))
                     .get(DEVICE_INFO_TIMEOUT_MS + 100, java.util.concurrent.TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             log.debug("部分设备响应超时");
+        }
+        
+        // 检查每个设备的响应结果，超时的标记为离线
+        for (Map.Entry<String, java.util.concurrent.CompletableFuture<Boolean>> entry : futureMap.entrySet()) {
+            String deviceId = entry.getKey();
+            try {
+                Boolean responded = entry.getValue().getNow(false);
+                if (!Boolean.TRUE.equals(responded)) {
+                    log.info("设备 {} 响应超时，标记为离线", deviceId);
+                    mqttMessageService.markDeviceOffline(deviceId);
+                }
+            } catch (Exception e) {
+                log.info("设备 {} 响应异常，标记为离线", deviceId);
+                mqttMessageService.markDeviceOffline(deviceId);
+            }
         }
     }
 

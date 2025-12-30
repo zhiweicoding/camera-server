@@ -207,7 +207,9 @@ public class MqttMessageService {
                 WebRtcMessage candidateMsg = objectMapper.readValue(json, WebRtcMessage.class);
                 handleWebRtcCandidate(candidateMsg, deviceId);
                 break;
-            // TODO: 添加其他CODE的处理
+            case 148: // CODE 20 + 128: 遗言消息（设备断开连接）
+                handleDeviceWill(deviceId);
+                break;
             default:
                 log.warn("未处理的消息CODE: {}", code);
         }
@@ -392,6 +394,15 @@ public class MqttMessageService {
         }
         // 通过 WebSocket 转发 Candidate 给对应的客户端
         notifyWebRtcMessage(deviceId, "candidate", msg);
+    }
+    
+    /**
+     * 处理设备遗言消息(CODE 148)
+     * 设备断开MQTT连接时由Broker发布，立即标记设备离线
+     */
+    private void handleDeviceWill(String deviceId) {
+        log.info("收到设备 {} 遗言消息，立即标记为离线", deviceId);
+        markDeviceOffline(deviceId);
     }
     
     // ==================== WebSocket 通知相关 ====================
