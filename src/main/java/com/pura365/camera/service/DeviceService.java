@@ -58,7 +58,7 @@ public class DeviceService {
     /**
      * 设备信息请求超时时间（毫秒）
      */
-    private static final long DEVICE_INFO_TIMEOUT_MS = 500;
+    private static final long DEVICE_INFO_TIMEOUT_MS = 750;
     
     /**
      * 设备信息请求线程池
