@@ -236,7 +236,7 @@ public class CameraService {
      * 用于接收事件信息或AI结果，入库并推送给绑定该设备的所有用户
      */
     public void handleMessage(SendMsgRequest request) {
-        String deviceId = request.getId();
+        String deviceId = request.getTopic();
         String title = request.getTitle();
         String content = request.getMsg();
         String thumbnailUrl = request.getPicurl();
