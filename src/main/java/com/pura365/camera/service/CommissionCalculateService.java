@@ -19,16 +19,21 @@ import java.util.List;
  * 
  * 分润计算逻辑：
  * 1. 可分润金额 = 套餐价格 - 手续费 - 套餐成本
- * 2. 公司利润 = 可分润金额 × 公司比例（如40%）
- * 3. 装机商基础利润 = 可分润金额 × 装机商比例（如5%）
- * 4. 一级经销商利润 = 装机商基础利润 × 一级经销商分润比例（如50%）
- * 5. 二级经销商利润 = 一级经销商利润 × 二级经销商分润比例（如40%）
- * 6. 以此类推...
+ * 2. 装机商分润 = 可分润金额 × 装机商比例（如5%） ← 独立分润池
+ * 3. 一级经销商分润 = 可分润金额 × 一级比例（如60%） ← 独立分润池
+ * 4. 二级经销商分润 = 一级经销商分润 × 二级抽佣率（如45%）
+ * 5. 三级经销商分润 = 二级经销商分润 × 三级抽佣率，以此类推...
+ * 6. 公司利润 = 可分润金额 - 装机商分润 - 一级经销商分润
  * 
  * 最终：
- * - 装机商实得 = 装机商基础利润 - 一级经销商利润
- * - 一级经销商实得 = 一级经销商利润 - 二级经销商利润
- * - 二级经销商实得 = 二级经销商利润 - 三级经销商利润
+ * - 装机商实得 = 装机商分润（独立分润池，不受经销商影响）
+ * - 一级经销商实得 = 一级分润 - 二级分润
+ * - 二级经销商实得 = 二级分润 - 三级分润
+ * 
+ * 双重身份处理：
+ * - 如果装机商同时是经销商，该用户同时获得装机商分润和经销商分润
+ * - 当双重身份用户直接分配给下级时，系统自动插入虚拟一级经销商记录
+ * - 确保下级经销商基于经销商分润计算，而不是基于总利润
  */
 @Service
 public class CommissionCalculateService {
@@ -89,8 +94,9 @@ public class CommissionCalculateService {
         private BigDecimal planCost;         // 套餐成本
         private BigDecimal profitAmount;     // 可分润金额
         private BigDecimal companyAmount;    // 公司利润
-        private BigDecimal installerBaseAmount; // 装机商基础利润
-        private BigDecimal installerActualAmount; // 装机商实际所得
+        private BigDecimal installerBaseAmount; // 装机商基础利润（=实际所得，独立分润池）
+        private BigDecimal installerActualAmount; // 装机商实际所得（与installerBaseAmount相同）
+        private BigDecimal level1BaseAmount; // 一级经销商分润池（基于总可分利润）
         private Long installerId;            // 装机商ID
         private String installerCode;        // 装机商代码
         private List<CommissionDetail> details = new ArrayList<>(); // 分润明细
@@ -137,6 +143,8 @@ public class CommissionCalculateService {
 
         // 5. 获取设备的分销链路
         List<DeviceVendor> vendorChain = deviceVendorRepository.getVendorChainByDeviceId(deviceId);
+        // 创建可修改的副本，避免影响原始数据
+        List<DeviceVendor> effectiveVendorChain = new ArrayList<>(vendorChain);
         
         // 6. 获取装机商信息
         Installer installer = null;
@@ -145,29 +153,81 @@ public class CommissionCalculateService {
             installerRate = BigDecimal.ZERO;
         }
 
-        if (!vendorChain.isEmpty()) {
-            DeviceVendor firstVendor = vendorChain.get(0);
+        if (!effectiveVendorChain.isEmpty()) {
+            DeviceVendor firstVendor = effectiveVendorChain.get(0);
             if (firstVendor.getInstallerId() != null) {
                 installer = installerRepository.selectById(firstVendor.getInstallerId());
             }
         }
+        
+        // 6.5 双重身份处理：如果装机商同时是经销商，且该经销商不在分销链路中
+        // 则自动在链路开头插入虚拟的一级经销商记录，保证下级经销商基于经销商分润计算
+        if (installer != null) {
+            User installerUser = findUserByInstallerId(installer.getId());
+            if (installerUser != null && installerUser.getIsDealer() != null && installerUser.getIsDealer() == 1) {
+                Long dealerId = installerUser.getDealerId();
+                if (dealerId != null) {
+                    // 检查该经销商是否已在分销链路中
+                    boolean alreadyInChain = effectiveVendorChain.stream()
+                            .anyMatch(dv -> dealerId.equals(dv.getVendorId()));
+                    
+                    if (!alreadyInChain && !effectiveVendorChain.isEmpty()) {
+                        // 双重身份用户直接分配给下级，需要自动插入虚拟的一级经销商记录
+                        BigDecimal level1Rate = planCommission.getLevel1Rate() != null ? planCommission.getLevel1Rate() : BigDecimal.ZERO;
+                        Vendor dealer = vendorRepository.selectById(dealerId);
+                        
+                        // 创建虚拟的一级经销商记录
+                        DeviceVendor virtualVendor = new DeviceVendor();
+                        virtualVendor.setDeviceId(deviceId);
+                        virtualVendor.setInstallerId(installer.getId());
+                        virtualVendor.setInstallerCode(installer.getInstallerCode());
+                        virtualVendor.setVendorId(dealerId);
+                        virtualVendor.setVendorCode(dealer != null ? dealer.getVendorCode() : "");
+                        virtualVendor.setCommissionRate(level1Rate);
+                        virtualVendor.setLevel(1);
+                        
+                        // 将虚拟记录插入到链路开头，并将其他记录的level+1
+                        effectiveVendorChain.add(0, virtualVendor);
+                        for (int i = 1; i < effectiveVendorChain.size(); i++) {
+                            DeviceVendor dv = effectiveVendorChain.get(i);
+                            dv.setLevel(dv.getLevel() != null ? dv.getLevel() + 1 : 2);
+                        }
+                        
+                        log.info("双重身份自动插入一级经销商: deviceId={}, dealerId={}, dealerCode={}, level1Rate={}",
+                                deviceId, dealerId, virtualVendor.getVendorCode(), level1Rate);
+                    }
+                }
+            }
+        }
 
         // 7. 计算装机商基础利润 = 可分润金额 × 装机商比例
+        // 装机商独立分润池，实得 = 基础利润
         BigDecimal installerBaseAmount = profitAmount.multiply(installerRate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
         result.setInstallerBaseAmount(installerBaseAmount);
+        result.setInstallerActualAmount(installerBaseAmount); // 装机商实得就是基础利润
 
-        // 8. 计算公司利润（剩余部分，可配置比例）
-        // 公司利润 = 可分润金额 - 装机商基础利润
-        BigDecimal companyAmount = profitAmount.subtract(installerBaseAmount);
-        result.setCompanyAmount(companyAmount);
+        // 8. 递归计算经销商分润
+        // 关键逻辑：一级经销商(level=1)基于总可分利润计算，二级及以下基于上级分润计算
+        BigDecimal level1BaseAmount = BigDecimal.ZERO; // 一级经销商分润池
+        BigDecimal remainingProfit = BigDecimal.ZERO;  // 用于计算下级分润的基数
 
-        // 9. 递归计算经销商分润
-        BigDecimal remainingProfit = installerBaseAmount;
-        BigDecimal totalVendorShare = BigDecimal.ZERO;
-
-        for (DeviceVendor dv : vendorChain) {
+        for (DeviceVendor dv : effectiveVendorChain) {
             BigDecimal vendorRate = dv.getCommissionRate() != null ? dv.getCommissionRate() : BigDecimal.ZERO;
-            BigDecimal vendorShare = remainingProfit.multiply(vendorRate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
+            BigDecimal vendorShare;
+            
+            Integer level = dv.getLevel() != null ? dv.getLevel() : 1;
+            if (level == 1) {
+                // 一级经销商：直接基于总可分利润计算
+                // FF经销商可分利润 = 总可分利润 × 60%
+                vendorShare = profitAmount.multiply(vendorRate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
+                level1BaseAmount = vendorShare;
+                remainingProfit = vendorShare; // 作为下级的计算基数
+            } else {
+                // 二级及以下经销商：基于上级分润计算
+                // BB经销商可分利润 = 一级分润 × 45%
+                vendorShare = remainingProfit.multiply(vendorRate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
+                remainingProfit = vendorShare; // 下一级基于本级的分润金额计算
+            }
             
             // 获取经销商信息
             Vendor vendor = vendorRepository.selectById(dv.getVendorId());
@@ -181,20 +241,22 @@ public class CommissionCalculateService {
                     vendorRate,
                     vendorShare,
                     BigDecimal.ZERO, // 实际所得稍后计算
-                    dv.getLevel()
+                    level
             );
             result.getDetails().add(detail);
-
-            totalVendorShare = totalVendorShare.add(vendorShare);
-            remainingProfit = vendorShare; // 下一级基于本级的分润金额计算
         }
+        
+        result.setLevel1BaseAmount(level1BaseAmount);
 
-        // 10. 计算各级实际所得
-        // 装机商实际所得 = 装机商基础利润 - 一级经销商分润
-        BigDecimal firstLevelShare = result.getDetails().isEmpty() ? BigDecimal.ZERO : result.getDetails().get(0).getAmount();
-        BigDecimal installerActualAmount = installerBaseAmount.subtract(firstLevelShare);
-        result.setInstallerActualAmount(installerActualAmount);
+        // 9. 计算公司利润
+        // 公司利润 = 总可分利润 - 装机商基础利润 - 一级经销商分润池
+        BigDecimal companyAmount = profitAmount.subtract(installerBaseAmount).subtract(level1BaseAmount);
+        if (companyAmount.compareTo(BigDecimal.ZERO) < 0) {
+            companyAmount = BigDecimal.ZERO;
+        }
+        result.setCompanyAmount(companyAmount);
 
+        // 10. 计算各级经销商实际所得
         // 经销商实际所得 = 本级分润 - 下级分润
         for (int i = 0; i < result.getDetails().size(); i++) {
             CommissionDetail current = result.getDetails().get(i);
@@ -214,7 +276,7 @@ public class CommissionCalculateService {
                     installer.getInstallerName(),
                     installerRate,
                     installerBaseAmount,
-                    installerActualAmount,
+                    installerBaseAmount, // 装机商实得 = 基础利润（独立分润池）
                     0
             );
             result.getDetails().add(0, installerDetail);
@@ -223,10 +285,10 @@ public class CommissionCalculateService {
         }
 
         // 检查双重身份：装机商和经销商是否为同一用户
-        checkAndMergeDualIdentity(result, installer, vendorChain);
+        checkAndMergeDualIdentity(result, installer, effectiveVendorChain);
 
-        log.info("分润计算完成: deviceId={}, payAmount={}, profitAmount={}, installerAmount={}, vendorDetails={}, hasDualIdentity={}",
-                deviceId, payAmount, profitAmount, installerActualAmount, result.getDetails().size(), result.isHasDualIdentity());
+        log.info("分润计算完成: deviceId={}, payAmount={}, profitAmount={}, installerAmount={}, level1Amount={}, companyAmount={}, vendorDetails={}, hasDualIdentity={}",
+                deviceId, payAmount, profitAmount, installerBaseAmount, level1BaseAmount, companyAmount, result.getDetails().size(), result.isHasDualIdentity());
 
         return result;
     }
@@ -281,6 +343,20 @@ public class CommissionCalculateService {
                 break;
             }
         }
+    }
+
+    /**
+     * 根据装机商ID查找用户
+     */
+    private User findUserByInstallerId(Long installerId) {
+        if (installerId == null) {
+            return null;
+        }
+        QueryWrapper<User> qw = new QueryWrapper<>();
+        qw.lambda()
+                .eq(User::getIsInstaller, 1)
+                .eq(User::getInstallerId, installerId);
+        return userRepository.selectOne(qw);
     }
 
     /**

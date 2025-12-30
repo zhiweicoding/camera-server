@@ -10,6 +10,7 @@ import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.repository.PaymentOrderRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,6 +22,7 @@ import java.util.Date;
  * 
  * 处理支付成功后的业务逻辑,包括:
  * - 更新订单状态
+ * - 计算并填充分佣信息
  * - 激活云存储套餐
  * - 更新设备配置
  */
@@ -32,6 +34,9 @@ public class PaymentCallbackService {
     private final PaymentOrderRepository paymentOrderRepository;
     private final CloudSubscriptionRepository cloudSubscriptionRepository;
     private final DeviceRepository deviceRepository;
+    
+    @Autowired
+    private CommissionCalculateService commissionCalculateService;
 
     public PaymentCallbackService(PaymentOrderRepository paymentOrderRepository,
                                    CloudSubscriptionRepository cloudSubscriptionRepository,
@@ -75,6 +80,17 @@ public class PaymentCallbackService {
         order.setThirdOrderId(transactionId);
         order.setPaidAt(new Date());
         order.setUpdatedAt(new Date());
+        
+        // 计算并填充分佣信息
+        try {
+            commissionCalculateService.fillOrderCommission(order, order.getDeviceId());
+            logger.info("分佣计算完成: orderId={}, installerAmount={}, dealerAmount={}", 
+                    orderId, order.getInstallerAmount(), order.getDealerAmount());
+        } catch (Exception e) {
+            logger.error("分佣计算失败: orderId={}", orderId, e);
+            // 分佣计算失败不影响支付成功流程
+        }
+        
         paymentOrderRepository.updateById(order);
 
         // 根据商品类型处理业务逻辑
