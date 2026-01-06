@@ -77,8 +77,9 @@ public class AuthInterceptor implements HandlerInterceptor {
         if (path.equals("/device-id-tool.html") || path.startsWith("/api/device-id")) {
             return true;
         }
-        // 支付回调接口（PayPal/微信等）
-        if (path.startsWith("/api/payment/paypal/") || path.startsWith("/api/payment/wechat/")) {
+        // 支付回调接口（PayPal/微信/Apple等）
+        if (path.startsWith("/api/payment/paypal/") || path.startsWith("/api/payment/wechat/")
+                || path.startsWith("/api/callback/")) {
             return true;
         }
         if (path.startsWith("/error") || path.startsWith("/actuator")) {
