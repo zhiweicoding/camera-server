@@ -185,11 +185,12 @@ public class DeviceController {
             @Parameter(description = "设备ID") @PathVariable("id") String deviceId,
             @Valid @RequestBody UpdateDeviceRequest request) {
         log.info("更新设备 - userId={}, deviceId={}, request={}", currentUserId, deviceId, request);
-        DeviceVO device = deviceService.updateDevice(deviceId, request);
+        DeviceVO device = deviceService.updateDevice(deviceId, request, currentUserId);
         if (device == null) {
             log.warn("更新设备失败，设备不存在 - userId={}, deviceId={}", currentUserId, deviceId);
             return ApiResponse.error(HTTP_NOT_FOUND, MSG_DEVICE_NOT_FOUND);
         }
+
         log.info("更新设备成功 - userId={}, deviceId={}", currentUserId, deviceId);
         return ApiResponse.success(device);
     }
@@ -240,7 +241,7 @@ public class DeviceController {
             // 更新设备的预览图URL
             UpdateDeviceRequest updateRequest = new UpdateDeviceRequest();
             updateRequest.setLastPreviewUrl(previewUrl);
-            deviceService.updateDevice(deviceId, updateRequest);
+            deviceService.updateDevice(deviceId, updateRequest, currentUserId);
             
             log.info("上传设备预览图成功 - userId={}, deviceId={}, url={}", currentUserId, deviceId, previewUrl);
             

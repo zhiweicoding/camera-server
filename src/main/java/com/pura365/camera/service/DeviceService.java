@@ -10,6 +10,7 @@ import com.pura365.camera.enums.UserDeviceRole;
 import com.pura365.camera.model.device.*;
 import com.pura365.camera.repository.*;
 import com.pura365.camera.util.TimeValidator;
+import com.pura365.camera.service.NetworkPairingStatusService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -89,6 +90,9 @@ public class DeviceService {
 
     @Autowired
     private MqttMessageService mqttMessageService;
+    
+    @Autowired
+    private NetworkPairingStatusService pairingStatusService;
 
     // ==================== 设备查询 ====================
 
@@ -211,7 +215,7 @@ public class DeviceService {
      * @param request  更新请求
      * @return 更新后的设备信息，设备不存在返回null
      */
-    public DeviceVO updateDevice(String deviceId, UpdateDeviceRequest request) {
+    public DeviceVO updateDevice(String deviceId, UpdateDeviceRequest request, Long userId) {
         Device device = deviceRepository.selectById(deviceId);
         if (device == null) {
             return null;
@@ -236,6 +240,21 @@ public class DeviceService {
         if (updated) {
             deviceRepository.updateById(device);
         }
+        QueryWrapper<UserDevice> qw = new QueryWrapper<>();
+        qw.lambda().eq(UserDevice::getUserId, userId)
+                .eq(UserDevice::getDeviceId, deviceId);
+
+        if (userDeviceRepository.selectCount(qw) != 0) {
+            // 删除之前绑定关系 重新绑定
+            userDeviceRepository.delete(qw);
+            log.error("用户设备绑定关系已存在, userId={}, deviceSn={}", userId, deviceId);
+        }
+        log.info("创建用户设备绑定关系, userId={}, deviceSn={}", userId, deviceId);
+        UserDevice ud = new UserDevice();
+        ud.setUserId(userId);
+        ud.setDeviceId(deviceId);
+        ud.setRole(UserDeviceRole.OWNER);
+        userDeviceRepository.insert(ud);
 
         return buildDeviceVO(device);
     }
@@ -593,18 +612,21 @@ public class DeviceService {
      * 绑定用户与设备（如果未绑定）
      */
     private void bindUserDevice(Long userId, String deviceId) {
-        LambdaQueryWrapper<UserDevice> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(UserDevice::getUserId, userId)
+        LambdaQueryWrapper<UserDevice> qw = new LambdaQueryWrapper<>();
+        qw.eq(UserDevice::getUserId, userId)
                 .eq(UserDevice::getDeviceId, deviceId);
 
-        if (userDeviceRepository.selectCount(queryWrapper) == 0) {
-            UserDevice userDevice = new UserDevice();
-            userDevice.setUserId(userId);
-            userDevice.setDeviceId(deviceId);
-            userDevice.setRole(UserDeviceRole.OWNER);
-            userDeviceRepository.insert(userDevice);
-            log.info("绑定用户 {} 与设备 {}", userId, deviceId);
+        if (userDeviceRepository.selectCount(qw) != 0) {
+            // 删除之前绑定关系 重新绑定
+            userDeviceRepository.delete(qw);
+            log.error("用户设备绑定关系已存在, userId={}, deviceSn={}", userId, deviceId);
         }
+        log.info("创建用户设备绑定关系, userId={}, deviceSn={}", userId, deviceId);
+        UserDevice ud = new UserDevice();
+        ud.setUserId(userId);
+        ud.setDeviceId(deviceId);
+        ud.setRole(UserDeviceRole.OWNER);
+        userDeviceRepository.insert(ud);
     }
 
     /**

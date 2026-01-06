@@ -58,6 +58,9 @@ public class MqttMessageService {
     @Autowired
     private DeviceRepository deviceRepository;
     
+    @Autowired
+    private NetworkPairingStatusService pairingStatusService;
+    
     // 缓存 WebRTC Offer：sid -> WebRtcMessage（最近一次）
     private final Map<String, WebRtcMessage> webrtcOfferCache = new ConcurrentHashMap<>();
     // 缓存 WebRTC Candidate：sid -> List<WebRtcMessage>（待拉取的远端 Candidate）
@@ -147,22 +150,30 @@ public class MqttMessageService {
         try {
             log.info("收到MQTT消息 - Topic: {}, 长度: {} bytes", topic, payload.length);
             
-            // 从topic提取设备序列号: camera/pura365/{deviceId}/device
+            // 从 topic 提取设备序列号: camera/pura365/{deviceId}/device
             String deviceId = extractDeviceIdFromTopic(topic);
             if (deviceId == null) {
                 log.error("无法从topic提取设备ID: {}", topic);
                 return;
             }
             
-            // 获取设备的SSID
-            Device device = deviceRepository.selectById(deviceId);
-            if (device == null || device.getSsid() == null || device.getSsid().isEmpty()) {
-                log.error("设备 {} 不存在或ssid为空，跳过消息处理", deviceId);
+            // 获取设备的SSID：优先使用Redis中的（最新的），Redis没有再用数据库的
+            String ssid = deviceSsidService.getSsid(deviceId);
+            if (ssid == null || ssid.isEmpty()) {
+                // Redis中没有，从数据库获取
+                Device device = deviceRepository.selectById(deviceId);
+                if (device != null && device.getSsid() != null && !device.getSsid().isEmpty()) {
+                    ssid = device.getSsid();
+                }
+            }
+            
+            if (ssid == null || ssid.isEmpty()) {
+                log.error("设备 {} 的SSID为空（Redis和数据库都没有），跳过消息处理", deviceId);
                 return;
             }
             
             // 解密消息
-            String json = encryptService.decrypt(payload, device.getSsid());
+            String json = encryptService.decrypt(payload, ssid);
             //log.info("解密后的消息: {}", json);
             
             // 解析基础消息获取code
@@ -260,10 +271,11 @@ public class MqttMessageService {
             log.error("更新设备 {} 在线状态失败", deviceId, e);
         }
         
-        // 如果status=1（配网后首次连接），可以触发额外逻辑
+        // 如果status=1（配网后首次连接），更新配网状态为成功
         if (msg.getStatus() != null && msg.getStatus() == 1) {
-            log.info("设备 {} 配网后首次连接", deviceId);
-            // TODO: 后续可以通过 WebSocket 推送通知给 APP
+            log.info("设备 {} 配网后首次连接，更新配网状态为成功", deviceId);
+            // 更新Redis中的配网状态为成功
+            pairingStatusService.setSuccess(deviceId);
         }
     }
     

@@ -190,17 +190,17 @@ public class WifiService {
         QueryWrapper<UserDevice> qw = new QueryWrapper<>();
         qw.lambda().eq(UserDevice::getUserId, userId)
                 .eq(UserDevice::getDeviceId, deviceSn);
-        
-        if (userDeviceRepository.selectCount(qw) == 0) {
-            log.info("创建用户设备绑定关系, userId={}, deviceSn={}", userId, deviceSn);
-            UserDevice ud = new UserDevice();
-            ud.setUserId(userId);
-            ud.setDeviceId(deviceSn);
-            ud.setRole(UserDeviceRole.OWNER);
-            userDeviceRepository.insert(ud);
-        } else {
-            log.info("用户设备绑定关系已存在, userId={}, deviceSn={}", userId, deviceSn);
+        if (userDeviceRepository.selectCount(qw) != 0) {
+            // 删除之前绑定关系 重新绑定
+            userDeviceRepository.delete(qw);
+            log.error("用户设备绑定关系已存在, userId={}, deviceSn={}", userId, deviceSn);
         }
+        log.info("创建用户设备绑定关系, userId={}, deviceSn={}", userId, deviceSn);
+        UserDevice ud = new UserDevice();
+        ud.setUserId(userId);
+        ud.setDeviceId(deviceSn);
+        ud.setRole(UserDeviceRole.OWNER);
+        userDeviceRepository.insert(ud);
     }
 
     private DeviceBinding createDeviceBinding(Long userId, String deviceSn, BindDeviceRequest request) {

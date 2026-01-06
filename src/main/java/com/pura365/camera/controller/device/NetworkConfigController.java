@@ -12,6 +12,7 @@ import com.pura365.camera.model.NetworkConfigRequest;
 import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.repository.NetworkConfigRepository;
 import com.pura365.camera.service.DeviceSsidService;
+import com.pura365.camera.service.NetworkPairingStatusService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,6 +40,9 @@ public class NetworkConfigController {
     @Autowired
     private DeviceSsidService deviceSsidService;
 
+    @Autowired
+    private NetworkPairingStatusService pairingStatusService;
+
     /**
      * 提交配网信息
      * APP 在完成设备配网后调用此接口，保存配网信息到数据库
@@ -51,21 +55,21 @@ public class NetworkConfigController {
         log.info("收到配网信息 - 设备: {}, SSID: {}", request.getDeviceId(), request.getSsid());
 
         try {
-            // 1. 创建或更新设备记录（根据主键 deviceId）
-            Device device = deviceRepository.selectById(request.getDeviceId());
-            if (device == null) {
-                device = new Device();
-                device.setId(request.getDeviceId());
-            }
-            device.setSsid(request.getSsid());
-            device.setRegion(request.getRegion());
-            device.setEnabled(EnableStatus.ENABLED);
-
-            if (deviceRepository.selectById(device.getId()) == null) {
-                deviceRepository.insert(device);
-            } else {
-                deviceRepository.updateById(device);
-            }
+//            // 1. 创建或更新设备记录（根据主键 deviceId）
+//            Device device = deviceRepository.selectById(request.getDeviceId());
+//            if (device == null) {
+//                device = new Device();
+//                device.setId(request.getDeviceId());
+//            }
+//            device.setSsid(request.getSsid());
+//            device.setRegion(request.getRegion());
+//            device.setEnabled(EnableStatus.ENABLED);
+//
+//            if (deviceRepository.selectById(device.getId()) == null) {
+//                deviceRepository.insert(device);
+//            } else {
+//                deviceRepository.updateById(device);
+//            }
 
             // 2. 保存配网信息
             NetworkConfig config = new NetworkConfig();
@@ -81,6 +85,9 @@ public class NetworkConfigController {
 
             // 3. 保存 SSID 到缓存，便于后续使用
             deviceSsidService.saveSsid(request.getDeviceId(), request.getSsid());
+
+            // 4. 设置配网状态为"配网中"（存储到Redis）
+            pairingStatusService.setPairing(request.getDeviceId());
 
             log.info("配网信息已保存 - 设备: {}", request.getDeviceId());
 
@@ -161,5 +168,48 @@ public class NetworkConfigController {
             log.error("查询配网历史失败", e);
             return ResponseEntity.badRequest().body(e.getMessage());
         }
+    }
+
+    /**
+     * 查询设备配网/绑定状态
+     * APP在配网过程中轮询此接口，判断配网是否成功
+     */
+    @Operation(summary = "查询配网状态", description = "APP轮询此接口判断设备配网是否成功")
+    @GetMapping("/config/{deviceId}/status")
+    public ResponseEntity<Map<String, Object>> getPairingStatus(@PathVariable String deviceId) {
+        log.info("查询配网状态 - 设备: {}", deviceId);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("deviceId", deviceId);
+
+        String status = pairingStatusService.getStatus(deviceId);
+        
+        if (status == null) {
+            // 无状态，可能是过期或未提交配网信息
+            result.put("status", "UNKNOWN");
+            result.put("success", false);
+            result.put("message", "未找到配网记录或已过期");
+        } else if (NetworkPairingStatusService.STATUS_PAIRING.equals(status)) {
+            // 配网中
+            result.put("status", "PAIRING");
+            result.put("success", false);
+            result.put("message", "配网中，请稍候...");
+        } else if (NetworkPairingStatusService.STATUS_SUCCESS.equals(status)) {
+            // 配网成功
+            result.put("status", "SUCCESS");
+            result.put("success", true);
+            result.put("message", "配网成功");
+        } else if (NetworkPairingStatusService.STATUS_FAILED.equals(status)) {
+            // 配网失败
+            result.put("status", "FAILED");
+            result.put("success", false);
+            result.put("message", "配网失败");
+        } else {
+            result.put("status", status);
+            result.put("success", false);
+            result.put("message", "未知状态");
+        }
+
+        return ResponseEntity.ok(result);
     }
 }
