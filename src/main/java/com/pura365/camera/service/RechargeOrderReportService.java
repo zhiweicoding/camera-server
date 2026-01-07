@@ -255,6 +255,10 @@ public class RechargeOrderReportService {
         if (request.getVendorCode() != null && !request.getVendorCode().trim().isEmpty()) {
             qw.lambda().eq(PaymentOrder::getVendorCode, request.getVendorCode());
         }
+        // 装机商过滤
+        if (request.getInstallerCode() != null && !request.getInstallerCode().trim().isEmpty()) {
+            qw.lambda().eq(PaymentOrder::getInstallerCode, request.getInstallerCode());
+        }
         if (request.getSalesmanId() != null) {
             qw.lambda().eq(PaymentOrder::getSalesmanId, request.getSalesmanId());
         }

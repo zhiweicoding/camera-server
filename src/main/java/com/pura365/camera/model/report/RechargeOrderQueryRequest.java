@@ -28,6 +28,9 @@ public class RechargeOrderQueryRequest {
     @Schema(description = "经销商代码")
     private String vendorCode;
 
+    @Schema(description = "装机商代码")
+    private String installerCode;
+
     @Schema(description = "业务员ID")
     private Long salesmanId;
 

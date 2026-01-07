@@ -49,6 +49,7 @@ public class RechargeOrderReportController {
             @Parameter(description = "充值订单号") @RequestParam(required = false) String orderId,
             @Parameter(description = "设备ID") @RequestParam(required = false) String deviceId,
             @Parameter(description = "经销商代码") @RequestParam(required = false) String vendorCode,
+            @Parameter(description = "装机商代码") @RequestParam(required = false) String installerCode,
             @Parameter(description = "业务员ID") @RequestParam(required = false) Long salesmanId,
             @Parameter(description = "套餐ID") @RequestParam(required = false) String planId,
             @Parameter(description = "套餐类型") @RequestParam(required = false) String planType,
@@ -69,6 +70,7 @@ public class RechargeOrderReportController {
         request.setOrderId(orderId);
         request.setDeviceId(deviceId);
         request.setVendorCode(vendorCode);
+        request.setInstallerCode(installerCode);
         request.setSalesmanId(salesmanId);
         request.setPlanId(planId);
         request.setPlanType(planType);
@@ -117,6 +119,7 @@ public class RechargeOrderReportController {
             @Parameter(description = "充值订单号") @RequestParam(required = false) String orderId,
             @Parameter(description = "设备ID") @RequestParam(required = false) String deviceId,
             @Parameter(description = "经销商代码") @RequestParam(required = false) String vendorCode,
+            @Parameter(description = "装机商代码") @RequestParam(required = false) String installerCode,
             @Parameter(description = "业务员ID") @RequestParam(required = false) Long salesmanId,
             @Parameter(description = "套餐ID") @RequestParam(required = false) String planId,
             @Parameter(description = "套餐类型") @RequestParam(required = false) String planType,
@@ -128,12 +131,13 @@ public class RechargeOrderReportController {
             @Parameter(description = "支付开始时间") @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date payStartDate,
             @Parameter(description = "支付结束时间") @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date payEndDate) {
 
-        log.info("导出充值订单报表Excel: vendorCode={}, salesmanId={}", vendorCode, salesmanId);
+        log.info("导出充值订单报表Excel: vendorCode={}, installerCode={}, salesmanId={}", vendorCode, installerCode, salesmanId);
 
         RechargeOrderQueryRequest request = new RechargeOrderQueryRequest();
         request.setOrderId(orderId);
         request.setDeviceId(deviceId);
         request.setVendorCode(vendorCode);
+        request.setInstallerCode(installerCode);
         request.setSalesmanId(salesmanId);
         request.setPlanId(planId);
         request.setPlanType(planType);

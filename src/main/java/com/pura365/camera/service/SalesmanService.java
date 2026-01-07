@@ -3,9 +3,11 @@ package com.pura365.camera.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.ManufacturedDevice;
 import com.pura365.camera.domain.Salesman;
+import com.pura365.camera.domain.Vendor;
 import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.repository.ManufacturedDeviceRepository;
 import com.pura365.camera.repository.SalesmanRepository;
+import com.pura365.camera.repository.VendorRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -27,6 +29,9 @@ public class SalesmanService {
 
     @Autowired
     private ManufacturedDeviceRepository deviceRepository;
+
+    @Autowired
+    private VendorRepository vendorRepository;
 
     /**
      * 获取经销商下的所有业务员列表
@@ -106,8 +111,34 @@ public class SalesmanService {
         }
         long total = salesmanRepository.selectCount(countQw);
 
+        // 补充装机商代码信息
+        List<Map<String, Object>> resultList = new ArrayList<>();
+        for (Salesman s : list) {
+            Map<String, Object> item = new HashMap<>();
+            item.put("id", s.getId());
+            item.put("vendorId", s.getVendorId());
+            item.put("vendorCode", s.getVendorCode()); // 经销商自己的代码
+            item.put("name", s.getName());
+            item.put("phone", s.getPhone());
+            item.put("commissionRate", s.getCommissionRate());
+            item.put("status", s.getStatus() != null ? s.getStatus().getCode() : null);
+            item.put("remark", s.getRemark());
+            item.put("createdAt", s.getCreatedAt());
+            item.put("updatedAt", s.getUpdatedAt());
+
+            // 查询所属装机商的代码
+            if (s.getVendorId() != null) {
+                Vendor vendor = vendorRepository.selectById(s.getVendorId());
+                if (vendor != null) {
+                    item.put("installerCode", vendor.getVendorCode());
+                    item.put("installerName", vendor.getVendorName());
+                }
+            }
+            resultList.add(item);
+        }
+
         Map<String, Object> result = new HashMap<>();
-        result.put("list", list);
+        result.put("list", resultList);
         result.put("total", total);
         result.put("page", page);
         result.put("size", size);

@@ -343,4 +343,86 @@ public class DeviceProductionController {
             return ApiResponse.error(400, e.getMessage());
         }
     }
+
+    // ==================== 扫码分配经销商接口 ====================
+
+    /**
+     * 扫码分配经销商
+     * 根据设备ID和经销商代码，更新设备的经销商关联，同时修改设备ID的第6-7位
+     * 请求体：{ "deviceId": "A110000000000001", "vendorCode": "01" }
+     */
+    @PostMapping("/devices/scan-assign-dealer")
+    public ApiResponse<Map<String, Object>> scanAssignDealer(@RequestBody Map<String, String> body) {
+        try {
+            String deviceId = body.get("deviceId");
+            String vendorCode = body.get("vendorCode");
+            if (deviceId == null || deviceId.trim().isEmpty()) {
+                return ApiResponse.error(400, "设备ID不能为空");
+            }
+            if (vendorCode == null || vendorCode.length() != 2) {
+                return ApiResponse.error(400, "经销商代码必须是2位");
+            }
+            Map<String, Object> result = productionService.scanAssignDealer(deviceId.trim(), vendorCode);
+            return ApiResponse.success(result);
+        } catch (RuntimeException e) {
+            return ApiResponse.error(400, e.getMessage());
+        }
+    }
+
+    // ==================== 设备禁用/启用接口 ====================
+
+    /**
+     * 禁用/启用设备
+     * 请求体：{ "status": "disabled" } 或 { "status": "manufactured" }
+     */
+    @PutMapping("/devices/{deviceId}/status")
+    public ApiResponse<Map<String, Object>> updateDeviceStatus(
+            @PathVariable String deviceId,
+            @RequestBody Map<String, String> body) {
+        try {
+            String status = body.get("status");
+            if (status == null || status.trim().isEmpty()) {
+                return ApiResponse.error(400, "状态不能为空");
+            }
+            ManufacturedDevice device = productionService.updateDeviceStatus(deviceId, status);
+            Map<String, Object> result = new HashMap<>();
+            result.put("deviceId", device.getDeviceId());
+            result.put("status", device.getStatus() != null ? device.getStatus().getCode() : null);
+            result.put("message", "状态更新成功");
+            return ApiResponse.success(result);
+        } catch (RuntimeException e) {
+            return ApiResponse.error(400, e.getMessage());
+        }
+    }
+
+    // ==================== 设备激活接口 ====================
+
+    /**
+     * 激活设备
+     * 用于用户绑定设备时调用，记录MAC地址、激活时间、上线国家
+     * 请求体：{ "deviceId": "A110000000000001", "macAddress": "00:11:22:33:44:55", "country": "CN" }
+     */
+    @PostMapping("/devices/activate")
+    public ApiResponse<Map<String, Object>> activateDevice(@RequestBody Map<String, String> body) {
+        try {
+            String deviceId = body.get("deviceId");
+            String macAddress = body.get("macAddress");
+            String country = body.get("country");
+            if (deviceId == null || deviceId.trim().isEmpty()) {
+                return ApiResponse.error(400, "设备ID不能为空");
+            }
+            ManufacturedDevice device = productionService.activateDevice(deviceId.trim(), macAddress, country);
+            
+            Map<String, Object> result = new HashMap<>();
+            result.put("deviceId", device.getDeviceId());
+            result.put("macAddress", device.getMacAddress());
+            result.put("country", device.getCountry());
+            result.put("activatedAt", device.getActivatedAt());
+            result.put("status", device.getStatus() != null ? device.getStatus().getCode() : null);
+            result.put("message", "设备激活成功");
+            return ApiResponse.success(result);
+        } catch (RuntimeException e) {
+            return ApiResponse.error(400, e.getMessage());
+        }
+    }
 }

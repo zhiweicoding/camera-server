@@ -156,8 +156,11 @@ public class DealerService {
             throw new RuntimeException("经销商名称不能为空");
         }
 
-        // 验证代号唯一性
+        // 验证代号长度（必须为2位）和唯一性
         if (dealer.getDealerCode() != null && !dealer.getDealerCode().trim().isEmpty()) {
+            if (dealer.getDealerCode().length() != 2) {
+                throw new RuntimeException("经销商代号必须为2位");
+            }
             Dealer existing = getByCode(dealer.getDealerCode());
             if (existing != null) {
                 throw new RuntimeException("经销商代号已存在: " + dealer.getDealerCode());
@@ -200,8 +203,11 @@ public class DealerService {
             throw new RuntimeException("经销商不存在");
         }
 
-        // 如果修改了代号，检查唯一性
+        // 如果修改了代号，检查长度（必须为2位）和唯一性
         if (dealer.getDealerCode() != null && !dealer.getDealerCode().equals(existing.getDealerCode())) {
+            if (dealer.getDealerCode().length() != 2) {
+                throw new RuntimeException("经销商代号必须为2位");
+            }
             Dealer byCode = getByCode(dealer.getDealerCode());
             if (byCode != null && !byCode.getId().equals(id)) {
                 throw new RuntimeException("经销商代号已存在: " + dealer.getDealerCode());

@@ -42,9 +42,10 @@ public class UserManageController {
             @Parameter(description = "角色筛选：1-流通用户 2-经销商 3-管理员 4-装机商") @RequestParam(required = false) Integer role,
             @Parameter(description = "是否装机商：0-否 1-是") @RequestParam(required = false) Integer isInstaller,
             @Parameter(description = "是否经销商：0-否 1-是") @RequestParam(required = false) Integer isDealer,
+            @Parameter(description = "用户类型：consumer-普通使用者(无身份) staff-有身份用户") @RequestParam(required = false) String userType,
             @Parameter(description = "页码（从1开始）") @RequestParam(defaultValue = "1") int page,
             @Parameter(description = "每页大小") @RequestParam(defaultValue = "10") int pageSize) {
-        Map<String, Object> data = userManageService.listUsers(keyword, role, isInstaller, isDealer, page, pageSize);
+        Map<String, Object> data = userManageService.listUsers(keyword, role, isInstaller, isDealer, userType, page, pageSize);
         return ApiResponse.success(data);
     }
 
@@ -103,10 +104,10 @@ public class UserManageController {
             }
             // 双重身份支持
             if (body.get("isInstaller") != null) {
-                user.setIsInstaller(Integer.valueOf(body.get("isInstaller").toString()));
+                user.setIsInstaller(parseBooleanOrInteger(body.get("isInstaller")));
             }
             if (body.get("isDealer") != null) {
-                user.setIsDealer(Integer.valueOf(body.get("isDealer").toString()));
+                user.setIsDealer(parseBooleanOrInteger(body.get("isDealer")));
             }
             if (body.get("installerId") != null) {
                 user.setInstallerId(Long.valueOf(body.get("installerId").toString()));
@@ -196,14 +197,34 @@ public class UserManageController {
     @PutMapping("/{id}/identity")
     public ApiResponse<Void> updateUserIdentity(@PathVariable Long id, @RequestBody Map<String, Object> body) {
         try {
-            Integer isInstaller = body.get("isInstaller") != null ? Integer.valueOf(body.get("isInstaller").toString()) : null;
-            Integer isDealer = body.get("isDealer") != null ? Integer.valueOf(body.get("isDealer").toString()) : null;
+            Integer isInstaller = body.get("isInstaller") != null ? parseBooleanOrInteger(body.get("isInstaller")) : null;
+            Integer isDealer = body.get("isDealer") != null ? parseBooleanOrInteger(body.get("isDealer")) : null;
             Long installerId = body.get("installerId") != null ? Long.valueOf(body.get("installerId").toString()) : null;
             Long dealerId = body.get("dealerId") != null ? Long.valueOf(body.get("dealerId").toString()) : null;
             userManageService.updateUserIdentity(id, isInstaller, isDealer, installerId, dealerId);
             return ApiResponse.success(null);
         } catch (RuntimeException e) {
             return ApiResponse.error(400, e.getMessage());
+        }
+    }
+
+    /**
+     * 将布尔值或整数转换为Integer（0或1）
+     * 支持 true/false 和 0/1 两种格式
+     */
+    private Integer parseBooleanOrInteger(Object value) {
+        if (value instanceof Boolean) {
+            return (Boolean) value ? 1 : 0;
+        } else if (value instanceof Number) {
+            return ((Number) value).intValue();
+        } else {
+            String str = value.toString();
+            if ("true".equalsIgnoreCase(str)) {
+                return 1;
+            } else if ("false".equalsIgnoreCase(str)) {
+                return 0;
+            }
+            return Integer.valueOf(str);
         }
     }
 }
