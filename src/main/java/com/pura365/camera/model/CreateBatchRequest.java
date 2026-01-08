@@ -75,6 +75,16 @@ public class CreateBatchRequest {
      */
     private String createdBy;
 
+    /**
+     * 装机商分润比例(%)
+     */
+    private java.math.BigDecimal installerCommissionRate;
+
+    /**
+     * 经销商分润比例(%)
+     */
+    private java.math.BigDecimal dealerCommissionRate;
+
     // Getters and Setters
 
     public String getNetworkLens() {
@@ -177,5 +187,21 @@ public class CreateBatchRequest {
 
     public void setCreatedBy(String createdBy) {
         this.createdBy = createdBy;
+    }
+
+    public java.math.BigDecimal getInstallerCommissionRate() {
+        return installerCommissionRate;
+    }
+
+    public void setInstallerCommissionRate(java.math.BigDecimal installerCommissionRate) {
+        this.installerCommissionRate = installerCommissionRate;
+    }
+
+    public java.math.BigDecimal getDealerCommissionRate() {
+        return dealerCommissionRate;
+    }
+
+    public void setDealerCommissionRate(java.math.BigDecimal dealerCommissionRate) {
+        this.dealerCommissionRate = dealerCommissionRate;
     }
 }

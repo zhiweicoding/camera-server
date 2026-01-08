@@ -372,15 +372,22 @@ public class RechargeOrderReportService {
             vo.setProfitMode(commission.getProfitMode() != null ? commission.getProfitMode().getCode() : null);
             vo.setProfitModeName(commissionService.getProfitModeName(commission.getProfitMode()));
 
-            // 分润比例和金额
-            vo.setInstallerRateDesc(commission.getInstallerRate() != null ? commission.getInstallerRate() + "%" : "0%");
-            vo.setInstallerAmount(calculateShareAmount(profitAmount, commission.getInstallerRate()));
+            // 分润比例和金额（现在从订单表的快照字段读取）
+            // 装机商分润：优先使用订单表新字段，兼容旧字段
+            BigDecimal installerRate = order.getInstallerRate() != null ? order.getInstallerRate() : order.getCommissionRate();
+            BigDecimal installerAmount = order.getInstallerAmount() != null ? order.getInstallerAmount() : order.getVendorAmount();
+            vo.setInstallerRateDesc(installerRate != null ? installerRate + "%" : "0%");
+            vo.setInstallerAmount(installerAmount != null ? installerAmount : BigDecimal.ZERO);
 
-            vo.setLevel1RateDesc(commission.getLevel1Rate() != null ? commission.getLevel1Rate() + "%" : "0%");
-            vo.setLevel1Amount(calculateShareAmount(profitAmount, commission.getLevel1Rate()));
+            // 经销商分润：优先使用订单表新字段，兼容旧字段
+            BigDecimal dealerRate = order.getDealerRate();
+            BigDecimal dealerAmount = order.getDealerAmount() != null ? order.getDealerAmount() : order.getSalesmanAmount();
+            vo.setLevel1RateDesc(dealerRate != null ? dealerRate + "%" : "0%");
+            vo.setLevel1Amount(dealerAmount != null ? dealerAmount : BigDecimal.ZERO);
 
-            vo.setLevel2RateDesc(commission.getLevel2Rate() != null ? commission.getLevel2Rate() + "%" : "0%");
-            vo.setLevel2Amount(calculateShareAmount(profitAmount, commission.getLevel2Rate()));
+            // 二级经销商分润（已废弃，统一显示为0）
+            vo.setLevel2RateDesc("0%");
+            vo.setLevel2Amount(BigDecimal.ZERO);
         } else {
             // 无分润配置时的默认值
             vo.setPayeeEntity("-");

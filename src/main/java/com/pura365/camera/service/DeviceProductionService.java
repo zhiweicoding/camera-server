@@ -50,6 +50,9 @@ public class DeviceProductionService {
     @Autowired
     private InstallerRepository installerRepository;
 
+    @Autowired
+    private DealerRepository dealerRepository;
+
     /**
      * 默认密码哈希(与admin2一致)
      */
@@ -332,7 +335,6 @@ public class DeviceProductionService {
         if (!salesman.getVendorCode().equals(device.getVendorCode())) {
             throw new RuntimeException("业务员不属于该设备的经销商");
         }
-        device.setSalesmanId(salesmanId);
         device.setUpdatedAt(new Date());
         deviceRepository.updateById(device);
         log.info("分配业务员: deviceId={}, salesmanId={}", deviceId, salesmanId);
@@ -353,7 +355,6 @@ public class DeviceProductionService {
         for (String deviceId : deviceIds) {
             ManufacturedDevice device = getDevice(deviceId);
             if (device != null && salesman.getVendorCode().equals(device.getVendorCode())) {
-                device.setSalesmanId(salesmanId);
                 device.setUpdatedAt(new Date());
                 deviceRepository.updateById(device);
             }
@@ -372,7 +373,6 @@ public class DeviceProductionService {
         if (device == null) {
             throw new RuntimeException("设备不存在");
         }
-        device.setSalesmanId(null);
         device.setUpdatedAt(new Date());
         deviceRepository.updateById(device);
         log.info("移除业务员分配: deviceId={}", deviceId);
@@ -461,6 +461,101 @@ public class DeviceProductionService {
         return result;
     }
 
+    /**
+     * 批量分配经销商到设备（扫码分配）
+     * 同时设置设备的经销商佣金比例
+     *
+     * @param deviceIds      设备ID列表
+     * @param dealerCode     经销商代码（2位）
+     * @param commissionRate 佣金比例
+     * @return 处理结果
+     */
+    @Transactional
+    public Map<String, Object> batchAssignDealer(List<String> deviceIds, String dealerCode, java.math.BigDecimal commissionRate) {
+        // 校验经销商代码
+        if (dealerCode == null || dealerCode.length() != 2) {
+            throw new RuntimeException("经销商代码必须是2位");
+        }
+
+        // 查找经销商（非"00"时）
+        Dealer dealer = null;
+        if (!"00".equals(dealerCode)) {
+            QueryWrapper<Dealer> dq = new QueryWrapper<>();
+            dq.lambda().eq(Dealer::getDealerCode, dealerCode).eq(Dealer::getStatus, EnableStatus.ENABLED);
+            dealer = dealerRepository.selectOne(dq);
+            if (dealer == null) {
+                throw new RuntimeException("经销商不存在或未启用: " + dealerCode);
+            }
+        }
+
+        List<Map<String, Object>> results = new ArrayList<>();
+        int successCount = 0;
+        int failCount = 0;
+
+        for (String deviceId : deviceIds) {
+            Map<String, Object> item = new HashMap<>();
+            item.put("deviceId", deviceId);
+            try {
+                // 校验设备ID长度
+                if (deviceId == null || deviceId.length() != 16) {
+                    throw new RuntimeException("设备ID必须是16位");
+                }
+
+                // 查找设备
+                ManufacturedDevice device = getDevice(deviceId);
+                if (device == null) {
+                    throw new RuntimeException("设备不存在");
+                }
+
+                String oldVendorCode = device.getVendorCode();
+                boolean vendorChanged = !dealerCode.equals(oldVendorCode);
+                String newDeviceId = deviceId;
+
+                // 如果经销商代码变化，更新设备ID
+                if (vendorChanged) {
+                    newDeviceId = deviceId.substring(0, 5) + dealerCode + deviceId.substring(7);
+
+                    // 检查新设备ID是否已存在
+                    QueryWrapper<ManufacturedDevice> checkQw = new QueryWrapper<>();
+                    checkQw.lambda().eq(ManufacturedDevice::getDeviceId, newDeviceId)
+                            .ne(ManufacturedDevice::getId, device.getId());
+                    if (deviceRepository.selectCount(checkQw) > 0) {
+                        throw new RuntimeException("新设备ID已存在: " + newDeviceId);
+                    }
+
+                    device.setDeviceId(newDeviceId);
+                    device.setVendorCode(dealerCode);
+                }
+
+                // 更新经销商ID和佣金比例
+                device.setCurrentDealerId(dealer != null ? dealer.getId() : null);
+                device.setDealerCommissionRate(commissionRate);
+                device.setUpdatedAt(new Date());
+                deviceRepository.updateById(device);
+
+                item.put("newDeviceId", newDeviceId);
+                item.put("success", true);
+                item.put("changed", vendorChanged);
+                successCount++;
+            } catch (Exception e) {
+                item.put("success", false);
+                item.put("error", e.getMessage());
+                failCount++;
+            }
+            results.add(item);
+        }
+
+        log.info("批量分配经销商完成: dealerCode={}, total={}, success={}, fail={}",
+                dealerCode, deviceIds.size(), successCount, failCount);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("results", results);
+        response.put("total", deviceIds.size());
+        response.put("successCount", successCount);
+        response.put("failCount", failCount);
+        return response;
+    }
+
     // ==================== 生产批次管理 ====================
 
     /**
@@ -520,11 +615,13 @@ public class DeviceProductionService {
         batch.setStatus(ProductionBatchStatus.COMPLETED);
         batch.setRemark(request.getRemark());
         batch.setCreatedBy(request.getCreatedBy());
+        batch.setInstallerCommissionRate(request.getInstallerCommissionRate());
+        batch.setDealerCommissionRate(request.getDealerCommissionRate());
         batchRepository.insert(batch);
 
         // 批量生成设备ID
         String prefix = batch.getDeviceIdPrefix();
-        generateDevices(batch.getId(), prefix, networkLens, deviceForm, specialReq,
+        generateDevices(batch, prefix, networkLens, deviceForm, specialReq,
                 assemblerCode, vendorCode, startSerial, endSerial);
 
         log.info("创建生产批次成功: batchNo={}, quantity={}, startSerial={}, endSerial={}",
@@ -563,7 +660,7 @@ public class DeviceProductionService {
      * 批量生成设备记录
      * 后8位使用随机字符（大小写字母+数字），确保唯一性
      */
-    private void generateDevices(Long batchId, String prefix, String networkLens, String deviceForm,
+    private void generateDevices(DeviceProductionBatch batch, String prefix, String networkLens, String deviceForm,
                                  String specialReq, String assemblerCode, String vendorCode,
                                  int startSerial, int endSerial) {
         int quantity = endSerial - startSerial + 1;
@@ -575,7 +672,7 @@ public class DeviceProductionService {
             String deviceId = prefix + serial8;
 
             ManufacturedDevice device = new ManufacturedDevice();
-            device.setBatchId(batchId);
+            device.setBatchId(batch.getId());
             device.setDeviceId(deviceId);
             device.setNetworkLens(networkLens);
             device.setDeviceForm(deviceForm);
@@ -584,6 +681,9 @@ public class DeviceProductionService {
             device.setVendorCode(vendorCode);
             device.setSerialNo(serial8);
             device.setStatus(ManufacturedDeviceStatus.MANUFACTURED);
+            // 从批次复制分润比例
+            device.setInstallerCommissionRate(batch.getInstallerCommissionRate());
+            device.setDealerCommissionRate(batch.getDealerCommissionRate());
             deviceRepository.insert(device);
         }
     }
@@ -812,9 +912,8 @@ public class DeviceProductionService {
             map.put("specialReq", d.getSpecialReq());
             map.put("assemblerCode", d.getAssemblerCode());
             map.put("vendorCode", d.getVendorCode());
-            map.put("salesmanId", d.getSalesmanId());
             map.put("installerId", d.getInstallerId());
-            map.put("currentVendorId", d.getCurrentVendorId());
+            //map.put("currentVendorId", d.getCurrentVendorId());
             map.put("serialNo", d.getSerialNo());
             map.put("macAddress", d.getMacAddress());
             map.put("status", d.getStatus() != null ? d.getStatus().getCode() : null);
@@ -824,25 +923,25 @@ public class DeviceProductionService {
             map.put("createdAt", d.getCreatedAt() != null ? sdf.format(d.getCreatedAt()) : null);
             map.put("updatedAt", d.getUpdatedAt() != null ? sdf.format(d.getUpdatedAt()) : null);
 
-            // 添加装机商信息和分佣比例
+            // 添加装机商信息和分佣比例（从设备表读取）
             Installer installer = d.getInstallerId() != null ? installerMap.get(d.getInstallerId()) : null;
             if (installer != null) {
                 map.put("installerName", installer.getInstallerName());
-                map.put("installerCommissionRate", installer.getCommissionRate());
             } else {
                 map.put("installerName", null);
-                map.put("installerCommissionRate", null);
             }
+            // 分佣比例从设备表读取
+            map.put("installerCommissionRate", d.getInstallerCommissionRate());
 
-            // 添加经销商信息和分佣比例
+            // 添加经销商信息和分佣比例（从设备表读取）
             Vendor vendor = d.getVendorCode() != null ? vendorMap.get(d.getVendorCode()) : null;
             if (vendor != null) {
                 map.put("salesmanName", vendor.getVendorName());
-                map.put("dealerCommissionRate", vendor.getCommissionRate());
             } else {
                 map.put("salesmanName", null);
-                map.put("dealerCommissionRate", null);
             }
+            // 分佣比例从设备表读取
+            map.put("dealerCommissionRate", d.getDealerCommissionRate());
 
             resultList.add(map);
         }

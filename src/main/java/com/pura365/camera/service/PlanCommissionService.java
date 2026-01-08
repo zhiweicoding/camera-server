@@ -162,9 +162,6 @@ public class PlanCommissionService {
         commission.setFeeFixed(request.getFeeFixed());
         commission.setRebateRate(request.getRebateRate());
         commission.setPlanCost(request.getPlanCost());
-        commission.setInstallerRate(request.getInstallerRate());
-        commission.setLevel1Rate(request.getLevel1Rate());
-        commission.setLevel2Rate(request.getLevel2Rate());
         commission.setRemark(request.getRemark());
         commission.setCreatedAt(new Date());
         commission.setUpdatedAt(new Date());
@@ -231,15 +228,6 @@ public class PlanCommissionService {
         if (request.getProfitMode() != null) {
             existing.setProfitMode(CommissionProfitMode.fromCode(request.getProfitMode()));
         }
-        if (request.getInstallerRate() != null) {
-            existing.setInstallerRate(request.getInstallerRate());
-        }
-        if (request.getLevel1Rate() != null) {
-            existing.setLevel1Rate(request.getLevel1Rate());
-        }
-        if (request.getLevel2Rate() != null) {
-            existing.setLevel2Rate(request.getLevel2Rate());
-        }
         if (request.getStatus() != null) {
             existing.setStatus(EnableStatus.fromCode(request.getStatus()));
         }
@@ -297,9 +285,6 @@ public class PlanCommissionService {
         vo.setFeeFixed(commission.getFeeFixed());
         vo.setRebateRate(commission.getRebateRate());
         vo.setPlanCost(commission.getPlanCost());
-        vo.setInstallerRate(commission.getInstallerRate());
-        vo.setLevel1Rate(commission.getLevel1Rate());
-        vo.setLevel2Rate(commission.getLevel2Rate());
         vo.setRemark(commission.getRemark());
         vo.setCreatedAt(commission.getCreatedAt());
         vo.setUpdatedAt(commission.getUpdatedAt());

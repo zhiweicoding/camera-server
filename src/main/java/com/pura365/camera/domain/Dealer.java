@@ -7,7 +7,6 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import com.pura365.camera.enums.EnableStatus;
 import lombok.Data;
 
-import java.math.BigDecimal;
 import java.util.Date;
 
 /**
@@ -50,10 +49,6 @@ public class Dealer {
     /** 层级：1-一级经销商, 2-二级经销商... */
     @TableField("level")
     private Integer level;
-
-    /** 分润比例(基于上级利润的百分比) */
-    @TableField("commission_rate")
-    private BigDecimal commissionRate;
 
     /** 状态: DISABLED-禁用, ENABLED-启用 */
     @TableField("status")

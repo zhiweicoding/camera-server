@@ -56,18 +56,6 @@ public class PlanCommission {
     @TableField("profit_mode")
     private CommissionProfitMode profitMode;
 
-    /** 装机商分润比例（百分比） */
-    @TableField("installer_rate")
-    private BigDecimal installerRate;
-
-    /** 一级经销商分润比例（百分比） */
-    @TableField("level1_rate")
-    private BigDecimal level1Rate;
-
-    /** 二级经销商分润比例（百分比） */
-    @TableField("level2_rate")
-    private BigDecimal level2Rate;
-
     /** 状态: ENABLED-启用, DISABLED-禁用 */
     @TableField("status")
     private EnableStatus status;

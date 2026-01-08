@@ -838,7 +838,6 @@ public class BillingService {
 
                 Map<String, Object> stat = new HashMap<>();
                 stat.put("deviceId", device.getDeviceId());
-                stat.put("salesmanId", device.getSalesmanId());
                 stat.put("orderCount", orders.size());
                 stat.put("totalAmount", deviceTotal);
                 deviceStats.add(stat);

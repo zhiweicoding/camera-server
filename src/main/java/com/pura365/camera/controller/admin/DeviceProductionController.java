@@ -347,7 +347,40 @@ public class DeviceProductionController {
     // ==================== 扫码分配经销商接口 ====================
 
     /**
-     * 扫码分配经销商
+     * 批量扫码分配经销商
+     * 支持批量输入设备ID，同时设置抽佣比例
+     * 请求体：{
+     *   "deviceIds": ["A110000000000001", "A110000000000002"],
+     *   "dealerCode": "01",
+     *   "commissionRate": 30.00
+     * }
+     */
+    @PostMapping("/devices/batch-assign-dealer")
+    public ApiResponse<Map<String, Object>> batchAssignDealer(@RequestBody Map<String, Object> body) {
+        try {
+            @SuppressWarnings("unchecked")
+            List<String> deviceIds = (List<String>) body.get("deviceIds");
+            String dealerCode = (String) body.get("dealerCode");
+            java.math.BigDecimal commissionRate = body.get("commissionRate") != null
+                    ? new java.math.BigDecimal(body.get("commissionRate").toString())
+                    : null;
+
+            if (deviceIds == null || deviceIds.isEmpty()) {
+                return ApiResponse.error(400, "设备ID列表不能为空");
+            }
+            if (dealerCode == null || dealerCode.length() != 2) {
+                return ApiResponse.error(400, "经销商代码必须是2位");
+            }
+
+            Map<String, Object> result = productionService.batchAssignDealer(deviceIds, dealerCode, commissionRate);
+            return ApiResponse.success(result);
+        } catch (RuntimeException e) {
+            return ApiResponse.error(400, e.getMessage());
+        }
+    }
+
+    /**
+     * 扫码分配经销商（单个，兼容旧接口）
      * 根据设备ID和经销商代码，更新设备的经销商关联，同时修改设备ID的第6-7位
      * 请求体：{ "deviceId": "A110000000000001", "vendorCode": "01" }
      */

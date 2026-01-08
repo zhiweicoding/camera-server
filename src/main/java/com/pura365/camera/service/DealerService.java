@@ -103,7 +103,6 @@ public class DealerService {
             vo.put("installerId", dealer.getInstallerId());
             vo.put("installerCode", dealer.getInstallerCode());
             vo.put("level", dealer.getLevel());
-            vo.put("commissionRate", dealer.getCommissionRate());
             vo.put("status", dealer.getStatus());
             vo.put("remark", dealer.getRemark());
             // 企业信息字段
@@ -251,9 +250,6 @@ public class DealerService {
         }
         if (dealer.getPhone() != null) {
             existing.setPhone(dealer.getPhone());
-        }
-        if (dealer.getCommissionRate() != null) {
-            existing.setCommissionRate(dealer.getCommissionRate());
         }
         if (dealer.getRemark() != null) {
             existing.setRemark(dealer.getRemark());

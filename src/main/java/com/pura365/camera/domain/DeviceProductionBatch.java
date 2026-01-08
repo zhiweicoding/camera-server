@@ -80,6 +80,14 @@ public class DeviceProductionBatch {
     @TableField("updated_at")
     private Date updatedAt;
 
+    /** 装机商分润比例(%) */
+    @TableField("installer_commission_rate")
+    private java.math.BigDecimal installerCommissionRate;
+
+    /** 经销商分润比例(%) */
+    @TableField("dealer_commission_rate")
+    private java.math.BigDecimal dealerCommissionRate;
+
     /**
      * 生成设备ID前缀 (前8位)
      */

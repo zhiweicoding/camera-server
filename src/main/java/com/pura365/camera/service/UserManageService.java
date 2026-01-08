@@ -15,7 +15,6 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.math.BigDecimal;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -390,9 +389,7 @@ public class UserManageService {
                 installer.setInstallerName(user.getNickname() != null ? user.getNickname() : user.getUsername());
                 installer.setContactPerson(user.getNickname() != null ? user.getNickname() : user.getUsername());
                 installer.setContactPhone(user.getPhone());
-                installer.setCommissionRate(BigDecimal.ZERO);
                 installer.setStatus(EnableStatus.ENABLED);
-                installer.setCreatedAt(new Date());
                 installer.setUpdatedAt(new Date());
 
                 installerRepository.insert(installer);
@@ -433,7 +430,6 @@ public class UserManageService {
                 dealer.setName(user.getNickname() != null ? user.getNickname() : user.getUsername());
                 dealer.setPhone(user.getPhone());
                 dealer.setLevel(1); // 默认一级经销商
-                dealer.setCommissionRate(BigDecimal.ZERO);
                 dealer.setStatus(EnableStatus.ENABLED);
                 dealer.setCreatedAt(new Date());
                 dealer.setUpdatedAt(new Date());

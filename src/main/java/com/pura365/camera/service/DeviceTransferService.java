@@ -167,7 +167,7 @@ public class DeviceTransferService {
             // 更新设备表的当前经销商
             ManufacturedDevice device = getDeviceByDeviceId(deviceId);
             if (device != null) {
-                device.setCurrentVendorId(toVendorId);
+                //device.setCurrentVendorId(toVendorId);
                 device.setUpdatedAt(new Date());
                 deviceRepository.updateById(device);
             }

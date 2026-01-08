@@ -542,8 +542,10 @@ public class PaymentService {
     }
 
     /**
-     * 快照经销商/业务员信息到订单
+     * 快照装机商/经销商分润信息到订单
      * 修改分成比例不影响历史订单，改绑后历史单子不变
+     * 
+     * 分润比例现在从设备表直接读取（在创建批次或扫码分配时设置）
      */
     private void snapshotVendorAndSalesmanInfo(PaymentOrder order, String deviceId) {
         // 根据设备ID获取生产设备信息
@@ -558,30 +560,50 @@ public class PaymentService {
         // 快照经销商代码
         order.setVendorCode(device.getVendorCode());
         
-        // 如果设备有分配业务员，快照业务员信息
-        if (device.getSalesmanId() != null) {
-            Salesman salesman = salesmanRepository.selectById(device.getSalesmanId());
-            if (salesman != null) {
-                order.setSalesmanId(salesman.getId());
-                order.setSalesmanName(salesman.getName());
-                order.setCommissionRate(salesman.getCommissionRate());
-                
-                // 计算业务员应得金额和经销商应得金额
-                if (order.getAmount() != null && salesman.getCommissionRate() != null) {
-                    BigDecimal salesmanAmount = order.getAmount()
-                            .multiply(salesman.getCommissionRate())
-                            .divide(new BigDecimal("100"), 2, BigDecimal.ROUND_HALF_UP);
-                    order.setSalesmanAmount(salesmanAmount);
-                    order.setVendorAmount(order.getAmount().subtract(salesmanAmount));
-                } else {
-                    order.setSalesmanAmount(BigDecimal.ZERO);
-                    order.setVendorAmount(order.getAmount());
-                }
-            }
-        } else {
-            // 没有业务员，全部归经销商
-            order.setVendorAmount(order.getAmount());
+        // 从设备表读取装机商和经销商的分润比例
+        BigDecimal installerRate = device.getInstallerCommissionRate();
+        BigDecimal dealerRate = device.getDealerCommissionRate();
+        BigDecimal orderAmount = order.getAmount();
+        
+        if (orderAmount == null) {
+            return;
         }
+        
+        // 计算装机商分润金额
+        BigDecimal installerAmount = BigDecimal.ZERO;
+        if (installerRate != null && installerRate.compareTo(BigDecimal.ZERO) > 0) {
+            installerAmount = orderAmount
+                    .multiply(installerRate)
+                    .divide(new BigDecimal("100"), 2, BigDecimal.ROUND_HALF_UP);
+        }
+        
+        // 计算经销商分润金额
+        BigDecimal dealerAmount = BigDecimal.ZERO;
+        if (dealerRate != null && dealerRate.compareTo(BigDecimal.ZERO) > 0) {
+            dealerAmount = orderAmount
+                    .multiply(dealerRate)
+                    .divide(new BigDecimal("100"), 2, BigDecimal.ROUND_HALF_UP);
+        }
+        
+        // 快照装机商分润信息
+        order.setInstallerCode(device.getAssemblerCode()); // 装机商代码
+        order.setInstallerRate(installerRate);              // 装机商分润比例
+        order.setInstallerAmount(installerAmount);          // 装机商分润金额
+        
+        // 快照经销商分润信息
+        order.setDealerCode(device.getVendorCode());        // 经销商代码
+        order.setDealerRate(dealerRate);                    // 经销商分润比例
+        order.setDealerAmount(dealerAmount);                // 经销商分润金额
+        
+        // 如果有经销商ID，快照经销商ID
+        if (device.getCurrentDealerId() != null) {
+            order.setDealerId(device.getCurrentDealerId());
+        }
+        
+        // 兼容旧字段（保留原有逻辑，后续可删除）
+        order.setCommissionRate(installerRate);
+        order.setVendorAmount(installerAmount);
+        order.setSalesmanAmount(dealerAmount);
     }
 
     /**

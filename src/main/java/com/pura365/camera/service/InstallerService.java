@@ -164,9 +164,6 @@ public class InstallerService {
         if (installer.getAddress() != null) {
             existing.setAddress(installer.getAddress());
         }
-        if (installer.getCommissionRate() != null) {
-            existing.setCommissionRate(installer.getCommissionRate());
-        }
         if (installer.getStatus() != null) {
             existing.setStatus(installer.getStatus());
         }

@@ -7,7 +7,6 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import com.pura365.camera.enums.EnableStatus;
 import lombok.Data;
 
-import java.math.BigDecimal;
 import java.util.Date;
 
 /**
@@ -41,10 +40,6 @@ public class Installer {
     /** 地址 */
     @TableField("address")
     private String address;
-
-    /** 分佣比例(基于可分润金额的百分比) */
-    @TableField("commission_rate")
-    private BigDecimal commissionRate;
 
     /** 状态: DISABLED-禁用, ENABLED-启用 */
     @TableField("status")

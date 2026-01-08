@@ -38,15 +38,6 @@ public class PlanCommissionRequest {
     @Schema(description = "分润模式：profit-按营收利润分润，revenue-按营收分润", example = "profit")
     private String profitMode;
 
-    @Schema(description = "装机商分润比例（百分比）", example = "8")
-    private BigDecimal installerRate;
-
-    @Schema(description = "一级经销商分润比例（百分比）", example = "60")
-    private BigDecimal level1Rate;
-
-    @Schema(description = "二级经销商分润比例（百分比）", example = "0")
-    private BigDecimal level2Rate;
-
     @Schema(description = "状态: 1-启用, 0-禁用", example = "1")
     private Integer status;
 
