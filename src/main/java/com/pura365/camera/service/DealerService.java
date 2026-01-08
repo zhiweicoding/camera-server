@@ -91,7 +91,38 @@ public class DealerService {
         // 分页查询
         int offset = (page - 1) * size;
         qw.last("LIMIT " + offset + ", " + size);
-        List<Dealer> list = dealerRepository.selectList(qw);
+        List<Dealer> dealers = dealerRepository.selectList(qw);
+
+        // 查询装机商名称并转换为VO
+        List<Map<String, Object>> list = dealers.stream().map(dealer -> {
+            Map<String, Object> vo = new HashMap<>();
+            vo.put("id", dealer.getId());
+            vo.put("dealerCode", dealer.getDealerCode());
+            vo.put("name", dealer.getName());
+            vo.put("phone", dealer.getPhone());
+            vo.put("installerId", dealer.getInstallerId());
+            vo.put("installerCode", dealer.getInstallerCode());
+            vo.put("level", dealer.getLevel());
+            vo.put("commissionRate", dealer.getCommissionRate());
+            vo.put("status", dealer.getStatus());
+            vo.put("remark", dealer.getRemark());
+            // 企业信息字段
+            vo.put("companyName", dealer.getCompanyName());
+            vo.put("registeredCapital", dealer.getRegisteredCapital());
+            vo.put("creditCode", dealer.getCreditCode());
+            vo.put("registeredAddress", dealer.getRegisteredAddress());
+            vo.put("businessLicense", dealer.getBusinessLicense());
+            vo.put("createdAt", dealer.getCreatedAt());
+            vo.put("updatedAt", dealer.getUpdatedAt());
+            // 查询装机商名称
+            if (dealer.getInstallerId() != null) {
+                Installer installer = installerRepository.selectById(dealer.getInstallerId());
+                if (installer != null) {
+                    vo.put("installerName", installer.getInstallerName());
+                }
+            }
+            return vo;
+        }).collect(java.util.stream.Collectors.toList());
 
         // 查询总数
         QueryWrapper<Dealer> countQw = new QueryWrapper<>();
@@ -229,6 +260,22 @@ public class DealerService {
         }
         if (dealer.getStatus() != null) {
             existing.setStatus(dealer.getStatus());
+        }
+        // 企业信息字段
+        if (dealer.getCompanyName() != null) {
+            existing.setCompanyName(dealer.getCompanyName());
+        }
+        if (dealer.getRegisteredCapital() != null) {
+            existing.setRegisteredCapital(dealer.getRegisteredCapital());
+        }
+        if (dealer.getCreditCode() != null) {
+            existing.setCreditCode(dealer.getCreditCode());
+        }
+        if (dealer.getRegisteredAddress() != null) {
+            existing.setRegisteredAddress(dealer.getRegisteredAddress());
+        }
+        if (dealer.getBusinessLicense() != null) {
+            existing.setBusinessLicense(dealer.getBusinessLicense());
         }
 
         // 不允许修改装机商归属和层级

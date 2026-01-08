@@ -3,13 +3,13 @@ package com.pura365.camera.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.pura365.camera.domain.Salesman;
+import com.pura365.camera.domain.Dealer;
+import com.pura365.camera.domain.Installer;
 import com.pura365.camera.domain.User;
-import com.pura365.camera.domain.Vendor;
 import com.pura365.camera.enums.EnableStatus;
-import com.pura365.camera.repository.SalesmanRepository;
+import com.pura365.camera.repository.DealerRepository;
+import com.pura365.camera.repository.InstallerRepository;
 import com.pura365.camera.repository.UserRepository;
-import com.pura365.camera.repository.VendorRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -29,10 +29,10 @@ public class UserManageService {
     private UserRepository userRepository;
 
     @Autowired
-    private VendorRepository vendorRepository;
+    private InstallerRepository installerRepository;
 
     @Autowired
-    private SalesmanRepository salesmanRepository;
+    private DealerRepository dealerRepository;
 
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
@@ -117,19 +117,19 @@ public class UserManageService {
 
             // 查询装机商代码
             if (user.getInstallerId() != null) {
-                Vendor vendor = vendorRepository.selectById(user.getInstallerId());
-                if (vendor != null) {
-                    userMap.put("installerCode", vendor.getVendorCode());
-                    userMap.put("installerName", vendor.getVendorName());
+                Installer installer = installerRepository.selectById(user.getInstallerId());
+                if (installer != null) {
+                    userMap.put("installerCode", installer.getInstallerCode());
+                    userMap.put("installerName", installer.getInstallerName());
                 }
             }
 
             // 查询经销商代码
             if (user.getDealerId() != null) {
-                Salesman salesman = salesmanRepository.selectById(user.getDealerId());
-                if (salesman != null) {
-                    userMap.put("dealerCode", salesman.getVendorCode());
-                    userMap.put("dealerName", salesman.getName());
+                Dealer dealer = dealerRepository.selectById(user.getDealerId());
+                if (dealer != null) {
+                    userMap.put("dealerCode", dealer.getDealerCode());
+                    userMap.put("dealerName", dealer.getName());
                 }
             }
 
@@ -211,14 +211,14 @@ public class UserManageService {
 
         userRepository.insert(user);
 
-        // 如果标记为装机商，自动创建vendor记录
+        // 如果标记为装机商，自动创建installer记录
         if (user.getIsInstaller() != null && user.getIsInstaller() == 1) {
-            createVendorForUser(user);
+            createInstallerForUser(user);
         }
 
-        // 如果标记为经销商，自动创建salesman记录
+        // 如果标记为经销商，自动创建dealer记录
         if (user.getIsDealer() != null && user.getIsDealer() == 1) {
-            createSalesmanForUser(user);
+            createDealerForUser(user);
         }
 
         return user;
@@ -269,16 +269,16 @@ public class UserManageService {
         // 双重身份字段
         if (user.getIsInstaller() != null) {
             existing.setIsInstaller(user.getIsInstaller());
-            // 如果新增装机商身份，自动创建vendor记录
+            // 如果新增装机商身份，自动创建installer记录
             if (user.getIsInstaller() == 1 && existing.getInstallerId() == null) {
-                createVendorForUser(existing);
+                createInstallerForUser(existing);
             }
         }
         if (user.getIsDealer() != null) {
             existing.setIsDealer(user.getIsDealer());
-            // 如果新增经销商身份，自动创建salesman记录
+            // 如果新增经销商身份，自动创建dealer记录
             if (user.getIsDealer() == 1 && existing.getDealerId() == null) {
-                createSalesmanForUser(existing);
+                createDealerForUser(existing);
             }
         }
         if (user.getInstallerId() != null) {
@@ -373,129 +373,136 @@ public class UserManageService {
         userRepository.updateById(user);
     }
 
+    private static final int MAX_RETRY = 3;
+
     /**
-     * 为用户创建装机商(Vendor)记录
+     * 为用户创建装机商(Installer)记录
      * 装机商代码: 1位字符(0-9/A-Z/a-z)
+     * 支持并发重试
      */
-    private void createVendorForUser(User user) {
-        // 生成唯一的装机商代码
-        String vendorCode = generateNextVendorCode();
+    private void createInstallerForUser(User user) {
+        for (int retry = 0; retry < MAX_RETRY; retry++) {
+            try {
+                String installerCode = generateNextInstallerCode();
 
-        Vendor vendor = new Vendor();
-        vendor.setVendorCode(vendorCode);
-        vendor.setVendorName(user.getNickname() != null ? user.getNickname() : user.getUsername());
-        vendor.setContactPerson(user.getNickname() != null ? user.getNickname() : user.getUsername());
-        vendor.setContactPhone(user.getPhone());
-        vendor.setLevel(1);
-        vendor.setCommissionRate(BigDecimal.ZERO);
-        vendor.setStatus(EnableStatus.ENABLED);
-        vendor.setCreatedAt(new Date());
-        vendor.setUpdatedAt(new Date());
+                Installer installer = new Installer();
+                installer.setInstallerCode(installerCode);
+                installer.setInstallerName(user.getNickname() != null ? user.getNickname() : user.getUsername());
+                installer.setContactPerson(user.getNickname() != null ? user.getNickname() : user.getUsername());
+                installer.setContactPhone(user.getPhone());
+                installer.setCommissionRate(BigDecimal.ZERO);
+                installer.setStatus(EnableStatus.ENABLED);
+                installer.setCreatedAt(new Date());
+                installer.setUpdatedAt(new Date());
 
-        vendorRepository.insert(vendor);
+                installerRepository.insert(installer);
 
-        // 更新用户的installer_id
-        user.setInstallerId(vendor.getId());
-        userRepository.updateById(user);
+                // 更新用户的installer_id
+                user.setInstallerId(installer.getId());
+                userRepository.updateById(user);
+                return; // 成功则返回
+            } catch (org.springframework.dao.DuplicateKeyException e) {
+                // 并发冲突，重试
+                if (retry == MAX_RETRY - 1) {
+                    throw new RuntimeException("创建装机商失败，请重试", e);
+                }
+            }
+        }
     }
 
     /**
-     * 为用户创建经销商(Salesman)记录
+     * 为用户创建经销商(Dealer)记录
      * 经销商代码: 2位字符(0-9/A-Z/a-z组合)
+     * 支持并发重试
      */
-    private void createSalesmanForUser(User user) {
-        // 生成唯一的经销商代码
-        String salesmanCode = generateNextSalesmanCode();
+    private void createDealerForUser(User user) {
+        for (int retry = 0; retry < MAX_RETRY; retry++) {
+            try {
+                String dealerCode = generateNextDealerCode();
 
-        Salesman salesman = new Salesman();
-        // 如果用户同时是装机商，关联到自己的vendor
-        if (user.getInstallerId() != null) {
-            salesman.setVendorId(user.getInstallerId());
-            Vendor vendor = vendorRepository.selectById(user.getInstallerId());
-            if (vendor != null) {
-                salesman.setVendorCode(vendor.getVendorCode());
+                Dealer dealer = new Dealer();
+                dealer.setDealerCode(dealerCode);
+                // 如果用户同时是装机商，关联到自己的installer
+                if (user.getInstallerId() != null) {
+                    dealer.setInstallerId(user.getInstallerId());
+                    Installer installer = installerRepository.selectById(user.getInstallerId());
+                    if (installer != null) {
+                        dealer.setInstallerCode(installer.getInstallerCode());
+                    }
+                }
+                dealer.setName(user.getNickname() != null ? user.getNickname() : user.getUsername());
+                dealer.setPhone(user.getPhone());
+                dealer.setLevel(1); // 默认一级经销商
+                dealer.setCommissionRate(BigDecimal.ZERO);
+                dealer.setStatus(EnableStatus.ENABLED);
+                dealer.setCreatedAt(new Date());
+                dealer.setUpdatedAt(new Date());
+
+                dealerRepository.insert(dealer);
+
+                // 更新用户的dealer_id
+                user.setDealerId(dealer.getId());
+                userRepository.updateById(user);
+                return; // 成功则返回
+            } catch (org.springframework.dao.DuplicateKeyException e) {
+                // 并发冲突，重试
+                if (retry == MAX_RETRY - 1) {
+                    throw new RuntimeException("创建经销商失败，请重试", e);
+                }
             }
         }
-        salesman.setName(user.getNickname() != null ? user.getNickname() : user.getUsername());
-        salesman.setPhone(user.getPhone());
-        salesman.setCommissionRate(BigDecimal.ZERO);
-        salesman.setStatus(EnableStatus.ENABLED);
-        salesman.setCreatedAt(new Date());
-        salesman.setUpdatedAt(new Date());
-
-        salesmanRepository.insert(salesman);
-
-        // 更新用户的dealer_id
-        user.setDealerId(salesman.getId());
-        userRepository.updateById(user);
     }
 
     /**
      * 生成下一个可用的装机商代码(1位: 0-9, A-Z, a-z)
+     * 遍历所有可用字符，返回第一个未被使用的代码
      */
-    private String generateNextVendorCode() {
-        // 获取已使用的最大代码
-        LambdaQueryWrapper<Vendor> wrapper = new LambdaQueryWrapper<>();
-        wrapper.orderByDesc(Vendor::getVendorCode);
-        wrapper.last("LIMIT 1");
-        Vendor lastVendor = vendorRepository.selectOne(wrapper);
+    private String generateNextInstallerCode() {
+        // 获取所有已使用的代码
+        LambdaQueryWrapper<Installer> wrapper = new LambdaQueryWrapper<>();
+        wrapper.select(Installer::getInstallerCode);
+        List<Installer> installers = installerRepository.selectList(wrapper);
+        Set<String> usedCodes = installers.stream()
+                .map(Installer::getInstallerCode)
+                .filter(code -> code != null && !code.isEmpty())
+                .collect(Collectors.toSet());
 
-        if (lastVendor == null || lastVendor.getVendorCode() == null || lastVendor.getVendorCode().isEmpty()) {
-            return "0"; // 从0开始
+        // 遍历所有可用字符，找到第一个未使用的
+        for (int i = 0; i < INSTALLER_CODE_CHARS.length(); i++) {
+            String code = String.valueOf(INSTALLER_CODE_CHARS.charAt(i));
+            if (!usedCodes.contains(code)) {
+                return code;
+            }
         }
-
-        String lastCode = lastVendor.getVendorCode();
-        // 如果是多位代码（旧数据），直接用序号生成
-        if (lastCode.length() > 1) {
-            long count = vendorRepository.selectCount(null);
-            int index = (int) (count % INSTALLER_CODE_CHARS.length());
-            return String.valueOf(INSTALLER_CODE_CHARS.charAt(index));
-        }
-
-        // 找到下一个字符
-        int currentIndex = INSTALLER_CODE_CHARS.indexOf(lastCode.charAt(0));
-        int nextIndex = (currentIndex + 1) % INSTALLER_CODE_CHARS.length();
-        return String.valueOf(INSTALLER_CODE_CHARS.charAt(nextIndex));
+        // 所有单字符代码都已用完，抛出异常
+        throw new RuntimeException("装机商代码已用完（最多支持62个装机商）");
     }
 
     /**
      * 生成下一个可用的经销商代码(2位: 00-zz)
+     * 遍历所有可用组合，返回第一个未被使用的代码
      */
-    private String generateNextSalesmanCode() {
-        // 获取当前最大的代码
-        LambdaQueryWrapper<Salesman> wrapper = new LambdaQueryWrapper<>();
-        wrapper.isNotNull(Salesman::getVendorCode);
-        wrapper.orderByDesc(Salesman::getId);
-        wrapper.last("LIMIT 1");
-        Salesman lastSalesman = salesmanRepository.selectOne(wrapper);
+    private String generateNextDealerCode() {
+        // 获取所有已使用的代码
+        LambdaQueryWrapper<Dealer> wrapper = new LambdaQueryWrapper<>();
+        wrapper.select(Dealer::getDealerCode);
+        List<Dealer> dealers = dealerRepository.selectList(wrapper);
+        Set<String> usedCodes = dealers.stream()
+                .map(Dealer::getDealerCode)
+                .filter(code -> code != null && !code.isEmpty())
+                .collect(Collectors.toSet());
 
-        if (lastSalesman == null || lastSalesman.getVendorCode() == null) {
-            return "00"; // 从00开始
-        }
-
-        String lastCode = lastSalesman.getVendorCode();
-        // 对于非标准2位代码，使用序号生成
-        if (lastCode.length() != 2) {
-            long count = salesmanRepository.selectCount(null);
-            int first = (int) ((count / DEALER_CODE_CHARS.length()) % DEALER_CODE_CHARS.length());
-            int second = (int) (count % DEALER_CODE_CHARS.length());
-            return String.valueOf(DEALER_CODE_CHARS.charAt(first)) + DEALER_CODE_CHARS.charAt(second);
-        }
-
-        // 解析当前代码并递增
-        int firstIndex = DEALER_CODE_CHARS.indexOf(lastCode.charAt(0));
-        int secondIndex = DEALER_CODE_CHARS.indexOf(lastCode.charAt(1));
-
-        secondIndex++;
-        if (secondIndex >= DEALER_CODE_CHARS.length()) {
-            secondIndex = 0;
-            firstIndex++;
-            if (firstIndex >= DEALER_CODE_CHARS.length()) {
-                firstIndex = 0; // 循环
+        // 遍历所有2位组合，找到第一个未使用的
+        for (int i = 0; i < DEALER_CODE_CHARS.length(); i++) {
+            for (int j = 0; j < DEALER_CODE_CHARS.length(); j++) {
+                String code = String.valueOf(DEALER_CODE_CHARS.charAt(i)) + DEALER_CODE_CHARS.charAt(j);
+                if (!usedCodes.contains(code)) {
+                    return code;
+                }
             }
         }
-
-        return String.valueOf(DEALER_CODE_CHARS.charAt(firstIndex)) + DEALER_CODE_CHARS.charAt(secondIndex);
+        // 所有2位代码都已用完，抛出异常
+        throw new RuntimeException("经销商代码已用完（最多支持3844个经销商）");
     }
 
     /**

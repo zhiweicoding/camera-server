@@ -1,7 +1,7 @@
 package com.pura365.camera.model;
 
-import com.fasterxml.jackson.databind.PropertyNamingStrategies;
-import com.fasterxml.jackson.databind.annotation.JsonNaming;
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonSetter;
 
 /**
  * 创建生产批次请求参数
@@ -28,18 +28,32 @@ public class CreateBatchRequest {
 
     /**
      * 装机商代码 (第5位)
+     * 前端参数名: installerIdCode
      */
+    @JsonAlias("installerIdCode")
     private String assemblerCode;
 
     /**
      * 销售商/经销商代码 (第6-7位)
+     * 前端参数名: dealerIdCode
      */
+    @JsonAlias("dealerIdCode")
     private String vendorCode;
 
     /**
      * 预留位 (第8位)，默认为 "0"
      */
     private String reserved = "0";
+
+    /**
+     * 合同编号
+     */
+    private String contractNo;
+
+    /**
+     * 是否开启广告
+     */
+    private Boolean enableAd;
 
     /**
      * 生产数量
@@ -107,8 +121,30 @@ public class CreateBatchRequest {
         return reserved;
     }
 
-    public void setReserved(String reserved) {
-        this.reserved = reserved;
+    /**
+     * 支持前端传入字符串或数字类型的 reserved
+     */
+    @JsonSetter("reserved")
+    public void setReserved(Object reserved) {
+        if (reserved != null) {
+            this.reserved = String.valueOf(reserved);
+        }
+    }
+
+    public String getContractNo() {
+        return contractNo;
+    }
+
+    public void setContractNo(String contractNo) {
+        this.contractNo = contractNo;
+    }
+
+    public Boolean getEnableAd() {
+        return enableAd;
+    }
+
+    public void setEnableAd(Boolean enableAd) {
+        this.enableAd = enableAd;
     }
 
     public Integer getQuantity() {
