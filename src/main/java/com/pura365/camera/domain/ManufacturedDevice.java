@@ -80,6 +80,10 @@ public class ManufacturedDevice {
     @TableField("activated_at")
     private Date activatedAt;
 
+    /** 上线所属国家 */
+    @TableField("country")
+    private String country;
+
     /** 创建时间 */
     @TableField("created_at")
     private Date createdAt;

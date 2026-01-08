@@ -6,8 +6,15 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -68,23 +75,32 @@ public class BillingController {
     }
 
     /**
+     * 获取经销商账单汇总
+     */
+    @Operation(summary = "经销商账单汇总", description = "按经销商维度统计账单汇总")
+    @GetMapping("/dealer-summary")
+    public ApiResponse<Map<String, Object>> getDealerBillingSummary(
+            @RequestParam(required = false) String installerCode,
+            @RequestParam(required = false) Long dealerId,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate) {
+        return ApiResponse.success(billingService.getDealerBillingSummary(installerCode, dealerId, startDate, endDate));
+    }
+
+    /**
      * 获取业务员账单汇总（已废弃）
-     * @deprecated 使用 /installer-summary 替代
+     * @deprecated 使用 /dealer-summary 替代
      */
     @Deprecated
-    @Operation(summary = "业务员账单汇总（已废弃）", description = "请使用装机商账单汇总接口")
+    @Operation(summary = "业务员账单汇总（已废弃）", description = "请使用经销商账单汇总接口 /dealer-summary")
     @GetMapping("/salesman-summary")
     public ApiResponse<Map<String, Object>> getSalesmanBillingSummary(
             @RequestParam(required = false) String vendorCode,
             @RequestParam(required = false) Long salesmanId,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate) {
-        // 向后兼容，返空数据
-        Map<String, Object> emptyResult = new java.util.HashMap<>();
-        emptyResult.put("list", new java.util.ArrayList<>());
-        emptyResult.put("totalOrders", 0);
-        emptyResult.put("totalAmount", java.math.BigDecimal.ZERO);
-        return ApiResponse.success(emptyResult);
+        // 向后兼容，调用新方法
+        return ApiResponse.success(billingService.getDealerBillingSummary(vendorCode, salesmanId, startDate, endDate));
     }
 
     /**
@@ -146,5 +162,43 @@ public class BillingController {
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate) {
         return ApiResponse.success(billingService.getDevicePaymentStats(vendorCode, startDate, endDate));
+    }
+
+    /**
+     * 导出充值明细Excel
+     * 如果数据超过1万条，分成多个Excel文件并打包成zip
+     */
+    @Operation(summary = "导出充值明细Excel", description = "导出充值明细Excel文件，超过1万条数据分片打包成zip")
+    @GetMapping("/export-detail")
+    public ResponseEntity<byte[]> exportBillingDetail(
+            @RequestParam(required = false) String vendorCode,
+            @RequestParam(required = false) Long salesmanId,
+            @RequestParam(required = false) String deviceId,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate) {
+        try {
+            Map<String, Object> result = billingService.exportBillingDetailExcel(vendorCode, salesmanId, deviceId, startDate, endDate);
+            boolean isZip = (Boolean) result.get("isZip");
+            byte[] data = (byte[]) result.get("data");
+
+            // 生成文件名
+            String timestamp = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
+            String filename = isZip ? "充值明细_" + timestamp + ".zip" : "充值明细_" + timestamp + ".xlsx";
+            String encodedFilename = URLEncoder.encode(filename, StandardCharsets.UTF_8.toString())
+                    .replaceAll("\\+", "%20");
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(isZip ? MediaType.valueOf("application/zip") : MediaType.APPLICATION_OCTET_STREAM);
+            headers.set(HttpHeaders.CONTENT_DISPOSITION,
+                    "attachment; filename=\"" + encodedFilename + "\"; filename*=UTF-8''" + encodedFilename);
+            headers.setContentLength(data.length);
+
+            return ResponseEntity.ok()
+                    .headers(headers)
+                    .body(data);
+
+        } catch (IOException e) {
+            return ResponseEntity.internalServerError().build();
+        }
     }
 }

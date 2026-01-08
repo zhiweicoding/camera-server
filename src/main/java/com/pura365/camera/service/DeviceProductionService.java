@@ -47,6 +47,9 @@ public class DeviceProductionService {
     @Autowired
     private SalesmanRepository salesmanRepository;
 
+    @Autowired
+    private InstallerRepository installerRepository;
+
     /**
      * 默认密码哈希(与admin2一致)
      */
@@ -260,22 +263,48 @@ public class DeviceProductionService {
     // ==================== 配置选项 ====================
 
     /**
+     * 获取启用的装机商列表（installer表，机身号第5位）
+     */
+    public List<Installer> listInstallers() {
+        QueryWrapper<Installer> qw = new QueryWrapper<>();
+        qw.lambda().eq(Installer::getStatus, EnableStatus.ENABLED).orderByAsc(Installer::getInstallerCode);
+        return installerRepository.selectList(qw);
+    }
+
+    /**
      * 获取设备ID生成的所有配置选项
-     * 包括：网络镜头配置、设备形态、特殊要求、装机商、经销商
+     * 包括：网络镜头配置、设备形态、特殊要求、装机商、销售商
      */
     public Map<String, Object> getOptions() {
         Map<String, Object> map = new HashMap<>();
-        // 网络+镜头配置
+        // 网络+镜头配置（机身号第1-2位）
         map.put("network_lens", Arrays.asList("A1", "A2", "A3", "B1", "B2", "B3", "C1", "C2", "R1"));
-        // 设备形态
+        // 设备形态（机身号第3位）
         map.put("device_form", Arrays.asList("1", "2", "3", "4", "5"));
-        // 特殊要求
+        // 特殊要求（机身号第4位）
         map.put("special_req", Arrays.asList("0", "1", "2", "3"));
-        // 预留位
+        // 预留位（机身号第8位）
         map.put("reserved", Collections.singletonList("0"));
-        // 装机商列表
+        // 装机商列表（installer表，机身号第5位）
+        map.put("installers", listInstallers());
+        // 销售商列表（vendor表，机身号第6-7位），包含默认的00-先不指定选项
+        List<Map<String, Object>> dealersWithDefault = new ArrayList<>();
+        // 添加默认选项
+        Map<String, Object> defaultDealer = new HashMap<>();
+        defaultDealer.put("vendorCode", "00");
+        defaultDealer.put("vendorName", "先不指定");
+        dealersWithDefault.add(defaultDealer);
+        // 添加实际经销商
+        for (Vendor v : listVendors()) {
+            Map<String, Object> dealer = new HashMap<>();
+            dealer.put("vendorCode", v.getVendorCode());
+            dealer.put("vendorName", v.getVendorName());
+            dealer.put("id", v.getId());
+            dealersWithDefault.add(dealer);
+        }
+        map.put("dealers", dealersWithDefault);
+        // 保留旧字段兼容
         map.put("assemblers", listAssemblers());
-        // 经销商列表
         map.put("vendors", listVendors());
         return map;
     }
@@ -347,6 +376,89 @@ public class DeviceProductionService {
         device.setUpdatedAt(new Date());
         deviceRepository.updateById(device);
         log.info("移除业务员分配: deviceId={}", deviceId);
+    }
+
+    // ==================== 扫码分配经销商 ====================
+
+    /**
+     * 扫码分配经销商
+     * 更新设备的经销商关联，同时修改设备ID的第6-7位
+     *
+     * @param deviceId   原设备ID（16位）
+     * @param vendorCode 新的经销商代码（2位）
+     * @return 包含新设备ID等信息的Map
+     */
+    @Transactional
+    public Map<String, Object> scanAssignDealer(String deviceId, String vendorCode) {
+        // 校验设备ID长度
+        if (deviceId == null || deviceId.length() != 16) {
+            throw new RuntimeException("设备ID必须是16位");
+        }
+
+        // 校验经销商代码
+        if (vendorCode == null || vendorCode.length() != 2) {
+            throw new RuntimeException("经销商代码必须是2位");
+        }
+
+        // 查找设备
+        ManufacturedDevice device = getDevice(deviceId);
+        if (device == null) {
+            throw new RuntimeException("设备不存在: " + deviceId);
+        }
+
+        // 如果vendorCode不是"00"，校验经销商是否存在且启用
+        if (!"00".equals(vendorCode)) {
+            QueryWrapper<Vendor> vq = new QueryWrapper<>();
+            vq.lambda().eq(Vendor::getVendorCode, vendorCode).eq(Vendor::getStatus, EnableStatus.ENABLED);
+            if (vendorRepository.selectCount(vq) == 0) {
+                throw new RuntimeException("经销商不存在或未启用: " + vendorCode);
+            }
+        }
+
+        String oldDeviceId = device.getDeviceId();
+        String oldVendorCode = device.getVendorCode();
+        boolean vendorChanged = !vendorCode.equals(oldVendorCode);
+        String newDeviceId = oldDeviceId;
+
+        // 如果经销商代码变化，需要更新设备ID
+        if (vendorChanged) {
+            // 构建新的设备ID：第1-5位 + 新的第6-7位(vendorCode) + 第8-16位
+            newDeviceId = oldDeviceId.substring(0, 5) + vendorCode + oldDeviceId.substring(7);
+
+            // 检查新设备ID是否已存在（排除自身）
+            QueryWrapper<ManufacturedDevice> checkQw = new QueryWrapper<>();
+            checkQw.lambda().eq(ManufacturedDevice::getDeviceId, newDeviceId)
+                    .ne(ManufacturedDevice::getId, device.getId());
+            if (deviceRepository.selectCount(checkQw) > 0) {
+                throw new RuntimeException("新设备ID已存在: " + newDeviceId);
+            }
+
+            // 更新设备信息
+            device.setDeviceId(newDeviceId);
+            device.setVendorCode(vendorCode);
+            device.setUpdatedAt(new Date());
+            deviceRepository.updateById(device);
+
+            log.info("扫码分配经销商成功: oldDeviceId={}, newDeviceId={}, vendorCode={}",
+                    oldDeviceId, newDeviceId, vendorCode);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("deviceId", oldDeviceId);
+            result.put("newDeviceId", newDeviceId);
+            result.put("vendorCode", vendorCode);
+            result.put("changed", true);
+            result.put("message", "分配成功");
+            return result;
+        }
+
+        // 经销商未变化
+        Map<String, Object> result = new HashMap<>();
+        result.put("deviceId", oldDeviceId);
+        result.put("newDeviceId", oldDeviceId);
+        result.put("vendorCode", vendorCode);
+        result.put("changed", false);
+        result.put("message", "经销商未变化");
+        return result;
     }
 
     // ==================== 生产批次管理 ====================
@@ -630,12 +742,111 @@ public class DeviceProductionService {
         }
         long total = deviceRepository.selectCount(countQw);
 
+        // 获取装机商和经销商的分佣比例
+        List<Map<String, Object>> deviceList = enrichDevicesWithCommission(devices);
+
         Map<String, Object> result = new HashMap<>();
-        result.put("list", devices);
+        result.put("list", deviceList);
         result.put("total", total);
         result.put("page", page);
         result.put("size", size);
         return result;
+    }
+
+    /**
+     * 为设备列表添加装机商和经销商的分佣比例信息
+     */
+    private List<Map<String, Object>> enrichDevicesWithCommission(List<ManufacturedDevice> devices) {
+        if (devices == null || devices.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        // 收集所有的 vendorCode 和 installerId
+        Set<String> vendorCodes = new HashSet<>();
+        Set<Long> installerIds = new HashSet<>();
+        for (ManufacturedDevice d : devices) {
+            if (d.getVendorCode() != null && !"00".equals(d.getVendorCode())) {
+                vendorCodes.add(d.getVendorCode());
+            }
+            if (d.getInstallerId() != null) {
+                installerIds.add(d.getInstallerId());
+            }
+        }
+
+        // 批量查询 Vendor
+        Map<String, Vendor> vendorMap = new HashMap<>();
+        if (!vendorCodes.isEmpty()) {
+            QueryWrapper<Vendor> vq = new QueryWrapper<>();
+            vq.lambda().in(Vendor::getVendorCode, vendorCodes);
+            List<Vendor> vendors = vendorRepository.selectList(vq);
+            for (Vendor v : vendors) {
+                vendorMap.put(v.getVendorCode(), v);
+                // 同时收集经销商关联的装机商ID
+                if (v.getInstallerId() != null) {
+                    installerIds.add(v.getInstallerId());
+                }
+            }
+        }
+
+        // 批量查询 Installer
+        Map<Long, Installer> installerMap = new HashMap<>();
+        if (!installerIds.isEmpty()) {
+            QueryWrapper<Installer> iq = new QueryWrapper<>();
+            iq.lambda().in(Installer::getId, installerIds);
+            List<Installer> installers = installerRepository.selectList(iq);
+            for (Installer i : installers) {
+                installerMap.put(i.getId(), i);
+            }
+        }
+
+        // 构建结果列表
+        List<Map<String, Object>> resultList = new ArrayList<>();
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        for (ManufacturedDevice d : devices) {
+            Map<String, Object> map = new HashMap<>();
+            map.put("id", d.getId());
+            map.put("deviceId", d.getDeviceId());
+            map.put("batchId", d.getBatchId());
+            map.put("networkLens", d.getNetworkLens());
+            map.put("deviceForm", d.getDeviceForm());
+            map.put("specialReq", d.getSpecialReq());
+            map.put("assemblerCode", d.getAssemblerCode());
+            map.put("vendorCode", d.getVendorCode());
+            map.put("salesmanId", d.getSalesmanId());
+            map.put("installerId", d.getInstallerId());
+            map.put("currentVendorId", d.getCurrentVendorId());
+            map.put("serialNo", d.getSerialNo());
+            map.put("macAddress", d.getMacAddress());
+            map.put("status", d.getStatus() != null ? d.getStatus().getCode() : null);
+            map.put("country", d.getCountry());
+            map.put("manufacturedAt", d.getManufacturedAt() != null ? sdf.format(d.getManufacturedAt()) : null);
+            map.put("activatedAt", d.getActivatedAt() != null ? sdf.format(d.getActivatedAt()) : null);
+            map.put("createdAt", d.getCreatedAt() != null ? sdf.format(d.getCreatedAt()) : null);
+            map.put("updatedAt", d.getUpdatedAt() != null ? sdf.format(d.getUpdatedAt()) : null);
+
+            // 添加装机商信息和分佣比例
+            Installer installer = d.getInstallerId() != null ? installerMap.get(d.getInstallerId()) : null;
+            if (installer != null) {
+                map.put("installerName", installer.getInstallerName());
+                map.put("installerCommissionRate", installer.getCommissionRate());
+            } else {
+                map.put("installerName", null);
+                map.put("installerCommissionRate", null);
+            }
+
+            // 添加经销商信息和分佣比例
+            Vendor vendor = d.getVendorCode() != null ? vendorMap.get(d.getVendorCode()) : null;
+            if (vendor != null) {
+                map.put("salesmanName", vendor.getVendorName());
+                map.put("dealerCommissionRate", vendor.getCommissionRate());
+            } else {
+                map.put("salesmanName", null);
+                map.put("dealerCommissionRate", null);
+            }
+
+            resultList.add(map);
+        }
+        return resultList;
     }
 
     /**
@@ -688,6 +899,69 @@ public class DeviceProductionService {
             throw new RuntimeException("设备ID列表不能为空");
         }
         deviceRepository.deleteBatchIds(ids);
+    }
+
+    /**
+     * 激活设备
+     * 用于用户绑定设备时调用，记录MAC地址、激活时间、上线国家
+     *
+     * @param deviceId   设备ID (16位)
+     * @param macAddress MAC地址
+     * @param country    上线所属国家
+     * @return 更新后的设备信息
+     */
+    @Transactional
+    public ManufacturedDevice activateDevice(String deviceId, String macAddress, String country) {
+        if (deviceId == null || deviceId.trim().isEmpty()) {
+            throw new RuntimeException("设备ID不能为空");
+        }
+
+        ManufacturedDevice device = getDevice(deviceId.trim());
+        if (device == null) {
+            throw new RuntimeException("设备不存在: " + deviceId);
+        }
+
+        // 更新设备信息
+        device.setMacAddress(macAddress);
+        device.setCountry(country);
+        device.setActivatedAt(new Date());
+        device.setStatus(ManufacturedDeviceStatus.ACTIVATED);
+        device.setUpdatedAt(new Date());
+        deviceRepository.updateById(device);
+
+        log.info("设备激活成功: deviceId={}, macAddress={}, country={}", deviceId, macAddress, country);
+        return device;
+    }
+
+    /**
+     * 更新设备状态（禁用/启用）
+     *
+     * @param deviceId 设备ID (16位)
+     * @param status   目标状态 (disabled/manufactured)
+     * @return 更新后的设备信息
+     */
+    @Transactional
+    public ManufacturedDevice updateDeviceStatus(String deviceId, String status) {
+        if (deviceId == null || deviceId.trim().isEmpty()) {
+            throw new RuntimeException("设备ID不能为空");
+        }
+
+        ManufacturedDevice device = getDevice(deviceId.trim());
+        if (device == null) {
+            throw new RuntimeException("设备不存在: " + deviceId);
+        }
+
+        ManufacturedDeviceStatus newStatus = ManufacturedDeviceStatus.fromCode(status);
+        if (newStatus == null) {
+            throw new RuntimeException("无效的状态值: " + status);
+        }
+
+        device.setStatus(newStatus);
+        device.setUpdatedAt(new Date());
+        deviceRepository.updateById(device);
+
+        log.info("设备状态更新成功: deviceId={}, status={}", deviceId, status);
+        return device;
     }
 
     /**

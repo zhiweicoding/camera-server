@@ -3,16 +3,21 @@ package com.pura365.camera.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.pura365.camera.domain.Salesman;
 import com.pura365.camera.domain.User;
+import com.pura365.camera.domain.Vendor;
+import com.pura365.camera.enums.EnableStatus;
+import com.pura365.camera.repository.SalesmanRepository;
 import com.pura365.camera.repository.UserRepository;
+import com.pura365.camera.repository.VendorRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.math.BigDecimal;
+import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * 用户管理服务（管理员使用）
@@ -23,9 +28,20 @@ public class UserManageService {
     @Autowired
     private UserRepository userRepository;
 
+    @Autowired
+    private VendorRepository vendorRepository;
+
+    @Autowired
+    private SalesmanRepository salesmanRepository;
+
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     private static final int ROLE_ADMIN = 3;
+
+    // 装机商代码字符集: 0-9, A-Z, a-z (共62个字符)
+    private static final String INSTALLER_CODE_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    // 经销商代码字符集: 0-9, A-Z, a-z (共62个字符，两位组合)
+    private static final String DEALER_CODE_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
     /**
      * 分页查询用户列表（排除管理员）
@@ -34,16 +50,23 @@ public class UserManageService {
      * @param role        角色筛选（可选）
      * @param isInstaller 是否装机商筛选（可选）
      * @param isDealer    是否经销商筛选（可选）
+     * @param userType    用户类型：consumer-普通使用者(无身份) staff-有身份用户
      * @param page        页码（从1开始）
      * @param pageSize    每页大小
      * @return 分页结果
      */
-    public Map<String, Object> listUsers(String keyword, Integer role, Integer isInstaller, Integer isDealer, int page, int pageSize) {
+    public Map<String, Object> listUsers(String keyword, Integer role, Integer isInstaller, Integer isDealer, String userType, int page, int pageSize) {
         Page<User> pageObj = new Page<>(page, pageSize);
         LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
 
-        // 排除管理员
-        wrapper.ne(User::getRole, ROLE_ADMIN);
+        // 用户类型筛选
+        if ("consumer".equals(userType)) {
+            // 使用者管理：只显示普通用户(role=1)
+            wrapper.eq(User::getRole, 1);
+        } else if ("staff".equals(userType)) {
+            // 用户管理：管理员(role=3) + 操作员(role=2)，排除普通用户(role=1)
+            wrapper.ne(User::getRole, 1);
+        }
 
         // 关键词搜索
         if (keyword != null && !keyword.isEmpty()) {
@@ -53,8 +76,8 @@ public class UserManageService {
                     .or().like(User::getNickname, keyword));
         }
 
-        // 角色筛选（不允许筛选管理员）
-        if (role != null && role != ROLE_ADMIN) {
+        // 角色筛选
+        if (role != null) {
             wrapper.eq(User::getRole, role);
         }
 
@@ -73,12 +96,52 @@ public class UserManageService {
 
         Page<User> result = userRepository.selectPage(pageObj, wrapper);
 
+        // 获取用户列表并补充装机商代码和经销商代码
+        List<Map<String, Object>> userList = result.getRecords().stream().map(user -> {
+            Map<String, Object> userMap = new HashMap<>();
+            userMap.put("id", user.getId());
+            userMap.put("uid", user.getUid());
+            userMap.put("username", user.getUsername());
+            userMap.put("phone", user.getPhone());
+            userMap.put("email", user.getEmail());
+            userMap.put("nickname", user.getNickname());
+            userMap.put("avatar", user.getAvatar());
+            userMap.put("role", user.getRole());
+            userMap.put("enabled", user.getEnabled());
+            userMap.put("isInstaller", user.getIsInstaller());
+            userMap.put("isDealer", user.getIsDealer());
+            userMap.put("installerId", user.getInstallerId());
+            userMap.put("dealerId", user.getDealerId());
+            userMap.put("createdAt", user.getCreatedAt());
+            userMap.put("updatedAt", user.getUpdatedAt());
+
+            // 查询装机商代码
+            if (user.getInstallerId() != null) {
+                Vendor vendor = vendorRepository.selectById(user.getInstallerId());
+                if (vendor != null) {
+                    userMap.put("installerCode", vendor.getVendorCode());
+                    userMap.put("installerName", vendor.getVendorName());
+                }
+            }
+
+            // 查询经销商代码
+            if (user.getDealerId() != null) {
+                Salesman salesman = salesmanRepository.selectById(user.getDealerId());
+                if (salesman != null) {
+                    userMap.put("dealerCode", salesman.getVendorCode());
+                    userMap.put("dealerName", salesman.getName());
+                }
+            }
+
+            return userMap;
+        }).collect(Collectors.toList());
+
         Map<String, Object> data = new HashMap<>();
         data.put("total", result.getTotal());
         data.put("page", result.getCurrent());
         data.put("pageSize", result.getSize());
         data.put("totalPages", result.getPages());
-        data.put("list", result.getRecords());
+        data.put("list", userList);
         return data;
     }
 
@@ -116,6 +179,7 @@ public class UserManageService {
     /**
      * 创建用户（不允许创建管理员）
      */
+    @Transactional
     public User createUser(User user, String password) {
         // 不允许创建管理员
         if (user.getRole() != null && user.getRole() == ROLE_ADMIN) {
@@ -146,12 +210,24 @@ public class UserManageService {
         user.setUpdatedAt(now);
 
         userRepository.insert(user);
+
+        // 如果标记为装机商，自动创建vendor记录
+        if (user.getIsInstaller() != null && user.getIsInstaller() == 1) {
+            createVendorForUser(user);
+        }
+
+        // 如果标记为经销商，自动创建salesman记录
+        if (user.getIsDealer() != null && user.getIsDealer() == 1) {
+            createSalesmanForUser(user);
+        }
+
         return user;
     }
 
     /**
      * 更新用户信息（不允许修改管理员）
      */
+    @Transactional
     public User updateUser(User user) {
         User existing = userRepository.selectById(user.getId());
         if (existing == null) {
@@ -193,9 +269,17 @@ public class UserManageService {
         // 双重身份字段
         if (user.getIsInstaller() != null) {
             existing.setIsInstaller(user.getIsInstaller());
+            // 如果新增装机商身份，自动创建vendor记录
+            if (user.getIsInstaller() == 1 && existing.getInstallerId() == null) {
+                createVendorForUser(existing);
+            }
         }
         if (user.getIsDealer() != null) {
             existing.setIsDealer(user.getIsDealer());
+            // 如果新增经销商身份，自动创建salesman记录
+            if (user.getIsDealer() == 1 && existing.getDealerId() == null) {
+                createSalesmanForUser(existing);
+            }
         }
         if (user.getInstallerId() != null) {
             existing.setInstallerId(user.getInstallerId());
@@ -230,9 +314,6 @@ public class UserManageService {
         User user = userRepository.selectById(id);
         if (user == null) {
             throw new RuntimeException("用户不存在");
-        }
-        if (user.getRole() != null && user.getRole() == ROLE_ADMIN) {
-            throw new RuntimeException("不允许重置管理员密码");
         }
         if (newPassword == null || newPassword.isEmpty()) {
             throw new RuntimeException("新密码不能为空");
@@ -290,6 +371,131 @@ public class UserManageService {
         }
         user.setUpdatedAt(new Date());
         userRepository.updateById(user);
+    }
+
+    /**
+     * 为用户创建装机商(Vendor)记录
+     * 装机商代码: 1位字符(0-9/A-Z/a-z)
+     */
+    private void createVendorForUser(User user) {
+        // 生成唯一的装机商代码
+        String vendorCode = generateNextVendorCode();
+
+        Vendor vendor = new Vendor();
+        vendor.setVendorCode(vendorCode);
+        vendor.setVendorName(user.getNickname() != null ? user.getNickname() : user.getUsername());
+        vendor.setContactPerson(user.getNickname() != null ? user.getNickname() : user.getUsername());
+        vendor.setContactPhone(user.getPhone());
+        vendor.setLevel(1);
+        vendor.setCommissionRate(BigDecimal.ZERO);
+        vendor.setStatus(EnableStatus.ENABLED);
+        vendor.setCreatedAt(new Date());
+        vendor.setUpdatedAt(new Date());
+
+        vendorRepository.insert(vendor);
+
+        // 更新用户的installer_id
+        user.setInstallerId(vendor.getId());
+        userRepository.updateById(user);
+    }
+
+    /**
+     * 为用户创建经销商(Salesman)记录
+     * 经销商代码: 2位字符(0-9/A-Z/a-z组合)
+     */
+    private void createSalesmanForUser(User user) {
+        // 生成唯一的经销商代码
+        String salesmanCode = generateNextSalesmanCode();
+
+        Salesman salesman = new Salesman();
+        // 如果用户同时是装机商，关联到自己的vendor
+        if (user.getInstallerId() != null) {
+            salesman.setVendorId(user.getInstallerId());
+            Vendor vendor = vendorRepository.selectById(user.getInstallerId());
+            if (vendor != null) {
+                salesman.setVendorCode(vendor.getVendorCode());
+            }
+        }
+        salesman.setName(user.getNickname() != null ? user.getNickname() : user.getUsername());
+        salesman.setPhone(user.getPhone());
+        salesman.setCommissionRate(BigDecimal.ZERO);
+        salesman.setStatus(EnableStatus.ENABLED);
+        salesman.setCreatedAt(new Date());
+        salesman.setUpdatedAt(new Date());
+
+        salesmanRepository.insert(salesman);
+
+        // 更新用户的dealer_id
+        user.setDealerId(salesman.getId());
+        userRepository.updateById(user);
+    }
+
+    /**
+     * 生成下一个可用的装机商代码(1位: 0-9, A-Z, a-z)
+     */
+    private String generateNextVendorCode() {
+        // 获取已使用的最大代码
+        LambdaQueryWrapper<Vendor> wrapper = new LambdaQueryWrapper<>();
+        wrapper.orderByDesc(Vendor::getVendorCode);
+        wrapper.last("LIMIT 1");
+        Vendor lastVendor = vendorRepository.selectOne(wrapper);
+
+        if (lastVendor == null || lastVendor.getVendorCode() == null || lastVendor.getVendorCode().isEmpty()) {
+            return "0"; // 从0开始
+        }
+
+        String lastCode = lastVendor.getVendorCode();
+        // 如果是多位代码（旧数据），直接用序号生成
+        if (lastCode.length() > 1) {
+            long count = vendorRepository.selectCount(null);
+            int index = (int) (count % INSTALLER_CODE_CHARS.length());
+            return String.valueOf(INSTALLER_CODE_CHARS.charAt(index));
+        }
+
+        // 找到下一个字符
+        int currentIndex = INSTALLER_CODE_CHARS.indexOf(lastCode.charAt(0));
+        int nextIndex = (currentIndex + 1) % INSTALLER_CODE_CHARS.length();
+        return String.valueOf(INSTALLER_CODE_CHARS.charAt(nextIndex));
+    }
+
+    /**
+     * 生成下一个可用的经销商代码(2位: 00-zz)
+     */
+    private String generateNextSalesmanCode() {
+        // 获取当前最大的代码
+        LambdaQueryWrapper<Salesman> wrapper = new LambdaQueryWrapper<>();
+        wrapper.isNotNull(Salesman::getVendorCode);
+        wrapper.orderByDesc(Salesman::getId);
+        wrapper.last("LIMIT 1");
+        Salesman lastSalesman = salesmanRepository.selectOne(wrapper);
+
+        if (lastSalesman == null || lastSalesman.getVendorCode() == null) {
+            return "00"; // 从00开始
+        }
+
+        String lastCode = lastSalesman.getVendorCode();
+        // 对于非标准2位代码，使用序号生成
+        if (lastCode.length() != 2) {
+            long count = salesmanRepository.selectCount(null);
+            int first = (int) ((count / DEALER_CODE_CHARS.length()) % DEALER_CODE_CHARS.length());
+            int second = (int) (count % DEALER_CODE_CHARS.length());
+            return String.valueOf(DEALER_CODE_CHARS.charAt(first)) + DEALER_CODE_CHARS.charAt(second);
+        }
+
+        // 解析当前代码并递增
+        int firstIndex = DEALER_CODE_CHARS.indexOf(lastCode.charAt(0));
+        int secondIndex = DEALER_CODE_CHARS.indexOf(lastCode.charAt(1));
+
+        secondIndex++;
+        if (secondIndex >= DEALER_CODE_CHARS.length()) {
+            secondIndex = 0;
+            firstIndex++;
+            if (firstIndex >= DEALER_CODE_CHARS.length()) {
+                firstIndex = 0; // 循环
+            }
+        }
+
+        return String.valueOf(DEALER_CODE_CHARS.charAt(firstIndex)) + DEALER_CODE_CHARS.charAt(secondIndex);
     }
 
     /**

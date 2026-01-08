@@ -15,7 +15,8 @@ public enum ManufacturedDeviceStatus {
 
     MANUFACTURED("manufactured", "已生产"),
     ACTIVATED("activated", "已激活"),
-    BOUND("bound", "已绑定");
+    BOUND("bound", "已绑定"),
+    DISABLED("disabled", "已禁用");
 
     @EnumValue
     @JsonValue
