@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.AppMessage;
 import com.pura365.camera.domain.Device;
+import com.pura365.camera.enums.DeviceOnlineStatus;
 import com.pura365.camera.model.MessageListResponse;
 import com.pura365.camera.model.MessageVO;
 import com.pura365.camera.repository.AppMessageRepository;
@@ -204,10 +205,28 @@ public class MessageService {
         
         appMessageRepository.insert(message);
         
+        // 检查设备是否在线，离线则跳过推送
+        if (!isDeviceOnline(deviceId)) {
+            org.slf4j.LoggerFactory.getLogger(MessageService.class)
+                .info("设备 {} 不在线，跳过推送", deviceId);
+            return message.getId();
+        }
+        
         // 触发极光推送
         pushMessageToUser(userId, deviceId, title, content, thumbnailUrl, videoUrl);
         
         return message.getId();
+    }
+
+    /**
+     * 检查设备是否在线
+     */
+    private boolean isDeviceOnline(String deviceId) {
+        if (deviceId == null) {
+            return true; // 没有设备ID时默认允许推送
+        }
+        Device device = deviceRepository.selectById(deviceId);
+        return device != null && device.getStatus() == DeviceOnlineStatus.ONLINE;
     }
 
     /**

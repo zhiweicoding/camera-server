@@ -160,12 +160,12 @@ public class CameraService {
         }
         
         // 验证MAC地址（忽略大小写，移除冒号和横杠）
-        String storedMac = normalizeMac(device.getMac());
-        String requestMac = normalizeMac(mac);
-        if (!storedMac.equals(requestMac)) {
-            log.warn("MAC地址不匹配 - ID: {}, 期望: {}, 实际: {}", deviceId, device.getMac(), mac);
-            return 2; // MAC地址不匹配
-        }
+//        String storedMac = normalizeMac(device.getMac());
+//        String requestMac = normalizeMac(mac);
+//        if (!storedMac.equals(requestMac)) {
+//            log.warn("MAC地址不匹配 - ID: {}, 期望: {}, 实际: {}", deviceId, device.getMac(), mac);
+//            return 2; // MAC地址不匹配
+//        }
         
         try {
             // 2. 清除设备分享信息（device_share 表）

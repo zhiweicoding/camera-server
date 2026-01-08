@@ -5,6 +5,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.Device;
+import com.pura365.camera.model.ApiResponse;
 import com.pura365.camera.domain.NetworkConfig;
 import com.pura365.camera.enums.DeviceOnlineStatus;
 import com.pura365.camera.enums.EnableStatus;
@@ -55,21 +56,21 @@ public class NetworkConfigController {
         log.info("收到配网信息 - 设备: {}, SSID: {}", request.getDeviceId(), request.getSsid());
 
         try {
-//            // 1. 创建或更新设备记录（根据主键 deviceId）
-//            Device device = deviceRepository.selectById(request.getDeviceId());
-//            if (device == null) {
-//                device = new Device();
-//                device.setId(request.getDeviceId());
-//            }
-//            device.setSsid(request.getSsid());
-//            device.setRegion(request.getRegion());
-//            device.setEnabled(EnableStatus.ENABLED);
-//
-//            if (deviceRepository.selectById(device.getId()) == null) {
-//                deviceRepository.insert(device);
-//            } else {
-//                deviceRepository.updateById(device);
-//            }
+            // 1. 创建或更新设备记录（根据主键 deviceId）
+            Device device = deviceRepository.selectById(request.getDeviceId());
+            if (device == null) {
+                device = new Device();
+                device.setId(request.getDeviceId());
+            }
+            device.setSsid(request.getSsid());
+            device.setRegion(request.getRegion());
+            device.setEnabled(EnableStatus.ENABLED);
+
+            if (deviceRepository.selectById(device.getId()) == null) {
+                deviceRepository.insert(device);
+            } else {
+                deviceRepository.updateById(device);
+            }
 
             // 2. 保存配网信息
             NetworkConfig config = new NetworkConfig();
@@ -176,7 +177,7 @@ public class NetworkConfigController {
      */
     @Operation(summary = "查询配网状态", description = "APP轮询此接口判断设备配网是否成功")
     @GetMapping("/config/{deviceId}/status")
-    public ResponseEntity<Map<String, Object>> getPairingStatus(@PathVariable String deviceId) {
+    public ApiResponse<Map<String, Object>> getPairingStatus(@PathVariable String deviceId) {
         log.info("查询配网状态 - 设备: {}", deviceId);
 
         Map<String, Object> result = new HashMap<>();
@@ -209,7 +210,7 @@ public class NetworkConfigController {
             result.put("success", false);
             result.put("message", "未知状态");
         }
-
-        return ResponseEntity.ok(result);
+        log.info("配网状态查询结果 - 设备: {}, 状态: {}", deviceId, result.get("status"));
+        return ApiResponse.success(result);
     }
 }
