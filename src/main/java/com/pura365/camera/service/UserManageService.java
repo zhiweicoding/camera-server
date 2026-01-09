@@ -390,6 +390,7 @@ public class UserManageService {
                 installer.setContactPerson(user.getNickname() != null ? user.getNickname() : user.getUsername());
                 installer.setContactPhone(user.getPhone());
                 installer.setStatus(EnableStatus.ENABLED);
+                installer.setCreatedAt(new Date());
                 installer.setUpdatedAt(new Date());
 
                 installerRepository.insert(installer);

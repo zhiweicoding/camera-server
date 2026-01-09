@@ -195,24 +195,7 @@ public class SalesmanService {
         return salesmanRepository.selectById(id);
     }
 
-    /**
-     * 删除业务员
-     */
-    @Transactional
-    public void delete(Long id) {
-        Salesman salesman = salesmanRepository.selectById(id);
-        if (salesman == null) {
-            throw new RuntimeException("业务员不存在");
-        }
-        // 检查是否有关联的设备
-        QueryWrapper<ManufacturedDevice> qw = new QueryWrapper<>();
-        qw.lambda().eq(ManufacturedDevice::getSalesmanId, id);
-        if (deviceRepository.selectCount(qw) > 0) {
-            throw new RuntimeException("该业务员已有关联设备，无法删除，请改为禁用");
-        }
-        salesmanRepository.deleteById(id);
-        log.info("删除业务员: id={}", id);
-    }
+
 
     /**
      * 更新业务员状态

@@ -26,8 +26,8 @@ public class DeviceProductionService {
 
     private static final Logger log = LoggerFactory.getLogger(DeviceProductionService.class);
 
-    @Autowired
-    private VendorRepository vendorRepository;
+    // @Autowired
+    // private VendorRepository vendorRepository; // 已废弃，改用 DealerRepository
 
     @Autowired
     private AssemblerRepository assemblerRepository;
@@ -58,199 +58,8 @@ public class DeviceProductionService {
      */
     private static final String DEFAULT_PASSWORD_HASH = "$2a$10$Pw.m19MeKdWZvC.r5MrdiebsKTLcf6WS9fuWwmfAxX1IugFu2k.pS";
 
-    // ==================== 经销商/销售商管理 ====================
-
-    /**
-     * 获取所有启用的经销商列表
-     */
-    public List<Vendor> listVendors() {
-        QueryWrapper<Vendor> qw = new QueryWrapper<>();
-        qw.lambda().eq(Vendor::getStatus, EnableStatus.ENABLED).orderByAsc(Vendor::getVendorCode);
-        return vendorRepository.selectList(qw);
-    }
-
-    /**
-     * 获取所有经销商列表（包含禁用的）
-     */
-    public List<Vendor> listAllVendors() {
-        QueryWrapper<Vendor> qw = new QueryWrapper<>();
-        qw.lambda().orderByAsc(Vendor::getVendorCode);
-        return vendorRepository.selectList(qw);
-    }
-
-    /**
-     * 根据ID获取经销商
-     *
-     * @param id 经销商ID
-     * @return 经销商实体
-     */
-    public Vendor getVendorById(Long id) {
-        return vendorRepository.selectById(id);
-    }
-
-    /**
-     * 根据经销商代码获取经销商
-     *
-     * @param vendorCode 经销商代码（2位）
-     * @return 经销商实体
-     */
-    public Vendor getVendorByCode(String vendorCode) {
-        QueryWrapper<Vendor> qw = new QueryWrapper<>();
-        qw.lambda().eq(Vendor::getVendorCode, vendorCode);
-        return vendorRepository.selectOne(qw);
-    }
-
-    /**
-     * 新增经销商
-     *
-     * @param vendor 经销商信息
-     * @return 新增后的经销商实体
-     */
-    @Transactional
-    public Vendor createVendor(Vendor vendor) {
-        // 校验经销商代码
-        if (vendor.getVendorCode() == null || vendor.getVendorCode().length() != 2) {
-            throw new RuntimeException("经销商代码必须是2位");
-        }
-        if (vendor.getVendorName() == null || vendor.getVendorName().trim().isEmpty()) {
-            throw new RuntimeException("经销商名称不能为空");
-        }
-        // 检查代码是否已存在
-        if (getVendorByCode(vendor.getVendorCode()) != null) {
-            throw new RuntimeException("经销商代码已存在");
-        }
-        // 检查用户名是否已存在
-        QueryWrapper<User> userQw = new QueryWrapper<>();
-        userQw.lambda().eq(User::getUsername, vendor.getVendorCode());
-        if (userRepository.selectCount(userQw) > 0) {
-            throw new RuntimeException("该经销商代码对应的用户已存在");
-        }
-        if (vendor.getStatus() == null) {
-            vendor.setStatus(EnableStatus.ENABLED); // 默认启用
-        }
-        vendorRepository.insert(vendor);
-
-        // 同步创建user表记录
-        User user = new User();
-        user.setUid("vendor_" + System.currentTimeMillis());
-        user.setUsername(vendor.getVendorCode());
-        user.setPasswordHash(DEFAULT_PASSWORD_HASH);
-        user.setRole(2); // 经销商角色
-        user.setNickname(vendor.getVendorName());
-        user.setPhone(vendor.getContactPhone());
-        user.setEnabled(vendor.getStatus() != null ? vendor.getStatus().getCode() : EnableStatus.ENABLED.getCode());
-        user.setCreatedAt(new Date());
-        user.setUpdatedAt(new Date());
-        userRepository.insert(user);
-
-        log.info("新增经销商: code={}, name={}, userId={}", vendor.getVendorCode(), vendor.getVendorName(), user.getId());
-        return vendor;
-    }
-
-    /**
-     * 更新经销商信息
-     *
-     * @param vendor 经销商信息
-     * @return 更新后的经销商实体
-     */
-    @Transactional
-    public Vendor updateVendor(Vendor vendor) {
-        if (vendor.getId() == null) {
-            throw new RuntimeException("经销商ID不能为空");
-        }
-        Vendor existing = vendorRepository.selectById(vendor.getId());
-        if (existing == null) {
-            throw new RuntimeException("经销商不存在");
-        }
-        // 如果修改了代码，检查新代码是否已被其他经销商使用
-        if (vendor.getVendorCode() != null && !vendor.getVendorCode().equals(existing.getVendorCode())) {
-            Vendor codeExist = getVendorByCode(vendor.getVendorCode());
-            if (codeExist != null && !codeExist.getId().equals(vendor.getId())) {
-                throw new RuntimeException("经销商代码已被其他经销商使用");
-            }
-        }
-        vendorRepository.updateById(vendor);
-
-        // 同步更新user表记录
-        QueryWrapper<User> userQw = new QueryWrapper<>();
-        userQw.lambda().eq(User::getUsername, existing.getVendorCode());
-        User user = userRepository.selectOne(userQw);
-        if (user != null) {
-            // 如果vendorCode变了，更新username
-            if (vendor.getVendorCode() != null && !vendor.getVendorCode().equals(existing.getVendorCode())) {
-                user.setUsername(vendor.getVendorCode());
-            }
-            if (vendor.getVendorName() != null) {
-                user.setNickname(vendor.getVendorName());
-            }
-            if (vendor.getContactPhone() != null) {
-                user.setPhone(vendor.getContactPhone());
-            }
-            if (vendor.getStatus() != null) {
-                user.setEnabled(vendor.getStatus().getCode());
-            }
-            user.setUpdatedAt(new Date());
-            userRepository.updateById(user);
-        }
-
-        log.info("更新经销商: id={}, code={}", vendor.getId(), vendor.getVendorCode());
-        return vendorRepository.selectById(vendor.getId());
-    }
-
-    /**
-     * 删除经销商（物理删除）
-     *
-     * @param id 经销商ID
-     */
-    @Transactional
-    public void deleteVendor(Long id) {
-        Vendor vendor = vendorRepository.selectById(id);
-        if (vendor == null) {
-            throw new RuntimeException("经销商不存在");
-        }
-        // 检查是否有关联的生产设备
-        QueryWrapper<ManufacturedDevice> qw = new QueryWrapper<>();
-        qw.lambda().eq(ManufacturedDevice::getVendorCode, vendor.getVendorCode());
-        if (deviceRepository.selectCount(qw) > 0) {
-            throw new RuntimeException("该经销商已有关联的生产设备，无法删除，请改为禁用");
-        }
-
-        // 同步删除user表记录
-        QueryWrapper<User> userQw = new QueryWrapper<>();
-        userQw.lambda().eq(User::getUsername, vendor.getVendorCode());
-        userRepository.delete(userQw);
-
-        vendorRepository.deleteById(id);
-        log.info("删除经销商: id={}, code={}", id, vendor.getVendorCode());
-    }
-
-    /**
-     * 启用/禁用经销商
-     *
-     * @param id     经销商ID
-     * @param status 状态：1-启用, 0-禁用
-     */
-    @Transactional
-    public void updateVendorStatus(Long id, Integer status) {
-        Vendor vendor = vendorRepository.selectById(id);
-        if (vendor == null) {
-            throw new RuntimeException("经销商不存在");
-        }
-        vendor.setStatus(EnableStatus.fromCode(status));
-        vendorRepository.updateById(vendor);
-
-        // 同步更新user表状态
-        QueryWrapper<User> userQw = new QueryWrapper<>();
-        userQw.lambda().eq(User::getUsername, vendor.getVendorCode());
-        User user = userRepository.selectOne(userQw);
-        if (user != null) {
-            user.setEnabled(status);
-            user.setUpdatedAt(new Date());
-            userRepository.updateById(user);
-        }
-
-        log.info("更新经销商状态: id={}, status={}", id, status);
-    }
+    // ==================== 经销商管理（已迁移到 DealerService） ====================
+    // 以下旧的 Vendor 相关方法已废弃，请使用 DealerService
 
     // ==================== 装机商管理 ====================
 
@@ -276,7 +85,7 @@ public class DeviceProductionService {
 
     /**
      * 获取设备ID生成的所有配置选项
-     * 包括：网络镜头配置、设备形态、特殊要求、装机商、销售商
+     * 包括：网络镜头配置、设备形态、特殊要求、装机商、经销商
      */
     public Map<String, Object> getOptions() {
         Map<String, Object> map = new HashMap<>();
@@ -290,26 +99,34 @@ public class DeviceProductionService {
         map.put("reserved", Collections.singletonList("0"));
         // 装机商列表（installer表，机身号第5位）
         map.put("installers", listInstallers());
-        // 销售商列表（vendor表，机身号第6-7位），包含默认的00-先不指定选项
+        // 经销商列表（dealer表，机身号第6-7位），包含默认的00-先不指定选项
         List<Map<String, Object>> dealersWithDefault = new ArrayList<>();
         // 添加默认选项
         Map<String, Object> defaultDealer = new HashMap<>();
         defaultDealer.put("vendorCode", "00");
         defaultDealer.put("vendorName", "先不指定");
         dealersWithDefault.add(defaultDealer);
-        // 添加实际经销商
-        for (Vendor v : listVendors()) {
+        // 添加实际经销商（从 dealer 表获取）
+        for (Dealer d : listDealers()) {
             Map<String, Object> dealer = new HashMap<>();
-            dealer.put("vendorCode", v.getVendorCode());
-            dealer.put("vendorName", v.getVendorName());
-            dealer.put("id", v.getId());
+            dealer.put("vendorCode", d.getDealerCode());
+            dealer.put("vendorName", d.getName());
+            dealer.put("id", d.getId());
             dealersWithDefault.add(dealer);
         }
         map.put("dealers", dealersWithDefault);
         // 保留旧字段兼容
         map.put("assemblers", listAssemblers());
-        map.put("vendors", listVendors());
         return map;
+    }
+
+    /**
+     * 获取启用的经销商列表（dealer表，机身号第6-7位）
+     */
+    public List<Dealer> listDealers() {
+        QueryWrapper<Dealer> qw = new QueryWrapper<>();
+        qw.lambda().eq(Dealer::getStatus, EnableStatus.ENABLED).orderByAsc(Dealer::getDealerCode);
+        return dealerRepository.selectList(qw);
     }
 
 
@@ -408,9 +225,9 @@ public class DeviceProductionService {
 
         // 如果vendorCode不是"00"，校验经销商是否存在且启用
         if (!"00".equals(vendorCode)) {
-            QueryWrapper<Vendor> vq = new QueryWrapper<>();
-            vq.lambda().eq(Vendor::getVendorCode, vendorCode).eq(Vendor::getStatus, EnableStatus.ENABLED);
-            if (vendorRepository.selectCount(vq) == 0) {
+            QueryWrapper<Dealer> dq = new QueryWrapper<>();
+            dq.lambda().eq(Dealer::getDealerCode, vendorCode).eq(Dealer::getStatus, EnableStatus.ENABLED);
+            if (dealerRepository.selectCount(dq) == 0) {
                 throw new RuntimeException("经销商不存在或未启用: " + vendorCode);
             }
         }
@@ -577,11 +394,13 @@ public class DeviceProductionService {
         String reserved = request.getReserved() != null ? request.getReserved() : "0";
         int quantity = request.getQuantity();
 
-        // 校验经销商是否存在且启用
-        QueryWrapper<Vendor> vq = new QueryWrapper<>();
-        vq.lambda().eq(Vendor::getVendorCode, vendorCode).eq(Vendor::getStatus, EnableStatus.ENABLED);
-        if (vendorRepository.selectCount(vq) == 0) {
-            throw new RuntimeException("经销商不存在或未启用");
+        // 校验经销商是否存在且启用（00表示先不指定，跳过校验）
+        if (!"00".equals(vendorCode)) {
+            QueryWrapper<Dealer> dq = new QueryWrapper<>();
+            dq.lambda().eq(Dealer::getDealerCode, vendorCode).eq(Dealer::getStatus, EnableStatus.ENABLED);
+            if (dealerRepository.selectCount(dq) == 0) {
+                throw new RuntimeException("经销商不存在或未启用");
+            }
         }
 
         // 校验装机商是否存在且启用
@@ -861,29 +680,29 @@ public class DeviceProductionService {
             return new ArrayList<>();
         }
 
-        // 收集所有的 vendorCode 和 installerId
-        Set<String> vendorCodes = new HashSet<>();
+        // 收集所有的 dealerCode 和 installerId
+        Set<String> dealerCodes = new HashSet<>();
         Set<Long> installerIds = new HashSet<>();
         for (ManufacturedDevice d : devices) {
             if (d.getVendorCode() != null && !"00".equals(d.getVendorCode())) {
-                vendorCodes.add(d.getVendorCode());
+                dealerCodes.add(d.getVendorCode());
             }
             if (d.getInstallerId() != null) {
                 installerIds.add(d.getInstallerId());
             }
         }
 
-        // 批量查询 Vendor
-        Map<String, Vendor> vendorMap = new HashMap<>();
-        if (!vendorCodes.isEmpty()) {
-            QueryWrapper<Vendor> vq = new QueryWrapper<>();
-            vq.lambda().in(Vendor::getVendorCode, vendorCodes);
-            List<Vendor> vendors = vendorRepository.selectList(vq);
-            for (Vendor v : vendors) {
-                vendorMap.put(v.getVendorCode(), v);
+        // 批量查询 Dealer（替代原 Vendor）
+        Map<String, Dealer> dealerMap = new HashMap<>();
+        if (!dealerCodes.isEmpty()) {
+            QueryWrapper<Dealer> dq = new QueryWrapper<>();
+            dq.lambda().in(Dealer::getDealerCode, dealerCodes);
+            List<Dealer> dealers = dealerRepository.selectList(dq);
+            for (Dealer d : dealers) {
+                dealerMap.put(d.getDealerCode(), d);
                 // 同时收集经销商关联的装机商ID
-                if (v.getInstallerId() != null) {
-                    installerIds.add(v.getInstallerId());
+                if (d.getInstallerId() != null) {
+                    installerIds.add(d.getInstallerId());
                 }
             }
         }
@@ -913,7 +732,6 @@ public class DeviceProductionService {
             map.put("assemblerCode", d.getAssemblerCode());
             map.put("vendorCode", d.getVendorCode());
             map.put("installerId", d.getInstallerId());
-            //map.put("currentVendorId", d.getCurrentVendorId());
             map.put("serialNo", d.getSerialNo());
             map.put("macAddress", d.getMacAddress());
             map.put("status", d.getStatus() != null ? d.getStatus().getCode() : null);
@@ -923,7 +741,7 @@ public class DeviceProductionService {
             map.put("createdAt", d.getCreatedAt() != null ? sdf.format(d.getCreatedAt()) : null);
             map.put("updatedAt", d.getUpdatedAt() != null ? sdf.format(d.getUpdatedAt()) : null);
 
-            // 添加装机商信息和分佣比例（从设备表读取）
+            // 添加装机商信息
             Installer installer = d.getInstallerId() != null ? installerMap.get(d.getInstallerId()) : null;
             if (installer != null) {
                 map.put("installerName", installer.getInstallerName());
@@ -933,12 +751,12 @@ public class DeviceProductionService {
             // 分佣比例从设备表读取
             map.put("installerCommissionRate", d.getInstallerCommissionRate());
 
-            // 添加经销商信息和分佣比例（从设备表读取）
-            Vendor vendor = d.getVendorCode() != null ? vendorMap.get(d.getVendorCode()) : null;
-            if (vendor != null) {
-                map.put("salesmanName", vendor.getVendorName());
+            // 添加经销商信息
+            Dealer dealer = d.getVendorCode() != null ? dealerMap.get(d.getVendorCode()) : null;
+            if (dealer != null) {
+                map.put("dealerName", dealer.getName());
             } else {
-                map.put("salesmanName", null);
+                map.put("dealerName", null);
             }
             // 分佣比例从设备表读取
             map.put("dealerCommissionRate", d.getDealerCommissionRate());
