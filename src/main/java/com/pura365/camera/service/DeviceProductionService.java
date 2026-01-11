@@ -683,7 +683,7 @@ public class DeviceProductionService {
     /**
      * 分页查询设备列表
      */
-    public Map<String, Object> listDevices(Integer page, Integer size, String deviceId, String batchNo, String status, String vendorCode) {
+    public Map<String, Object> listDevices(Integer page, Integer size, String deviceId, String batchNo, String status, String installerCode, String vendorCode) {
         QueryWrapper<ManufacturedDevice> qw = new QueryWrapper<>();
         if (deviceId != null && !deviceId.trim().isEmpty()) {
             qw.lambda().like(ManufacturedDevice::getDeviceId, deviceId);
@@ -723,6 +723,11 @@ public class DeviceProductionService {
                 qw.lambda().eq(ManufacturedDevice::getStatus, statusEnum);
             }
         }
+        // 装机商代码过滤（assemblerCode字段）
+        if (installerCode != null && !installerCode.trim().isEmpty()) {
+            qw.lambda().eq(ManufacturedDevice::getAssemblerCode, installerCode);
+        }
+        // 经销商代码过滤（vendorCode字段）
         if (vendorCode != null && !vendorCode.trim().isEmpty()) {
             qw.lambda().eq(ManufacturedDevice::getVendorCode, vendorCode);
         }
@@ -762,6 +767,11 @@ public class DeviceProductionService {
                 countQw.lambda().eq(ManufacturedDevice::getStatus, statusEnum);
             }
         }
+        // 装机商代码过滤
+        if (installerCode != null && !installerCode.trim().isEmpty()) {
+            countQw.lambda().eq(ManufacturedDevice::getAssemblerCode, installerCode);
+        }
+        // 经销商代码过滤
         if (vendorCode != null && !vendorCode.trim().isEmpty()) {
             countQw.lambda().eq(ManufacturedDevice::getVendorCode, vendorCode);
         }
@@ -786,15 +796,19 @@ public class DeviceProductionService {
             return new ArrayList<>();
         }
 
-        // 收集所有的 dealerCode 和 installerId
+        // 收集所有的 dealerCode、installerId 和 batchId
         Set<String> dealerCodes = new HashSet<>();
         Set<Long> installerIds = new HashSet<>();
+        Set<Long> batchIds = new HashSet<>();
         for (ManufacturedDevice d : devices) {
             if (d.getVendorCode() != null && !"00".equals(d.getVendorCode())) {
                 dealerCodes.add(d.getVendorCode());
             }
             if (d.getInstallerId() != null) {
                 installerIds.add(d.getInstallerId());
+            }
+            if (d.getBatchId() != null) {
+                batchIds.add(d.getBatchId());
             }
         }
 
@@ -824,6 +838,17 @@ public class DeviceProductionService {
             }
         }
 
+        // 批量查询 DeviceProductionBatch 获取批次号
+        Map<Long, String> batchNoMap = new HashMap<>();
+        if (!batchIds.isEmpty()) {
+            QueryWrapper<DeviceProductionBatch> bq = new QueryWrapper<>();
+            bq.lambda().in(DeviceProductionBatch::getId, batchIds);
+            List<DeviceProductionBatch> batches = batchRepository.selectList(bq);
+            for (DeviceProductionBatch b : batches) {
+                batchNoMap.put(b.getId(), b.getBatchNo());
+            }
+        }
+
         // 构建结果列表
         List<Map<String, Object>> resultList = new ArrayList<>();
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
@@ -832,6 +857,7 @@ public class DeviceProductionService {
             map.put("id", d.getId());
             map.put("deviceId", d.getDeviceId());
             map.put("batchId", d.getBatchId());
+            map.put("batchNo", d.getBatchId() != null ? batchNoMap.get(d.getBatchId()) : null);
             map.put("networkLens", d.getNetworkLens());
             map.put("deviceForm", d.getDeviceForm());
             map.put("specialReq", d.getSpecialReq());

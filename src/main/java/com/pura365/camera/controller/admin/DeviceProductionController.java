@@ -156,6 +156,8 @@ public class DeviceProductionController {
      * - deviceId: 设备ID（模糊查询，可选）
      * - batchNo: 批次号（可选）
      * - status: 状态（可选）
+     * - installerCode: 装机商代码（可选）
+     * - vendorCode: 经销商代码（可选）
      */
     @GetMapping("/devices")
     public ApiResponse<Map<String, Object>> listDevices(
@@ -164,8 +166,9 @@ public class DeviceProductionController {
             @RequestParam(required = false) String deviceId,
             @RequestParam(required = false) String batchNo,
             @RequestParam(required = false) String status,
+            @RequestParam(required = false) String installerCode,
             @RequestParam(required = false) String vendorCode) {
-        Map<String, Object> result = productionService.listDevices(page, size, deviceId, batchNo, status, vendorCode);
+        Map<String, Object> result = productionService.listDevices(page, size, deviceId, batchNo, status, installerCode, vendorCode);
         return ApiResponse.success(result);
     }
 
