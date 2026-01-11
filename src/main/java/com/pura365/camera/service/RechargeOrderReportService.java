@@ -251,17 +251,18 @@ public class RechargeOrderReportService {
             qw.lambda().like(PaymentOrder::getDeviceId, request.getDeviceId());
         }
         
-        // 直接使用订单表的快照字段查询
+        // 直接使用订单表的快照字段查询（vendorCode 已改为 dealerCode）
         if (request.getVendorCode() != null && !request.getVendorCode().trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getVendorCode, request.getVendorCode());
+            qw.lambda().eq(PaymentOrder::getDealerCode, request.getVendorCode());
         }
         // 装机商过滤
         if (request.getInstallerCode() != null && !request.getInstallerCode().trim().isEmpty()) {
             qw.lambda().eq(PaymentOrder::getInstallerCode, request.getInstallerCode());
         }
-        if (request.getSalesmanId() != null) {
-            qw.lambda().eq(PaymentOrder::getSalesmanId, request.getSalesmanId());
-        }
+        // salesmanId 字段已废弃，PaymentOrder 表中不存在此字段
+        // if (request.getSalesmanId() != null) {
+        //     qw.lambda().eq(PaymentOrder::getSalesmanId, request.getSalesmanId());
+        // }
         
         if (request.getPlanId() != null && !request.getPlanId().trim().isEmpty()) {
             qw.lambda().eq(PaymentOrder::getProductId, request.getPlanId());
@@ -313,13 +314,13 @@ public class RechargeOrderReportService {
         vo.setStatus(order.getStatus() != null ? order.getStatus().getCode() : null);
         vo.setStatusName(getStatusName(order.getStatus()));
 
-        // 优先使用订单表的快照字段
-        vo.setVendorCode(order.getVendorCode());
+        // 优先使用订单表的快照字段（vendorCode 已改为 dealerCode）
+        vo.setVendorCode(order.getDealerCode());
         
         // 经销商名称
-        if (order.getVendorCode() != null && !order.getVendorCode().trim().isEmpty()) {
+        if (order.getDealerCode() != null && !order.getDealerCode().trim().isEmpty()) {
             QueryWrapper<Vendor> vendorQw = new QueryWrapper<>();
-            vendorQw.lambda().eq(Vendor::getVendorCode, order.getVendorCode());
+            vendorQw.lambda().eq(Vendor::getVendorCode, order.getDealerCode());
             Vendor vendor = vendorRepository.selectOne(vendorQw);
             vo.setVendorName(vendor != null ? vendor.getVendorName() : "");
         }
@@ -373,15 +374,15 @@ public class RechargeOrderReportService {
             vo.setProfitModeName(commissionService.getProfitModeName(commission.getProfitMode()));
 
             // 分润比例和金额（现在从订单表的快照字段读取）
-            // 装机商分润：优先使用订单表新字段，兼容旧字段
+            // 装机商分润：使用订单表字段
             BigDecimal installerRate = order.getInstallerRate() != null ? order.getInstallerRate() : order.getCommissionRate();
-            BigDecimal installerAmount = order.getInstallerAmount() != null ? order.getInstallerAmount() : order.getVendorAmount();
+            BigDecimal installerAmount = order.getInstallerAmount();
             vo.setInstallerRateDesc(installerRate != null ? installerRate + "%" : "0%");
             vo.setInstallerAmount(installerAmount != null ? installerAmount : BigDecimal.ZERO);
 
-            // 经销商分润：优先使用订单表新字段，兼容旧字段
+            // 经销商分润：使用订单表字段
             BigDecimal dealerRate = order.getDealerRate();
-            BigDecimal dealerAmount = order.getDealerAmount() != null ? order.getDealerAmount() : order.getSalesmanAmount();
+            BigDecimal dealerAmount = order.getDealerAmount();
             vo.setLevel1RateDesc(dealerRate != null ? dealerRate + "%" : "0%");
             vo.setLevel1Amount(dealerAmount != null ? dealerAmount : BigDecimal.ZERO);
 
@@ -472,8 +473,8 @@ public class RechargeOrderReportService {
             roles.add("装机商");
         }
 
-        // 有经销商代码（从订单快照获取）
-        if (order.getVendorCode() != null && !order.getVendorCode().trim().isEmpty()) {
+        // 有经销商代码（从订单快照获取，vendorCode 已改为 dealerCode）
+        if (order.getDealerCode() != null && !order.getDealerCode().trim().isEmpty()) {
             roles.add("经销商");
         }
 

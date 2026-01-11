@@ -43,6 +43,15 @@ public class CommissionCalculateService {
     @Autowired
     private PlanCommissionRepository planCommissionRepository;
 
+    @Autowired
+    private DeviceDealerRepository deviceDealerRepository;
+
+    @Autowired
+    private DealerRepository dealerRepository;
+
+    @Autowired
+    private UserRepository userRepository;
+
     /**
      * 分润明细
      */
@@ -165,10 +174,144 @@ public class CommissionCalculateService {
             }
         }
 
+        // 11. 计算多级经销商分润（从 device_dealer 表获取链路）
+        try {
+            calculateMultiLevelDealerCommission(result, deviceId, dealerAmount);
+        } catch (Exception e) {
+            log.debug("多级经销商分润计算失败（device_dealer表可能不存在）: {}", e.getMessage());
+        }
+
+        // 12. 检查双重身份（装机商 + 经销商）
+        try {
+            checkDualIdentity(result, device);
+        } catch (Exception e) {
+            log.debug("双重身份检查失败: {}", e.getMessage());
+        }
+
         log.info("分润计算完成: deviceId={}, payAmount={}, profitAmount={}, installerAmount={}, dealerAmount={}, companyAmount={}",
                 deviceId, payAmount, profitAmount, installerAmount, dealerAmount, companyAmount);
 
         return result;
+    }
+
+    /**
+     * 计算多级经销商分润
+     * 从 device_dealer 表获取分销链路，计算每一级的实际所得
+     * 
+     * @param result 分润结果
+     * @param deviceId 设备ID
+     * @param dealerPoolAmount 经销商分润池总额
+     */
+    private void calculateMultiLevelDealerCommission(CommissionResult result, String deviceId, BigDecimal dealerPoolAmount) {
+        List<DeviceDealer> dealerChain = deviceDealerRepository.getDealerChainByDeviceId(deviceId);
+        if (dealerChain == null || dealerChain.isEmpty()) {
+            return;
+        }
+
+        // 从最底层（一级）开始计算
+        // 一级经销商的池子 = dealerPoolAmount
+        // 二级经销商从一级的池子中抽取
+        // 三级经销商从二级的池子中抽取...
+        
+        BigDecimal currentPool = dealerPoolAmount;
+        List<CommissionDetail> dealerDetails = new ArrayList<>();
+        
+        for (int i = 0; i < dealerChain.size(); i++) {
+            DeviceDealer dd = dealerChain.get(i);
+            BigDecimal rate = dd.getCommissionRate() != null ? dd.getCommissionRate() : BigDecimal.ZERO;
+            
+            // 获取经销商名称
+            String dealerName = "经销商" + dd.getDealerCode();
+            if (dd.getDealerId() != null) {
+                Dealer dealer = dealerRepository.selectById(dd.getDealerId());
+                if (dealer != null) {
+                    dealerName = dealer.getName();
+                }
+            }
+            
+            // 计算该经销商的分润金额
+            BigDecimal baseAmount;
+            BigDecimal actualAmount;
+            
+            if (i == dealerChain.size() - 1) {
+                // 最后一个经销商（最底层），获得剩余的所有金额
+                baseAmount = currentPool;
+                actualAmount = currentPool;
+            } else {
+                // 不是最底层，需要给下级留出一部分
+                // 下一级的分润比例
+                DeviceDealer nextDealer = dealerChain.get(i + 1);
+                BigDecimal nextRate = nextDealer.getCommissionRate() != null ? nextDealer.getCommissionRate() : BigDecimal.ZERO;
+                BigDecimal nextAmount = currentPool.multiply(nextRate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
+                
+                baseAmount = currentPool;
+                actualAmount = currentPool.subtract(nextAmount);
+                
+                // 下一级的池子变小
+                currentPool = nextAmount;
+            }
+            
+            CommissionDetail detail = new CommissionDetail(
+                "DEALER",
+                dd.getDealerId(),
+                dd.getDealerCode(),
+                dealerName,
+                rate,
+                baseAmount,
+                actualAmount,
+                dd.getLevel()
+            );
+            dealerDetails.add(detail);
+        }
+        
+        // 将经销商明细加入结果
+        result.getDetails().addAll(dealerDetails);
+        
+        log.debug("多级经销商分润计算完成: deviceId={}, dealerCount={}", deviceId, dealerChain.size());
+    }
+
+    /**
+     * 检查双重身份（装机商 + 经销商）
+     * 如果同一个用户既是装机商又是经销商，合并他们的分润
+     */
+    private void checkDualIdentity(CommissionResult result, ManufacturedDevice device) {
+        if (result.getInstallerId() == null) {
+            return;
+        }
+
+        // 查找与装机商关联的用户
+        QueryWrapper<User> installerUserQw = new QueryWrapper<>();
+        installerUserQw.lambda()
+                .eq(User::getInstallerId, result.getInstallerId())
+                .eq(User::getIsInstaller, 1);
+        List<User> installerUsers = userRepository.selectList(installerUserQw);
+        if (installerUsers.isEmpty()) {
+            return;
+        }
+
+        // 检查这些用户是否也是经销商
+        for (User installerUser : installerUsers) {
+            if (installerUser.getIsDealer() != null && installerUser.getIsDealer() == 1 
+                    && installerUser.getDealerId() != null) {
+                // 找到双重身份用户，检查这个经销商是否在分润明细中
+                Long dualDealerId = installerUser.getDealerId();
+                for (CommissionDetail detail : result.getDetails()) {
+                    if ("DEALER".equals(detail.getType()) && dualDealerId.equals(detail.getEntityId())) {
+                        // 找到了，这个用户既是装机商又是经销商
+                        result.setHasDualIdentity(true);
+                        result.setDualIdentityUserId(installerUser.getId());
+                        // 合并金额 = 装机商分润 + 该经销商分润
+                        BigDecimal totalAmount = result.getInstallerActualAmount()
+                                .add(detail.getActualAmount() != null ? detail.getActualAmount() : BigDecimal.ZERO);
+                        result.setDualIdentityTotalAmount(totalAmount);
+                        
+                        log.info("检测到双重身份: userId={}, installerId={}, dealerId={}, 合计={}",
+                                installerUser.getId(), result.getInstallerId(), dualDealerId, totalAmount);
+                        return;
+                    }
+                }
+            }
+        }
     }
 
     /**

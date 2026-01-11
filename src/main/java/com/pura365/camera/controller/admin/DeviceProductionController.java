@@ -134,11 +134,11 @@ public class DeviceProductionController {
     }
 
     /**
-     * 获取单个设备详情
+     * 获取单个设备详情（包含分销链路等丰富信息）
      */
     @GetMapping("/devices/{deviceId}")
-    public ApiResponse<ManufacturedDevice> getDevice(@PathVariable String deviceId) {
-        ManufacturedDevice device = productionService.getDevice(deviceId);
+    public ApiResponse<Map<String, Object>> getDevice(@PathVariable String deviceId) {
+        Map<String, Object> device = productionService.getDeviceDetail(deviceId);
         if (device == null) {
             return ApiResponse.error(404, "设备不存在");
         }

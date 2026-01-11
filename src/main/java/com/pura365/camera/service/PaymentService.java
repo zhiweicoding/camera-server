@@ -558,7 +558,7 @@ public class PaymentService {
         }
 
         // 快照经销商代码
-        order.setVendorCode(device.getVendorCode());
+        //order.setVendorCode(device.getVendorCode());
         
         // 从设备表读取装机商和经销商的分润比例
         BigDecimal installerRate = device.getInstallerCommissionRate();
@@ -602,8 +602,8 @@ public class PaymentService {
         
         // 兼容旧字段（保留原有逻辑，后续可删除）
         order.setCommissionRate(installerRate);
-        order.setVendorAmount(installerAmount);
-        order.setSalesmanAmount(dealerAmount);
+//        order.setVendorAmount(installerAmount);
+//        order.setSalesmanAmount(dealerAmount);
     }
 
     /**

@@ -35,36 +35,12 @@ public class DealerService {
     private DeviceDealerRepository deviceDealerRepository;
 
     /**
-     * 获取装机商下的所有经销商列表
+     * 获取所有启用的经销商列表
      */
-    public List<Dealer> listByInstaller(Long installerId) {
+    public List<Dealer> listAllActive() {
         QueryWrapper<Dealer> qw = new QueryWrapper<>();
-        qw.lambda().eq(Dealer::getInstallerId, installerId)
-                .orderByAsc(Dealer::getLevel)
-                .orderByAsc(Dealer::getName);
-        return dealerRepository.selectList(qw);
-    }
-
-    /**
-     * 获取装机商下启用的经销商列表
-     */
-    public List<Dealer> listActiveByInstaller(Long installerId) {
-        QueryWrapper<Dealer> qw = new QueryWrapper<>();
-        qw.lambda().eq(Dealer::getInstallerId, installerId)
-                .eq(Dealer::getStatus, EnableStatus.ENABLED)
-                .orderByAsc(Dealer::getLevel)
-                .orderByAsc(Dealer::getName);
-        return dealerRepository.selectList(qw);
-    }
-
-    /**
-     * 获取某经销商的下级经销商列表
-     */
-    public List<Dealer> listSubDealers(Long parentDealerId) {
-        QueryWrapper<Dealer> qw = new QueryWrapper<>();
-        qw.lambda().eq(Dealer::getParentDealerId, parentDealerId)
-                .eq(Dealer::getStatus, EnableStatus.ENABLED)
-                .orderByAsc(Dealer::getName);
+        qw.lambda().eq(Dealer::getStatus, EnableStatus.ENABLED)
+                .orderByAsc(Dealer::getDealerCode);
         return dealerRepository.selectList(qw);
     }
 
@@ -74,12 +50,6 @@ public class DealerService {
     public Map<String, Object> listDealers(Integer page, Integer size, Long installerId, 
                                            String installerCode, String name, Integer status) {
         QueryWrapper<Dealer> qw = new QueryWrapper<>();
-        if (installerId != null) {
-            qw.lambda().eq(Dealer::getInstallerId, installerId);
-        }
-        if (installerCode != null && !installerCode.trim().isEmpty()) {
-            qw.lambda().eq(Dealer::getInstallerCode, installerCode);
-        }
         if (name != null && !name.trim().isEmpty()) {
             qw.lambda().like(Dealer::getName, name);
         }
@@ -93,15 +63,13 @@ public class DealerService {
         qw.last("LIMIT " + offset + ", " + size);
         List<Dealer> dealers = dealerRepository.selectList(qw);
 
-        // 查询装机商名称并转换为VO
+        // 转换为VO
         List<Map<String, Object>> list = dealers.stream().map(dealer -> {
             Map<String, Object> vo = new HashMap<>();
             vo.put("id", dealer.getId());
             vo.put("dealerCode", dealer.getDealerCode());
             vo.put("name", dealer.getName());
             vo.put("phone", dealer.getPhone());
-            vo.put("installerId", dealer.getInstallerId());
-            vo.put("installerCode", dealer.getInstallerCode());
             vo.put("level", dealer.getLevel());
             vo.put("status", dealer.getStatus());
             vo.put("remark", dealer.getRemark());
@@ -113,24 +81,11 @@ public class DealerService {
             vo.put("businessLicense", dealer.getBusinessLicense());
             vo.put("createdAt", dealer.getCreatedAt());
             vo.put("updatedAt", dealer.getUpdatedAt());
-            // 查询装机商名称
-            if (dealer.getInstallerId() != null) {
-                Installer installer = installerRepository.selectById(dealer.getInstallerId());
-                if (installer != null) {
-                    vo.put("installerName", installer.getInstallerName());
-                }
-            }
             return vo;
         }).collect(java.util.stream.Collectors.toList());
 
         // 查询总数
         QueryWrapper<Dealer> countQw = new QueryWrapper<>();
-        if (installerId != null) {
-            countQw.lambda().eq(Dealer::getInstallerId, installerId);
-        }
-        if (installerCode != null && !installerCode.trim().isEmpty()) {
-            countQw.lambda().eq(Dealer::getInstallerCode, installerCode);
-        }
         if (name != null && !name.trim().isEmpty()) {
             countQw.lambda().like(Dealer::getName, name);
         }
@@ -171,16 +126,6 @@ public class DealerService {
      */
     @Transactional
     public Dealer create(Dealer dealer) {
-        // 验证装机商
-        if (dealer.getInstallerId() == null) {
-            throw new RuntimeException("所属装机商不能为空");
-        }
-        Installer installer = installerRepository.selectById(dealer.getInstallerId());
-        if (installer == null) {
-            throw new RuntimeException("装机商不存在");
-        }
-        dealer.setInstallerCode(installer.getInstallerCode());
-
         // 验证名称
         if (dealer.getName() == null || dealer.getName().trim().isEmpty()) {
             throw new RuntimeException("经销商名称不能为空");
@@ -197,20 +142,8 @@ public class DealerService {
             }
         }
 
-        // 处理层级
-        if (dealer.getParentDealerId() != null) {
-            Dealer parent = dealerRepository.selectById(dealer.getParentDealerId());
-            if (parent == null) {
-                throw new RuntimeException("上级经销商不存在");
-            }
-            // 验证上级经销商属于同一装机商
-            if (!parent.getInstallerId().equals(dealer.getInstallerId())) {
-                throw new RuntimeException("上级经销商不属于同一装机商");
-            }
-            dealer.setLevel(parent.getLevel() + 1);
-        } else {
-            dealer.setLevel(1); // 直属装机商的一级经销商
-        }
+        // 经销商是独立身份，默认层级1
+        dealer.setLevel(1);
 
         if (dealer.getStatus() == null) {
             dealer.setStatus(EnableStatus.ENABLED);
@@ -218,8 +151,8 @@ public class DealerService {
         dealer.setCreatedAt(new Date());
         dealer.setUpdatedAt(new Date());
         dealerRepository.insert(dealer);
-        log.info("创建经销商: id={}, name={}, level={}, installerId={}", 
-                dealer.getId(), dealer.getName(), dealer.getLevel(), dealer.getInstallerId());
+        log.info("创建经销商: id={}, name={}, dealerCode={}", 
+                dealer.getId(), dealer.getName(), dealer.getDealerCode());
         return dealer;
     }
 

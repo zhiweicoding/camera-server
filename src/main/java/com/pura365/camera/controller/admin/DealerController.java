@@ -38,12 +38,12 @@ public class DealerController {
     }
 
     /**
-     * 获取装机商下的经销商列表
+     * 获取所有启用的经销商列表
      */
-    @Operation(summary = "获取装机商下的经销商", description = "获取指定装机商下所有启用的经销商")
-    @GetMapping("/installer/{installerId}")
-    public ApiResponse<List<Dealer>> listByInstaller(@PathVariable Long installerId) {
-        return ApiResponse.success(dealerService.listActiveByInstaller(installerId));
+    @Operation(summary = "获取所有启用的经销商", description = "获取所有启用的经销商列表")
+    @GetMapping("/active")
+    public ApiResponse<List<Dealer>> listActive() {
+        return ApiResponse.success(dealerService.listAllActive());
     }
 
     /**

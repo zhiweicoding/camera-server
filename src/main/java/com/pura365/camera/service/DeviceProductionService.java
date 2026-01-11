@@ -53,6 +53,12 @@ public class DeviceProductionService {
     @Autowired
     private DealerRepository dealerRepository;
 
+    @Autowired
+    private DeviceVendorRepository deviceVendorRepository;
+
+    @Autowired
+    private DeviceDealerRepository deviceDealerRepository;
+
     /**
      * 默认密码哈希(与admin2一致)
      */
@@ -350,6 +356,15 @@ public class DeviceProductionService {
                 device.setUpdatedAt(new Date());
                 deviceRepository.updateById(device);
 
+                // 写入 device_dealer 表记录分销链路
+                if (dealer != null && commissionRate != null) {
+                    try {
+                        writeDeviceDealerRecord(newDeviceId, device, dealer, commissionRate);
+                    } catch (Exception e) {
+                        log.warn("写入 device_dealer 失败: {}", e.getMessage());
+                    }
+                }
+
                 item.put("newDeviceId", newDeviceId);
                 item.put("success", true);
                 item.put("changed", vendorChanged);
@@ -371,6 +386,67 @@ public class DeviceProductionService {
         response.put("successCount", successCount);
         response.put("failCount", failCount);
         return response;
+    }
+
+    /**
+     * 写入设备经销商归属记录（分销链路）
+     * 如果设备已有经销商记录，则新记录的 parentDealerId 指向前一个经销商
+     */
+    private void writeDeviceDealerRecord(String deviceId, ManufacturedDevice device, Dealer dealer, java.math.BigDecimal commissionRate) {
+        // 查询该设备当前的最高层级经销商记录
+        List<DeviceDealer> existingChain = deviceDealerRepository.getDealerChainByDeviceId(deviceId);
+        
+        // 检查是否已存在相同的经销商记录
+        for (DeviceDealer dd : existingChain) {
+            if (dealer.getId().equals(dd.getDealerId())) {
+                // 已存在，更新分润比例
+                dd.setCommissionRate(commissionRate);
+                dd.setUpdatedAt(new Date());
+                deviceDealerRepository.updateById(dd);
+                log.info("更新 device_dealer 记录: deviceId={}, dealerId={}, rate={}", 
+                        deviceId, dealer.getId(), commissionRate);
+                return;
+            }
+        }
+        
+        // 确定层级和上级经销商
+        int newLevel = 1;
+        Long parentDealerId = null;
+        if (!existingChain.isEmpty()) {
+            DeviceDealer lastDealer = existingChain.get(existingChain.size() - 1);
+            newLevel = lastDealer.getLevel() + 1;
+            parentDealerId = lastDealer.getDealerId();
+        }
+        
+        // 获取装机商信息
+        Long installerId = device.getInstallerId();
+        String installerCode = device.getAssemblerCode();
+        if (installerId == null && installerCode != null) {
+            // 尝试根据 installerCode 查找
+            QueryWrapper<Installer> iq = new QueryWrapper<>();
+            iq.lambda().eq(Installer::getInstallerCode, installerCode);
+            Installer installer = installerRepository.selectOne(iq);
+            if (installer != null) {
+                installerId = installer.getId();
+            }
+        }
+        
+        // 创建新的归属记录
+        DeviceDealer deviceDealer = new DeviceDealer();
+        deviceDealer.setDeviceId(deviceId);
+        deviceDealer.setInstallerId(installerId);
+        deviceDealer.setInstallerCode(installerCode);
+        deviceDealer.setDealerId(dealer.getId());
+        deviceDealer.setDealerCode(dealer.getDealerCode());
+        deviceDealer.setParentDealerId(parentDealerId);
+        deviceDealer.setCommissionRate(commissionRate);
+        deviceDealer.setLevel(newLevel);
+        deviceDealer.setCreatedAt(new Date());
+        deviceDealer.setUpdatedAt(new Date());
+        
+        deviceDealerRepository.insert(deviceDealer);
+        log.info("插入 device_dealer 记录: deviceId={}, dealerId={}, level={}, parentDealerId={}, rate={}", 
+                deviceId, dealer.getId(), newLevel, parentDealerId, commissionRate);
     }
 
     // ==================== 生产批次管理 ====================
@@ -575,6 +651,22 @@ public class DeviceProductionService {
     }
 
     /**
+     * 获取设备详情（包含分销链路等附加信息）
+     *
+     * @param deviceId 设备ID (16位)
+     * @return 包含详情的Map，如果设备不存在返回null
+     */
+    public Map<String, Object> getDeviceDetail(String deviceId) {
+        ManufacturedDevice device = getDevice(deviceId);
+        if (device == null) {
+            return null;
+        }
+        // 复用 enrichDevicesWithCommission 方法获取完整信息
+        List<Map<String, Object>> enrichedList = enrichDevicesWithCommission(Collections.singletonList(device));
+        return enrichedList.isEmpty() ? null : enrichedList.get(0);
+    }
+
+    /**
      * 分页查询设备列表
      */
     public Map<String, Object> listDevices(Integer page, Integer size, String deviceId, String batchNo, String status, String vendorCode) {
@@ -760,6 +852,51 @@ public class DeviceProductionService {
             }
             // 分佣比例从设备表读取
             map.put("dealerCommissionRate", d.getDealerCommissionRate());
+
+            // 获取设备的分销链路（从 device_dealer 表）
+            map.put("currentVendorId", null);
+            map.put("currentVendorCode", null);
+            map.put("currentVendorName", null);
+            map.put("currentVendorLevel", null);
+            map.put("currentVendorCommissionRate", null);
+            map.put("vendorChain", null);
+            map.put("vendorChainList", null);
+            try {
+                List<DeviceDealer> dealerChain = deviceDealerRepository.getDealerChainByDeviceId(d.getDeviceId());
+                if (dealerChain != null && !dealerChain.isEmpty()) {
+                    // 当前持有经销商（最高层级）
+                    DeviceDealer currentDealer = dealerChain.get(dealerChain.size() - 1);
+                    map.put("currentVendorId", currentDealer.getDealerId());
+                    map.put("currentVendorCode", currentDealer.getDealerCode());
+                    map.put("currentVendorLevel", currentDealer.getLevel());
+                    map.put("currentVendorCommissionRate", currentDealer.getCommissionRate());
+
+                    // 构建分销链路字符串 (A → B → C)
+                    List<String> chainNames = new ArrayList<>();
+                    for (DeviceDealer dd : dealerChain) {
+                        // 使用 dealer 表获取经销商名称
+                        String name = "经销商" + dd.getDealerCode();
+                        if (dd.getDealerId() != null) {
+                            Dealer dlr = dealerRepository.selectById(dd.getDealerId());
+                            if (dlr != null) {
+                                name = dlr.getName();
+                            }
+                        }
+                        chainNames.add(name + "(" + dd.getCommissionRate() + "%)");
+                    }
+                    map.put("vendorChain", String.join(" → ", chainNames));
+                    map.put("vendorChainList", dealerChain);
+                    
+                    // 获取当前经销商名称
+                    if (currentDealer.getDealerId() != null) {
+                        Dealer dlr = dealerRepository.selectById(currentDealer.getDealerId());
+                        map.put("currentVendorName", dlr != null ? dlr.getName() : null);
+                    }
+                }
+            } catch (Exception e) {
+                // device_dealer 表不存在或查询失败，跳过分销链路查询
+                log.debug("查询设备分销链路失败: {}", e.getMessage());
+            }
 
             resultList.add(map);
         }

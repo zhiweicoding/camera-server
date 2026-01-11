@@ -33,11 +33,8 @@ public class BillingService {
     @Autowired
     private PaymentOrderRepository orderRepository;
 
-    @Autowired
-    private VendorRepository vendorRepository;
-
-    @Autowired
-    private SalesmanRepository salesmanRepository;
+@Autowired
+    private DealerRepository dealerRepository;
 
     @Autowired
     private InstallerRepository installerRepository;
@@ -48,80 +45,9 @@ public class BillingService {
     @Autowired
     private CloudPlanRepository cloudPlanRepository;
 
-    /**
-     * 获取经销商账单汇总统计
-     * @param vendorCode 经销商代码（可选，不传则统计所有）
-     * @param startDate 开始日期
-     * @param endDate 结束日期
-     */
-    public Map<String, Object> getVendorBillingSummary(String vendorCode, Date startDate, Date endDate) {
-        QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
-        qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
-        if (vendorCode != null && !vendorCode.trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getVendorCode, vendorCode);
-        }
-        if (startDate != null) {
-            qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
-        }
-        if (endDate != null) {
-            qw.lambda().le(PaymentOrder::getPaidAt, endDate);
-        }
-
-        List<PaymentOrder> orders = orderRepository.selectList(qw);
-
-        // 按经销商分组统计
-        Map<String, Map<String, Object>> vendorStats = new HashMap<>();
-        BigDecimal totalAmount = BigDecimal.ZERO;
-        BigDecimal totalVendorAmount = BigDecimal.ZERO;
-        int totalOrders = 0;
-
-        for (PaymentOrder order : orders) {
-            String vCode = order.getVendorCode();
-            if (vCode == null) vCode = "未分配";
-
-            Map<String, Object> stat = vendorStats.computeIfAbsent(vCode, k -> {
-                Map<String, Object> s = new HashMap<>();
-                s.put("vendorCode", k);
-                s.put("orderCount", 0);
-                s.put("totalAmount", BigDecimal.ZERO);
-                s.put("vendorAmount", BigDecimal.ZERO);
-                return s;
-            });
-
-            stat.put("orderCount", (Integer) stat.get("orderCount") + 1);
-            stat.put("totalAmount", ((BigDecimal) stat.get("totalAmount")).add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO));
-            stat.put("vendorAmount", ((BigDecimal) stat.get("vendorAmount")).add(order.getVendorAmount() != null ? order.getVendorAmount() : BigDecimal.ZERO));
-
-            totalAmount = totalAmount.add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO);
-            totalVendorAmount = totalVendorAmount.add(order.getVendorAmount() != null ? order.getVendorAmount() : BigDecimal.ZERO);
-            totalOrders++;
-        }
-
-        // 补充经销商名称
-        List<Map<String, Object>> vendorList = new ArrayList<>(vendorStats.values());
-        for (Map<String, Object> stat : vendorList) {
-            String vCode = (String) stat.get("vendorCode");
-            if (!"未分配".equals(vCode)) {
-                QueryWrapper<Vendor> vqw = new QueryWrapper<>();
-                vqw.lambda().eq(Vendor::getVendorCode, vCode);
-                Vendor vendor = vendorRepository.selectOne(vqw);
-                stat.put("vendorName", vendor != null ? vendor.getVendorName() : "未知");
-            } else {
-                stat.put("vendorName", "未分配");
-            }
-        }
-
-        Map<String, Object> result = new HashMap<>();
-        result.put("list", vendorList);
-        result.put("totalOrders", totalOrders);
-        result.put("totalAmount", totalAmount);
-        result.put("totalVendorAmount", totalVendorAmount);
-        return result;
-    }
 
     /**
      * 获取装机商账单汇总统计
-     * 兼容新旧数据：优先使用 installer_id/installer_code，回退到 vendor_code
      * @param installerId 装机商ID（可选）
      * @param installerCode 装机商代码（可选）
      * @param startDate 开始日期
@@ -134,11 +60,7 @@ public class BillingService {
             qw.lambda().eq(PaymentOrder::getInstallerId, installerId);
         }
         if (installerCode != null && !installerCode.trim().isEmpty()) {
-            // 同时支持新字段(installerCode)和旧字段(vendorCode)
-            qw.and(w -> w.lambda()
-                    .eq(PaymentOrder::getInstallerCode, installerCode)
-                    .or()
-                    .eq(PaymentOrder::getVendorCode, installerCode));
+            qw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
         }
         if (startDate != null) {
             qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
@@ -149,7 +71,7 @@ public class BillingService {
 
         List<PaymentOrder> orders = orderRepository.selectList(qw);
 
-        // 按装机商代码分组统计（兼容新旧字段）
+        // 按装机商代码分组统计
         Map<String, Map<String, Object>> installerStats = new HashMap<>();
         BigDecimal totalAmount = BigDecimal.ZERO;
         BigDecimal totalCost = BigDecimal.ZERO;
@@ -160,11 +82,7 @@ public class BillingService {
         int totalOrders = 0;
 
         for (PaymentOrder order : orders) {
-            // 优先使用 installerCode，回退到 vendorCode
             String code = order.getInstallerCode();
-            if (code == null || code.trim().isEmpty()) {
-                code = order.getVendorCode();
-            }
             if (code == null || code.trim().isEmpty()) {
                 code = "未分配";
             }
@@ -202,7 +120,6 @@ public class BillingService {
             Long iid = (Long) stat.get("installerId");
             
             String installerName = null;
-            // 先通过 installerId 查
             if (iid != null) {
                 Installer installer = installerRepository.selectById(iid);
                 if (installer != null) {
@@ -212,7 +129,6 @@ public class BillingService {
                     }
                 }
             }
-            // 再通过 installerCode 查
             if (installerName == null && code != null && !"未分配".equals(code)) {
                 QueryWrapper<Installer> iqw = new QueryWrapper<>();
                 iqw.lambda().eq(Installer::getInstallerCode, code);
@@ -220,14 +136,6 @@ public class BillingService {
                 if (installer != null) {
                     installerName = installer.getInstallerName();
                     stat.put("installerId", installer.getId());
-                } else {
-                    // 尝试用 vendorCode 查 Vendor 表（旧数据兼容）
-                    QueryWrapper<Vendor> vqw = new QueryWrapper<>();
-                    vqw.lambda().eq(Vendor::getVendorCode, code);
-                    Vendor vendor = vendorRepository.selectOne(vqw);
-                    if (vendor != null) {
-                        installerName = vendor.getVendorName();
-                    }
                 }
             }
             stat.put("installerName", installerName != null ? installerName : ("未分配".equals(code) ? "未分配" : "未知"));
@@ -252,7 +160,6 @@ public class BillingService {
 
     /**
      * 获取经销商账单汇总统计
-     * 兼容新旧数据：优先使用 dealer_id，回退到 salesman_id
      * @param installerCode 装机商代码（可选）
      * @param dealerId 经销商ID（可选）
      * @param startDate 开始日期
@@ -262,18 +169,10 @@ public class BillingService {
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
         if (installerCode != null && !installerCode.trim().isEmpty()) {
-            // 同时支持新字段(installerCode)和旧字段(vendorCode)
-            qw.and(w -> w.lambda()
-                    .eq(PaymentOrder::getInstallerCode, installerCode)
-                    .or()
-                    .eq(PaymentOrder::getVendorCode, installerCode));
+            qw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
         }
         if (dealerId != null) {
-            // 同时支持新字段(dealerId)和旧字段(salesmanId)
-            qw.and(w -> w.lambda()
-                    .eq(PaymentOrder::getDealerId, dealerId)
-                    .or()
-                    .eq(PaymentOrder::getSalesmanId, dealerId));
+            qw.lambda().eq(PaymentOrder::getDealerId, dealerId);
         }
         if (startDate != null) {
             qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
@@ -284,7 +183,7 @@ public class BillingService {
 
         List<PaymentOrder> orders = orderRepository.selectList(qw);
 
-        // 按经销商分组统计（兼容新旧字段）
+        // 按经销商分组统计
         Map<String, Map<String, Object>> dealerStats = new HashMap<>();
         BigDecimal totalAmount = BigDecimal.ZERO;
         BigDecimal totalCost = BigDecimal.ZERO;
@@ -295,26 +194,17 @@ public class BillingService {
         int totalOrders = 0;
 
         for (PaymentOrder order : orders) {
-            // 优先使用 dealerId，回退到 salesmanId
             Long did = order.getDealerId();
-            if (did == null) {
-                did = order.getSalesmanId();
-            }
-            // 用字符串做 key（兼容 null 情况）
             String key = did != null ? String.valueOf(did) : "未分配";
-
-            // 获取装机商代码
             String iCode = order.getInstallerCode();
-            if (iCode == null || iCode.trim().isEmpty()) {
-                iCode = order.getVendorCode();
-            }
 
             final Long finalDid = did;
             final String finalICode = iCode;
             Map<String, Object> stat = dealerStats.computeIfAbsent(key, k -> {
                 Map<String, Object> s = new HashMap<>();
                 s.put("dealerId", finalDid);
-                s.put("dealerName", order.getSalesmanName());
+                s.put("dealerCode", null);
+                s.put("dealerName", null);
                 s.put("installerCode", finalICode);
                 s.put("orderCount", 0);
                 s.put("totalAmount", BigDecimal.ZERO);
@@ -323,11 +213,7 @@ public class BillingService {
             });
 
             stat.put("orderCount", (Integer) stat.get("orderCount") + 1);
-            // 优先使用 dealerAmount，回退到 salesmanAmount
             BigDecimal dAmt = order.getDealerAmount();
-            if (dAmt == null) {
-                dAmt = order.getSalesmanAmount();
-            }
             stat.put("totalAmount", ((BigDecimal) stat.get("totalAmount")).add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO));
             stat.put("dealerAmount", ((BigDecimal) stat.get("dealerAmount")).add(dAmt != null ? dAmt : BigDecimal.ZERO));
 
@@ -335,17 +221,26 @@ public class BillingService {
             totalCost = totalCost.add(order.getPlanCost() != null ? order.getPlanCost() : BigDecimal.ZERO);
             totalProfitAmount = totalProfitAmount.add(order.getProfitAmount() != null ? order.getProfitAmount() : BigDecimal.ZERO);
             totalInstallerAmount = totalInstallerAmount.add(order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO);
-            BigDecimal orderDealerAmt = order.getDealerAmount() != null ? order.getDealerAmount() : (order.getSalesmanAmount() != null ? order.getSalesmanAmount() : BigDecimal.ZERO);
-            totalDealerAmount = totalDealerAmount.add(orderDealerAmt);
+            totalDealerAmount = totalDealerAmount.add(dAmt != null ? dAmt : BigDecimal.ZERO);
             if (order.getDeviceId() != null) {
                 deviceIds.add(order.getDeviceId());
             }
             totalOrders++;
         }
 
+        // 补充经销商名称
         List<Map<String, Object>> dealerList = new ArrayList<>(dealerStats.values());
+        for (Map<String, Object> stat : dealerList) {
+            Long did = (Long) stat.get("dealerId");
+            if (did != null) {
+                Dealer dealer = dealerRepository.selectById(did);
+                if (dealer != null) {
+                    stat.put("dealerCode", dealer.getDealerCode());
+                    stat.put("dealerName", dealer.getName());
+                }
+            }
+        }
 
-        // 计算剩余利润
         BigDecimal totalRemainingProfit = totalProfitAmount.subtract(totalInstallerAmount).subtract(totalDealerAmount);
 
         Map<String, Object> result = new HashMap<>();
@@ -363,84 +258,20 @@ public class BillingService {
     }
 
     /**
-     * 获取业务员账单汇总统计（已废弃，请使用 getDealerBillingSummary）
-     * @deprecated 使用 getDealerBillingSummary 替代
-     */
-    @Deprecated
-    public Map<String, Object> getSalesmanBillingSummary(String vendorCode, Long salesmanId, Date startDate, Date endDate) {
-        QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
-        qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID)
-                .isNotNull(PaymentOrder::getSalesmanId);
-        if (vendorCode != null && !vendorCode.trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getVendorCode, vendorCode);
-        }
-        if (salesmanId != null) {
-            qw.lambda().eq(PaymentOrder::getSalesmanId, salesmanId);
-        }
-        if (startDate != null) {
-            qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
-        }
-        if (endDate != null) {
-            qw.lambda().le(PaymentOrder::getPaidAt, endDate);
-        }
-
-        List<PaymentOrder> orders = orderRepository.selectList(qw);
-
-        // 按业务员分组统计
-        Map<Long, Map<String, Object>> salesmanStats = new HashMap<>();
-        BigDecimal totalAmount = BigDecimal.ZERO;
-        BigDecimal totalSalesmanAmount = BigDecimal.ZERO;
-        int totalOrders = 0;
-
-        for (PaymentOrder order : orders) {
-            Long sId = order.getSalesmanId();
-            if (sId == null) continue;
-
-            Map<String, Object> stat = salesmanStats.computeIfAbsent(sId, k -> {
-                Map<String, Object> s = new HashMap<>();
-                s.put("salesmanId", k);
-                s.put("salesmanName", order.getSalesmanName());
-                s.put("vendorCode", order.getVendorCode());
-                s.put("orderCount", 0);
-                s.put("totalAmount", BigDecimal.ZERO);
-                s.put("salesmanAmount", BigDecimal.ZERO);
-                return s;
-            });
-
-            stat.put("orderCount", (Integer) stat.get("orderCount") + 1);
-            stat.put("totalAmount", ((BigDecimal) stat.get("totalAmount")).add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO));
-            stat.put("salesmanAmount", ((BigDecimal) stat.get("salesmanAmount")).add(order.getSalesmanAmount() != null ? order.getSalesmanAmount() : BigDecimal.ZERO));
-
-            totalAmount = totalAmount.add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO);
-            totalSalesmanAmount = totalSalesmanAmount.add(order.getSalesmanAmount() != null ? order.getSalesmanAmount() : BigDecimal.ZERO);
-            totalOrders++;
-        }
-
-        List<Map<String, Object>> salesmanList = new ArrayList<>(salesmanStats.values());
-
-        Map<String, Object> result = new HashMap<>();
-        result.put("list", salesmanList);
-        result.put("totalOrders", totalOrders);
-        result.put("totalAmount", totalAmount);
-        result.put("totalSalesmanAmount", totalSalesmanAmount);
-        return result;
-    }
-
-    /**
      * 获取订单明细列表（用于导出）
-     * @param vendorCode 经销商代码（可选）
-     * @param salesmanId 业务员ID（可选）
+     * @param installerCode 装机商代码（可选）
+     * @param dealerId 经销商ID（可选）
      * @param startDate 开始日期
      * @param endDate 结束日期
      */
-    public List<Map<String, Object>> getOrderDetails(String vendorCode, Long salesmanId, Date startDate, Date endDate) {
+    public List<Map<String, Object>> getOrderDetails(String installerCode, Long dealerId, Date startDate, Date endDate) {
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
-        if (vendorCode != null && !vendorCode.trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getVendorCode, vendorCode);
+        if (installerCode != null && !installerCode.trim().isEmpty()) {
+            qw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
         }
-        if (salesmanId != null) {
-            qw.lambda().eq(PaymentOrder::getSalesmanId, salesmanId);
+        if (dealerId != null) {
+            qw.lambda().eq(PaymentOrder::getDealerId, dealerId);
         }
         if (startDate != null) {
             qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
@@ -458,15 +289,15 @@ public class BillingService {
             Map<String, Object> row = new HashMap<>();
             row.put("orderId", order.getOrderId());
             row.put("deviceId", order.getDeviceId());
-            row.put("vendorCode", order.getVendorCode());
-            row.put("salesmanId", order.getSalesmanId());
-            row.put("salesmanName", order.getSalesmanName());
+            row.put("installerCode", order.getInstallerCode());
+            row.put("dealerId", order.getDealerId());
+            row.put("dealerCode", order.getDealerCode());
             row.put("productType", order.getProductType());
             row.put("productId", order.getProductId());
             row.put("amount", order.getAmount());
             row.put("commissionRate", order.getCommissionRate());
-            row.put("salesmanAmount", order.getSalesmanAmount());
-            row.put("vendorAmount", order.getVendorAmount());
+            row.put("installerAmount", order.getInstallerAmount());
+            row.put("dealerAmount", order.getDealerAmount());
             row.put("paymentMethod", order.getPaymentMethod());
             row.put("paidAt", order.getPaidAt() != null ? sdf.format(order.getPaidAt()) : "");
             row.put("refundAt", order.getRefundAt() != null ? sdf.format(order.getRefundAt()) : "");
@@ -479,14 +310,14 @@ public class BillingService {
     /**
      * 分页查询订单列表
      */
-    public Map<String, Object> listOrders(Integer page, Integer size, String vendorCode, Long salesmanId, 
+    public Map<String, Object> listOrders(Integer page, Integer size, String installerCode, Long dealerId, 
                                           String deviceId, String status, Date startDate, Date endDate) {
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
-        if (vendorCode != null && !vendorCode.trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getVendorCode, vendorCode);
+        if (installerCode != null && !installerCode.trim().isEmpty()) {
+            qw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
         }
-        if (salesmanId != null) {
-            qw.lambda().eq(PaymentOrder::getSalesmanId, salesmanId);
+        if (dealerId != null) {
+            qw.lambda().eq(PaymentOrder::getDealerId, dealerId);
         }
         if (deviceId != null && !deviceId.trim().isEmpty()) {
             qw.lambda().like(PaymentOrder::getDeviceId, deviceId);
@@ -512,11 +343,11 @@ public class BillingService {
 
         // 查询总数
         QueryWrapper<PaymentOrder> countQw = new QueryWrapper<>();
-        if (vendorCode != null && !vendorCode.trim().isEmpty()) {
-            countQw.lambda().eq(PaymentOrder::getVendorCode, vendorCode);
+        if (installerCode != null && !installerCode.trim().isEmpty()) {
+            countQw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
         }
-        if (salesmanId != null) {
-            countQw.lambda().eq(PaymentOrder::getSalesmanId, salesmanId);
+        if (dealerId != null) {
+            countQw.lambda().eq(PaymentOrder::getDealerId, dealerId);
         }
         if (deviceId != null && !deviceId.trim().isEmpty()) {
             countQw.lambda().like(PaymentOrder::getDeviceId, deviceId);
@@ -581,17 +412,17 @@ public class BillingService {
      * 如果数据超过1万条，分成多个Excel文件并打包成zip
      * @return Map包含 "isZip" (boolean) 和 "data" (byte[])
      */
-    public Map<String, Object> exportBillingDetailExcel(String vendorCode, Long salesmanId, String deviceId, Date startDate, Date endDate) throws IOException {
-        log.info("开始导出充值明细Excel: vendorCode={}, salesmanId={}, deviceId={}, startDate={}, endDate={}", vendorCode, salesmanId, deviceId, startDate, endDate);
+    public Map<String, Object> exportBillingDetailExcel(String installerCode, Long dealerId, String deviceId, Date startDate, Date endDate) throws IOException {
+        log.info("开始导出充值明细Excel: installerCode={}, dealerId={}, deviceId={}, startDate={}, endDate={}", installerCode, dealerId, deviceId, startDate, endDate);
 
         // 查询所有符合条件的订单
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
-        if (vendorCode != null && !vendorCode.trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getInstallerCode, vendorCode);
+        if (installerCode != null && !installerCode.trim().isEmpty()) {
+            qw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
         }
-        if (salesmanId != null) {
-            qw.lambda().eq(PaymentOrder::getDealerId, salesmanId);
+        if (dealerId != null) {
+            qw.lambda().eq(PaymentOrder::getDealerId, dealerId);
         }
         if (deviceId != null && !deviceId.trim().isEmpty()) {
             qw.lambda().like(PaymentOrder::getDeviceId, deviceId);
@@ -689,9 +520,10 @@ public class BillingService {
                 String installerName = getInstallerName(order.getInstallerId());
                 createTextCell(row, col++, installerName, dataStyle);
                 // 经销商ID
-                createTextCell(row, col++, order.getSalesmanId() != null ? String.valueOf(order.getSalesmanId()) : "", dataStyle);
+                createTextCell(row, col++, order.getDealerId() != null ? String.valueOf(order.getDealerId()) : "", dataStyle);
                 // 经销商名称
-                createTextCell(row, col++, order.getSalesmanName(), dataStyle);
+                String dealerName = getDealerName(order.getDealerId());
+                createTextCell(row, col++, dealerName, dataStyle);
                 // 套餐名称
                 String productName = getProductName(order.getProductId());
                 createTextCell(row, col++, productName, dataStyle);
@@ -714,7 +546,7 @@ public class BillingService {
                 // 装机商分润
                 createMoneyCell(row, col++, order.getInstallerAmount(), moneyStyle);
                 // 经销商分润
-                createMoneyCell(row, col++, order.getSalesmanAmount(), moneyStyle);
+                createMoneyCell(row, col++, order.getDealerAmount(), moneyStyle);
                 // 已结算
                 createTextCell(row, col++, order.getIsSettled() != null && order.getIsSettled() == 1 ? "是" : "否", dataStyle);
             }
@@ -781,6 +613,15 @@ public class BillingService {
     }
 
     /**
+     * 获取经销商名称
+     */
+    private String getDealerName(Long dealerId) {
+        if (dealerId == null) return "";
+        Dealer dealer = dealerRepository.selectById(dealerId);
+        return dealer != null ? dealer.getName() : "";
+    }
+
+    /**
      * 创建文本单元格
      */
     private void createTextCell(Row row, int col, String value, CellStyle style) {
@@ -803,15 +644,15 @@ public class BillingService {
     }
 
     /**
-     * 获取经销商下设备的支付统计
-     * @param vendorCode 经销商代码
+     * 获取装机商下设备的支付统计
+     * @param installerId 装机商ID
      * @param startDate 开始日期
      * @param endDate 结束日期
      */
-    public Map<String, Object> getDevicePaymentStats(String vendorCode, Date startDate, Date endDate) {
-        // 获取经销商下的所有设备
+    public Map<String, Object> getDevicePaymentStats(Long installerId, Date startDate, Date endDate) {
+        // 获取装机商下的所有设备
         QueryWrapper<ManufacturedDevice> deviceQw = new QueryWrapper<>();
-        deviceQw.lambda().eq(ManufacturedDevice::getVendorCode, vendorCode);
+        deviceQw.lambda().eq(ManufacturedDevice::getInstallerId, installerId);
         List<ManufacturedDevice> devices = deviceRepository.selectList(deviceQw);
 
         List<Map<String, Object>> deviceStats = new ArrayList<>();
