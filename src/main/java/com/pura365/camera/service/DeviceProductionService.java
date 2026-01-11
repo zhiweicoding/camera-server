@@ -103,20 +103,34 @@ public class DeviceProductionService {
         map.put("special_req", Arrays.asList("0", "1", "2", "3"));
         // 预留位（机身号第8位）
         map.put("reserved", Collections.singletonList("0"));
-        // 装机商列表（installer表，机身号第5位）
-        map.put("installers", listInstallers());
+        // 装机商列表（installer表，机身号第5位），转换为前端所需格式
+        List<Map<String, Object>> installerList = new ArrayList<>();
+        for (Installer installer : listInstallers()) {
+            Map<String, Object> item = new HashMap<>();
+            item.put("installerIdCode", installer.getInstallerCode());
+            item.put("installerCode", installer.getInstallerCode());
+            item.put("installerName", installer.getInstallerName());
+            item.put("companyName", installer.getCompanyName());
+            item.put("id", installer.getId());
+            installerList.add(item);
+        }
+        map.put("installers", installerList);
         // 经销商列表（dealer表，机身号第6-7位），包含默认的00-先不指定选项
         List<Map<String, Object>> dealersWithDefault = new ArrayList<>();
         // 添加默认选项
         Map<String, Object> defaultDealer = new HashMap<>();
+        defaultDealer.put("dealerIdCode", "00");
         defaultDealer.put("vendorCode", "00");
-        defaultDealer.put("vendorName", "先不指定");
+        defaultDealer.put("name", "先不指定");
+        defaultDealer.put("companyName", null);
         dealersWithDefault.add(defaultDealer);
         // 添加实际经销商（从 dealer 表获取）
         for (Dealer d : listDealers()) {
             Map<String, Object> dealer = new HashMap<>();
+            dealer.put("dealerIdCode", d.getDealerCode());
             dealer.put("vendorCode", d.getDealerCode());
-            dealer.put("vendorName", d.getName());
+            dealer.put("name", d.getName());
+            dealer.put("companyName", d.getCompanyName());
             dealer.put("id", d.getId());
             dealersWithDefault.add(dealer);
         }

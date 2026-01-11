@@ -45,6 +45,28 @@ public class Installer {
     @TableField("status")
     private EnableStatus status;
 
+    // ==================== 企业信息字段 ====================
+
+    /** 公司名称 */
+    @TableField("company_name")
+    private String companyName;
+
+    /** 注册资本(万元) */
+    @TableField("registered_capital")
+    private String registeredCapital;
+
+    /** 统一社会信用代码 */
+    @TableField("credit_code")
+    private String creditCode;
+
+    /** 注册地址 */
+    @TableField("registered_address")
+    private String registeredAddress;
+
+    /** 营业执照图片URL */
+    @TableField("business_license")
+    private String businessLicense;
+
     /** 创建时间 */
     @TableField("created_at")
     private Date createdAt;

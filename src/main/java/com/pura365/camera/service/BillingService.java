@@ -78,6 +78,8 @@ public class BillingService {
         BigDecimal totalProfitAmount = BigDecimal.ZERO;
         BigDecimal totalInstallerAmount = BigDecimal.ZERO;
         BigDecimal totalDealerAmount = BigDecimal.ZERO;
+        BigDecimal totalSettledInstallerAmount = BigDecimal.ZERO;
+        BigDecimal totalUnsettledInstallerAmount = BigDecimal.ZERO;
         Set<String> deviceIds = new HashSet<>();
         int totalOrders = 0;
 
@@ -95,17 +97,29 @@ public class BillingService {
                 s.put("orderCount", 0);
                 s.put("totalAmount", BigDecimal.ZERO);
                 s.put("installerAmount", BigDecimal.ZERO);
+                s.put("settledAmount", BigDecimal.ZERO);
+                s.put("unsettledAmount", BigDecimal.ZERO);
                 return s;
             });
 
+            BigDecimal insAmt = order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO;
+            boolean isSettled = order.getIsSettled() != null && order.getIsSettled() == 1;
+
             stat.put("orderCount", (Integer) stat.get("orderCount") + 1);
             stat.put("totalAmount", ((BigDecimal) stat.get("totalAmount")).add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO));
-            stat.put("installerAmount", ((BigDecimal) stat.get("installerAmount")).add(order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO));
+            stat.put("installerAmount", ((BigDecimal) stat.get("installerAmount")).add(insAmt));
+            if (isSettled) {
+                stat.put("settledAmount", ((BigDecimal) stat.get("settledAmount")).add(insAmt));
+                totalSettledInstallerAmount = totalSettledInstallerAmount.add(insAmt);
+            } else {
+                stat.put("unsettledAmount", ((BigDecimal) stat.get("unsettledAmount")).add(insAmt));
+                totalUnsettledInstallerAmount = totalUnsettledInstallerAmount.add(insAmt);
+            }
 
             totalAmount = totalAmount.add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO);
             totalCost = totalCost.add(order.getPlanCost() != null ? order.getPlanCost() : BigDecimal.ZERO);
             totalProfitAmount = totalProfitAmount.add(order.getProfitAmount() != null ? order.getProfitAmount() : BigDecimal.ZERO);
-            totalInstallerAmount = totalInstallerAmount.add(order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO);
+            totalInstallerAmount = totalInstallerAmount.add(insAmt);
             totalDealerAmount = totalDealerAmount.add(order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO);
             if (order.getDeviceId() != null) {
                 deviceIds.add(order.getDeviceId());
@@ -155,6 +169,8 @@ public class BillingService {
         result.put("totalInstallerAmount", totalInstallerAmount);
         result.put("totalDealerAmount", totalDealerAmount);
         result.put("totalRemainingProfit", totalRemainingProfit);
+        result.put("totalSettledInstallerAmount", totalSettledInstallerAmount);
+        result.put("totalUnsettledInstallerAmount", totalUnsettledInstallerAmount);
         return result;
     }
 
@@ -190,6 +206,8 @@ public class BillingService {
         BigDecimal totalProfitAmount = BigDecimal.ZERO;
         BigDecimal totalInstallerAmount = BigDecimal.ZERO;
         BigDecimal totalDealerAmount = BigDecimal.ZERO;
+        BigDecimal totalSettledDealerAmount = BigDecimal.ZERO;
+        BigDecimal totalUnsettledDealerAmount = BigDecimal.ZERO;
         Set<String> deviceIds = new HashSet<>();
         int totalOrders = 0;
 
@@ -209,19 +227,30 @@ public class BillingService {
                 s.put("orderCount", 0);
                 s.put("totalAmount", BigDecimal.ZERO);
                 s.put("dealerAmount", BigDecimal.ZERO);
+                s.put("settledAmount", BigDecimal.ZERO);
+                s.put("unsettledAmount", BigDecimal.ZERO);
                 return s;
             });
 
+            BigDecimal dAmt = order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO;
+            boolean isSettled = order.getIsSettled() != null && order.getIsSettled() == 1;
+
             stat.put("orderCount", (Integer) stat.get("orderCount") + 1);
-            BigDecimal dAmt = order.getDealerAmount();
             stat.put("totalAmount", ((BigDecimal) stat.get("totalAmount")).add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO));
-            stat.put("dealerAmount", ((BigDecimal) stat.get("dealerAmount")).add(dAmt != null ? dAmt : BigDecimal.ZERO));
+            stat.put("dealerAmount", ((BigDecimal) stat.get("dealerAmount")).add(dAmt));
+            if (isSettled) {
+                stat.put("settledAmount", ((BigDecimal) stat.get("settledAmount")).add(dAmt));
+                totalSettledDealerAmount = totalSettledDealerAmount.add(dAmt);
+            } else {
+                stat.put("unsettledAmount", ((BigDecimal) stat.get("unsettledAmount")).add(dAmt));
+                totalUnsettledDealerAmount = totalUnsettledDealerAmount.add(dAmt);
+            }
 
             totalAmount = totalAmount.add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO);
             totalCost = totalCost.add(order.getPlanCost() != null ? order.getPlanCost() : BigDecimal.ZERO);
             totalProfitAmount = totalProfitAmount.add(order.getProfitAmount() != null ? order.getProfitAmount() : BigDecimal.ZERO);
             totalInstallerAmount = totalInstallerAmount.add(order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO);
-            totalDealerAmount = totalDealerAmount.add(dAmt != null ? dAmt : BigDecimal.ZERO);
+            totalDealerAmount = totalDealerAmount.add(dAmt);
             if (order.getDeviceId() != null) {
                 deviceIds.add(order.getDeviceId());
             }
@@ -254,6 +283,8 @@ public class BillingService {
         result.put("totalInstallerAmount", totalInstallerAmount);
         result.put("totalDealerAmount", totalDealerAmount);
         result.put("totalRemainingProfit", totalRemainingProfit);
+        result.put("totalSettledDealerAmount", totalSettledDealerAmount);
+        result.put("totalUnsettledDealerAmount", totalUnsettledDealerAmount);
         return result;
     }
 

@@ -167,6 +167,22 @@ public class InstallerService {
         if (installer.getStatus() != null) {
             existing.setStatus(installer.getStatus());
         }
+        // 企业信息字段
+        if (installer.getCompanyName() != null) {
+            existing.setCompanyName(installer.getCompanyName());
+        }
+        if (installer.getRegisteredCapital() != null) {
+            existing.setRegisteredCapital(installer.getRegisteredCapital());
+        }
+        if (installer.getCreditCode() != null) {
+            existing.setCreditCode(installer.getCreditCode());
+        }
+        if (installer.getRegisteredAddress() != null) {
+            existing.setRegisteredAddress(installer.getRegisteredAddress());
+        }
+        if (installer.getBusinessLicense() != null) {
+            existing.setBusinessLicense(installer.getBusinessLicense());
+        }
 
         existing.setUpdatedAt(new Date());
         installerRepository.updateById(existing);

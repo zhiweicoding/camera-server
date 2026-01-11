@@ -110,6 +110,42 @@ public class DeviceProductionController {
         return ApiResponse.success(productionService.listDevicesByBatch(batchNo));
     }
 
+    /**
+     * 导出批次机身号为TXT文件
+     * 每行一个机身号
+     */
+    @GetMapping("/batch/{batchNo}/export-txt")
+    public ResponseEntity<byte[]> exportBatchDevicesTxt(@PathVariable String batchNo) {
+        try {
+            List<ManufacturedDevice> devices = productionService.listDevicesByBatch(batchNo);
+            if (devices == null || devices.isEmpty()) {
+                return ResponseEntity.notFound().build();
+            }
+
+            // 生成TXT内容，每行一个机身号
+            StringBuilder sb = new StringBuilder();
+            for (ManufacturedDevice device : devices) {
+                sb.append(device.getDeviceId()).append("\n");
+            }
+
+            byte[] data = sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+            // 设置响应头
+            String filename = "batch_" + batchNo + "_devices.txt";
+            HttpHeaders responseHeaders = new HttpHeaders();
+            responseHeaders.setContentType(MediaType.TEXT_PLAIN);
+            responseHeaders.setContentDispositionFormData("attachment", 
+                new String(filename.getBytes("UTF-8"), "ISO-8859-1"));
+            responseHeaders.setContentLength(data.length);
+
+            return ResponseEntity.ok()
+                    .headers(responseHeaders)
+                    .body(data);
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+
     // ==================== 设备管理接口 ====================
 
     /**
