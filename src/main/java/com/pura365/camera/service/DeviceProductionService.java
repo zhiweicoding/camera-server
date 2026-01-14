@@ -575,6 +575,28 @@ public class DeviceProductionService {
         int quantity = endSerial - startSerial + 1;
         Set<String> generatedSerials = new HashSet<>();
         
+        // 根据 assemblerCode 查找装机商ID
+        Long installerId = null;
+        if (assemblerCode != null) {
+            QueryWrapper<Installer> iq = new QueryWrapper<>();
+            iq.lambda().eq(Installer::getInstallerCode, assemblerCode);
+            Installer installer = installerRepository.selectOne(iq);
+            if (installer != null) {
+                installerId = installer.getId();
+            }
+        }
+        
+        // 根据 vendorCode 查找经销商ID
+        Long currentDealerId = null;
+        if (vendorCode != null) {
+            QueryWrapper<Dealer> dq = new QueryWrapper<>();
+            dq.lambda().eq(Dealer::getDealerCode, vendorCode);
+            Dealer dealer = dealerRepository.selectOne(dq);
+            if (dealer != null) {
+                currentDealerId = dealer.getId();
+            }
+        }
+        
         for (int i = 0; i < quantity; i++) {
             String serial8 = generateUniqueSerial8(prefix, generatedSerials);
             generatedSerials.add(serial8);
@@ -588,6 +610,8 @@ public class DeviceProductionService {
             device.setSpecialReq(specialReq);
             device.setAssemblerCode(assemblerCode);
             device.setVendorCode(vendorCode);
+            device.setInstallerId(installerId);
+            device.setCurrentDealerId(currentDealerId);
             device.setSerialNo(serial8);
             device.setStatus(ManufacturedDeviceStatus.MANUFACTURED);
             // 从批次复制分润比例
