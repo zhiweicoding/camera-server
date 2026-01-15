@@ -64,6 +64,10 @@ public class ManufacturedDevice {
     @TableField("dealer_commission_rate")
     private java.math.BigDecimal dealerCommissionRate;
 
+    /** 是否开启广告 */
+    @TableField("enable_ad")
+    private Boolean enableAd;
+
     /** 序列号(第9-16位) */
     @TableField("serial_no")
     private String serialNo;

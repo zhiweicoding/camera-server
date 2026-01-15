@@ -526,6 +526,7 @@ public class DeviceProductionService {
         batch.setCreatedBy(request.getCreatedBy());
         batch.setInstallerCommissionRate(request.getInstallerCommissionRate());
         batch.setDealerCommissionRate(request.getDealerCommissionRate());
+        batch.setEnableAd(request.getEnableAd() != null ? request.getEnableAd() : true);
         batchRepository.insert(batch);
 
         // 批量生成设备ID
@@ -614,9 +615,10 @@ public class DeviceProductionService {
             device.setCurrentDealerId(currentDealerId);
             device.setSerialNo(serial8);
             device.setStatus(ManufacturedDeviceStatus.MANUFACTURED);
-            // 从批次复制分润比例
+            // 从批次复制分润比例和广告开关
             device.setInstallerCommissionRate(batch.getInstallerCommissionRate());
             device.setDealerCommissionRate(batch.getDealerCommissionRate());
+            device.setEnableAd(batch.getEnableAd());
             deviceRepository.insert(device);
         }
     }
@@ -858,13 +860,17 @@ public class DeviceProductionService {
             return new ArrayList<>();
         }
 
-        // 收集所有的 dealerCode、installerId 和 batchId
+        // 收集所有的 dealerCode、currentDealerId、installerId 和 batchId
         Set<String> dealerCodes = new HashSet<>();
+        Set<Long> dealerIds = new HashSet<>();
         Set<Long> installerIds = new HashSet<>();
         Set<Long> batchIds = new HashSet<>();
         for (ManufacturedDevice d : devices) {
             if (d.getVendorCode() != null && !"00".equals(d.getVendorCode())) {
                 dealerCodes.add(d.getVendorCode());
+            }
+            if (d.getCurrentDealerId() != null) {
+                dealerIds.add(d.getCurrentDealerId());
             }
             if (d.getInstallerId() != null) {
                 installerIds.add(d.getInstallerId());
@@ -874,15 +880,29 @@ public class DeviceProductionService {
             }
         }
 
-        // 批量查询 Dealer（替代原 Vendor）
-        Map<String, Dealer> dealerMap = new HashMap<>();
+        // 批量查询 Dealer（按代码和ID）
+        Map<String, Dealer> dealerByCodeMap = new HashMap<>();
+        Map<Long, Dealer> dealerByIdMap = new HashMap<>();
         if (!dealerCodes.isEmpty()) {
             QueryWrapper<Dealer> dq = new QueryWrapper<>();
             dq.lambda().in(Dealer::getDealerCode, dealerCodes);
             List<Dealer> dealers = dealerRepository.selectList(dq);
             for (Dealer d : dealers) {
-                dealerMap.put(d.getDealerCode(), d);
+                dealerByCodeMap.put(d.getDealerCode(), d);
+                dealerByIdMap.put(d.getId(), d);
                 // 同时收集经销商关联的装机商ID
+                if (d.getInstallerId() != null) {
+                    installerIds.add(d.getInstallerId());
+                }
+            }
+        }
+        // 按 ID 查询经销商
+        if (!dealerIds.isEmpty()) {
+            QueryWrapper<Dealer> dq = new QueryWrapper<>();
+            dq.lambda().in(Dealer::getId, dealerIds);
+            List<Dealer> dealers = dealerRepository.selectList(dq);
+            for (Dealer d : dealers) {
+                dealerByIdMap.put(d.getId(), d);
                 if (d.getInstallerId() != null) {
                     installerIds.add(d.getInstallerId());
                 }
@@ -934,6 +954,7 @@ public class DeviceProductionService {
             map.put("activatedAt", d.getActivatedAt() != null ? sdf.format(d.getActivatedAt()) : null);
             map.put("createdAt", d.getCreatedAt() != null ? sdf.format(d.getCreatedAt()) : null);
             map.put("updatedAt", d.getUpdatedAt() != null ? sdf.format(d.getUpdatedAt()) : null);
+            map.put("enableAd", d.getEnableAd());
 
             // 添加装机商信息
             Installer installer = d.getInstallerId() != null ? installerMap.get(d.getInstallerId()) : null;
@@ -945,8 +966,14 @@ public class DeviceProductionService {
             // 分佣比例从设备表读取
             map.put("installerCommissionRate", d.getInstallerCommissionRate());
 
-            // 添加经销商信息
-            Dealer dealer = d.getVendorCode() != null ? dealerMap.get(d.getVendorCode()) : null;
+            // 添加经销商信息（优先根据 currentDealerId 查找）
+            Dealer dealer = null;
+            if (d.getCurrentDealerId() != null) {
+                dealer = dealerByIdMap.get(d.getCurrentDealerId());
+            }
+            if (dealer == null && d.getVendorCode() != null) {
+                dealer = dealerByCodeMap.get(d.getVendorCode());
+            }
             if (dealer != null) {
                 map.put("dealerName", dealer.getName());
             } else {

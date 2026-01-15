@@ -88,6 +88,10 @@ public class DeviceProductionBatch {
     @TableField("dealer_commission_rate")
     private java.math.BigDecimal dealerCommissionRate;
 
+    /** 是否开启广告 */
+    @TableField("enable_ad")
+    private Boolean enableAd;
+
     /**
      * 生成设备ID前缀 (前8位)
      */

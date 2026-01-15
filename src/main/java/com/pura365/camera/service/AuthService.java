@@ -1,10 +1,14 @@
 package com.pura365.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.pura365.camera.domain.Dealer;
+import com.pura365.camera.domain.Installer;
 import com.pura365.camera.domain.User;
 import com.pura365.camera.domain.UserAuth;
 import com.pura365.camera.domain.UserToken;
 import com.pura365.camera.domain.Vendor;
+import com.pura365.camera.repository.DealerRepository;
+import com.pura365.camera.repository.InstallerRepository;
 import com.pura365.camera.repository.UserAuthRepository;
 import com.pura365.camera.repository.UserRepository;
 import com.pura365.camera.repository.UserTokenRepository;
@@ -53,6 +57,12 @@ public class AuthService {
 
     @Autowired
     private VendorRepository vendorRepository;
+
+    @Autowired
+    private InstallerRepository installerRepository;
+
+    @Autowired
+    private DealerRepository dealerRepository;
 
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
@@ -261,11 +271,47 @@ public class AuthService {
         userMap.put("nickname", user.getNickname());
         userMap.put("avatar", user.getAvatar());
         userMap.put("role", user.getRole());
-        // 经销商用户返回vendorCode和vendorId
+
+        // 判断是否有装机商身份
+        boolean isInstaller = user.getIsInstaller() != null && user.getIsInstaller() == 1;
+        userMap.put("isInstaller", isInstaller);
+
+        // 判断是否有经销商身份
+        boolean isDealer = user.getIsDealer() != null && user.getIsDealer() == 1;
+        userMap.put("isDealer", isDealer);
+
+        // 装机商信息：根据 installer_id 查询装机商代码和公司名称
+        if (user.getInstallerId() != null) {
+            Installer installer = installerRepository.selectById(user.getInstallerId());
+            if (installer != null) {
+                userMap.put("installerId", installer.getId());
+                userMap.put("installerCode", installer.getInstallerCode());
+                userMap.put("installerName", installer.getInstallerName());
+                // 公司名称优先使用装机商的公司名称
+                if (installer.getCompanyName() != null && !installer.getCompanyName().isEmpty()) {
+                    userMap.put("companyName", installer.getCompanyName());
+                }
+            }
+        }
+
+        // 经销商信息：根据 dealer_id 查询经销商代码和公司名称
+        if (user.getDealerId() != null) {
+            Dealer dealer = dealerRepository.selectById(user.getDealerId());
+            if (dealer != null) {
+                userMap.put("dealerId", dealer.getId());
+                userMap.put("dealerCode", dealer.getDealerCode());
+                userMap.put("dealerName", dealer.getName());
+                // 如果公司名称还没有设置，使用经销商的公司名称
+                if (userMap.get("companyName") == null && dealer.getCompanyName() != null && !dealer.getCompanyName().isEmpty()) {
+                    userMap.put("companyName", dealer.getCompanyName());
+                }
+            }
+        }
+
+        // 兼容旧字段 vendorCode/vendorId
         if (user.getRole() != null && user.getRole() == 2) {
             String vendorCode = user.getUsername();
             userMap.put("vendorCode", vendorCode);
-            // 查询vendorId
             QueryWrapper<Vendor> vendorQw = new QueryWrapper<>();
             vendorQw.lambda().eq(Vendor::getVendorCode, vendorCode);
             Vendor vendor = vendorRepository.selectOne(vendorQw);
