@@ -40,6 +40,9 @@ public class BillingService {
     private InstallerRepository installerRepository;
 
     @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
     private ManufacturedDeviceRepository deviceRepository;
 
     @Autowired
@@ -48,19 +51,43 @@ public class BillingService {
 
     /**
      * 获取装机商账单汇总统计
-     * @param installerId 装机商ID（可选）
-     * @param installerCode 装机商代码（可选）
-     * @param startDate 开始日期
-     * @param endDate 结束日期
+     * 根据当前用户角色自动过滤
      */
-    public Map<String, Object> getInstallerBillingSummary(Long installerId, String installerCode, Date startDate, Date endDate) {
+    public Map<String, Object> getInstallerBillingSummary(Long currentUserId, Long installerId, String installerCode, Date startDate, Date endDate) {
+        // 根据当前用户角色确定过滤条件
+        String effectiveInstallerCode = installerCode;
+        Long effectiveDealerId = null;
+        
+        if (currentUserId != null) {
+            User currentUser = userRepository.selectById(currentUserId);
+            if (currentUser != null) {
+                boolean isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
+                if (!isAdmin) {
+                    // 装机商只能查看自己的数据
+                    if (currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null) {
+                        Installer installer = installerRepository.selectById(currentUser.getInstallerId());
+                        if (installer != null) {
+                            effectiveInstallerCode = installer.getInstallerCode();
+                        }
+                    }
+                    // 经销商只能查看自己的数据
+                    if (currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null) {
+                        effectiveDealerId = currentUser.getDealerId();
+                    }
+                }
+            }
+        }
+        
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
         if (installerId != null) {
             qw.lambda().eq(PaymentOrder::getInstallerId, installerId);
         }
-        if (installerCode != null && !installerCode.trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
+        if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
+            qw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
+        }
+        if (effectiveDealerId != null) {
+            qw.lambda().eq(PaymentOrder::getDealerId, effectiveDealerId);
         }
         if (startDate != null) {
             qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
@@ -176,19 +203,40 @@ public class BillingService {
 
     /**
      * 获取经销商账单汇总统计
-     * @param installerCode 装机商代码（可选）
-     * @param dealerId 经销商ID（可选）
-     * @param startDate 开始日期
-     * @param endDate 结束日期
+     * 根据当前用户角色自动过滤
      */
-    public Map<String, Object> getDealerBillingSummary(String installerCode, Long dealerId, Date startDate, Date endDate) {
+    public Map<String, Object> getDealerBillingSummary(Long currentUserId, String installerCode, Long dealerId, Date startDate, Date endDate) {
+        // 根据当前用户角色确定过滤条件
+        String effectiveInstallerCode = installerCode;
+        Long effectiveDealerId = dealerId;
+        
+        if (currentUserId != null) {
+            User currentUser = userRepository.selectById(currentUserId);
+            if (currentUser != null) {
+                boolean isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
+                if (!isAdmin) {
+                    // 装机商只能查看自己的数据
+                    if (currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null) {
+                        Installer installer = installerRepository.selectById(currentUser.getInstallerId());
+                        if (installer != null) {
+                            effectiveInstallerCode = installer.getInstallerCode();
+                        }
+                    }
+                    // 经销商只能查看自己的数据
+                    if (currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null) {
+                        effectiveDealerId = currentUser.getDealerId();
+                    }
+                }
+            }
+        }
+        
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
-        if (installerCode != null && !installerCode.trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
+        if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
+            qw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
         }
-        if (dealerId != null) {
-            qw.lambda().eq(PaymentOrder::getDealerId, dealerId);
+        if (effectiveDealerId != null) {
+            qw.lambda().eq(PaymentOrder::getDealerId, effectiveDealerId);
         }
         if (startDate != null) {
             qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
@@ -340,15 +388,68 @@ public class BillingService {
 
     /**
      * 分页查询订单列表
+     * 根据当前用户角色自动过滤：
+     * - 管理员(role=3)：可查看所有订单
+     * - 装机商(isInstaller=1)：只能查看自己关联的订单
+     * - 经销商(isDealer=1)：只能查看自己关联的订单
+     * - 既是装机商又是经销商：可查看两者关联的订单(OR条件)
      */
-    public Map<String, Object> listOrders(Integer page, Integer size, String installerCode, Long dealerId, 
+    public Map<String, Object> listOrders(Long currentUserId, Integer page, Integer size, String installerCode, Long dealerId, 
                                           String deviceId, String status, Date startDate, Date endDate) {
-        QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
-        if (installerCode != null && !installerCode.trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
+        // 根据当前用户角色确定过滤条件
+        String effectiveInstallerCode = installerCode;
+        Long effectiveDealerId = dealerId;
+        boolean needOrCondition = false; // 是否需要OR条件（既是装机商又是经销商）
+        
+        if (currentUserId != null) {
+            User currentUser = userRepository.selectById(currentUserId);
+            if (currentUser != null) {
+                // 管理员可以查看所有订单，不需要强制过滤
+                boolean isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
+                
+                if (!isAdmin) {
+                    boolean isInstaller = currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null;
+                    boolean isDealer = currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null;
+                    
+                    // 装机商只能查看自己关联的订单
+                    if (isInstaller) {
+                        Installer installer = installerRepository.selectById(currentUser.getInstallerId());
+                        if (installer != null && installer.getInstallerCode() != null) {
+                            effectiveInstallerCode = installer.getInstallerCode();
+                            log.info("装机商用户查询订单列表, userId={}, installerCode={}", currentUserId, effectiveInstallerCode);
+                        }
+                    }
+                    
+                    // 经销商只能查看自己关联的订单
+                    if (isDealer) {
+                        effectiveDealerId = currentUser.getDealerId();
+                        log.info("经销商用户查询订单列表, userId={}, dealerId={}", currentUserId, effectiveDealerId);
+                    }
+                    
+                    // 既是装机商又是经销商，需要OR条件
+                    needOrCondition = isInstaller && isDealer;
+                }
+            }
         }
-        if (dealerId != null) {
-            qw.lambda().eq(PaymentOrder::getDealerId, dealerId);
+        
+        QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
+        
+        // 如果既是装机商又是经销商，使用OR条件
+        if (needOrCondition && effectiveInstallerCode != null && effectiveDealerId != null) {
+            final String finalInstallerCode = effectiveInstallerCode;
+            final Long finalDealerId = effectiveDealerId;
+            qw.and(wrapper -> wrapper
+                .eq("installer_code", finalInstallerCode)
+                .or()
+                .eq("dealer_id", finalDealerId)
+            );
+        } else {
+            if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
+                qw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
+            }
+            if (effectiveDealerId != null) {
+                qw.lambda().eq(PaymentOrder::getDealerId, effectiveDealerId);
+            }
         }
         if (deviceId != null && !deviceId.trim().isEmpty()) {
             qw.lambda().like(PaymentOrder::getDeviceId, deviceId);
@@ -374,11 +475,22 @@ public class BillingService {
 
         // 查询总数
         QueryWrapper<PaymentOrder> countQw = new QueryWrapper<>();
-        if (installerCode != null && !installerCode.trim().isEmpty()) {
-            countQw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
-        }
-        if (dealerId != null) {
-            countQw.lambda().eq(PaymentOrder::getDealerId, dealerId);
+        // 如果既是装机商又是经销商，使用OR条件
+        if (needOrCondition && effectiveInstallerCode != null && effectiveDealerId != null) {
+            final String finalInstallerCode = effectiveInstallerCode;
+            final Long finalDealerId = effectiveDealerId;
+            countQw.and(wrapper -> wrapper
+                .eq("installer_code", finalInstallerCode)
+                .or()
+                .eq("dealer_id", finalDealerId)
+            );
+        } else {
+            if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
+                countQw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
+            }
+            if (effectiveDealerId != null) {
+                countQw.lambda().eq(PaymentOrder::getDealerId, effectiveDealerId);
+            }
         }
         if (deviceId != null && !deviceId.trim().isEmpty()) {
             countQw.lambda().like(PaymentOrder::getDeviceId, deviceId);
@@ -672,6 +784,85 @@ public class BillingService {
             cell.setCellValue(0.0);
         }
         cell.setCellStyle(style);
+    }
+
+    /**
+     * 获取当前用户的账单汇总统计
+     * 返回设备总数、经销商分润等汇总数据
+     */
+    public Map<String, Object> getMySummary(Long currentUserId, Date startDate, Date endDate) {
+        Map<String, Object> result = new HashMap<>();
+        
+        if (currentUserId == null) {
+            result.put("totalDevices", 0);
+            result.put("totalDealerAmount", BigDecimal.ZERO);
+            return result;
+        }
+        
+        User currentUser = userRepository.selectById(currentUserId);
+        if (currentUser == null) {
+            result.put("totalDevices", 0);
+            result.put("totalDealerAmount", BigDecimal.ZERO);
+            return result;
+        }
+        
+        // 统计设备总数
+        long totalDevices = 0;
+        String installerCode = null;
+        Long dealerId = null;
+        
+        // 装机商用户
+        if (currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null) {
+            Installer installer = installerRepository.selectById(currentUser.getInstallerId());
+            if (installer != null) {
+                installerCode = installer.getInstallerCode();
+                // 统计装机商下的设备数
+                QueryWrapper<ManufacturedDevice> deviceQw = new QueryWrapper<>();
+                deviceQw.lambda().eq(ManufacturedDevice::getAssemblerCode, installerCode);
+                totalDevices = deviceRepository.selectCount(deviceQw);
+            }
+        }
+        
+        // 经销商用户
+        if (currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null) {
+            dealerId = currentUser.getDealerId();
+            Dealer dealer = dealerRepository.selectById(dealerId);
+            if (dealer != null) {
+                // 统计经销商下的设备数
+                QueryWrapper<ManufacturedDevice> deviceQw = new QueryWrapper<>();
+                deviceQw.lambda().eq(ManufacturedDevice::getVendorCode, dealer.getDealerCode());
+                long dealerDevices = deviceRepository.selectCount(deviceQw);
+                // 如果既是装机商又是经销商，取较大值
+                totalDevices = Math.max(totalDevices, dealerDevices);
+            }
+        }
+        
+        // 统计经销商分润总额
+        BigDecimal totalDealerAmount = BigDecimal.ZERO;
+        if (dealerId != null) {
+            QueryWrapper<PaymentOrder> orderQw = new QueryWrapper<>();
+            orderQw.lambda().eq(PaymentOrder::getDealerId, dealerId)
+                    .eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
+            if (startDate != null) {
+                orderQw.lambda().ge(PaymentOrder::getPaidAt, startDate);
+            }
+            if (endDate != null) {
+                orderQw.lambda().le(PaymentOrder::getPaidAt, endDate);
+            }
+            List<PaymentOrder> orders = orderRepository.selectList(orderQw);
+            for (PaymentOrder order : orders) {
+                if (order.getDealerAmount() != null) {
+                    totalDealerAmount = totalDealerAmount.add(order.getDealerAmount());
+                }
+            }
+        }
+        
+        result.put("totalDevices", totalDevices);
+        result.put("totalDealerAmount", totalDealerAmount);
+        
+        log.info("获取用户账单汇总: userId={}, totalDevices={}, totalDealerAmount={}", 
+                currentUserId, totalDevices, totalDealerAmount);
+        return result;
     }
 
     /**

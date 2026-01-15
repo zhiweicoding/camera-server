@@ -32,10 +32,12 @@ public class BillingController {
 
     /**
      * 获取装机商账单汇总
+     * 权限说明：只能查看与当前用户关联的数据
      */
     @Operation(summary = "装机商账单汇总", description = "按装机商维度统计账单汇总")
     @GetMapping("/installer-summary")
     public ApiResponse<Map<String, Object>> getInstallerBillingSummary(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
             @RequestParam(required = false) Long installerId,
             @RequestParam(required = false) String installerCode,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
@@ -59,20 +61,22 @@ public class BillingController {
                 // 忽略解析错误
             }
         }
-        return ApiResponse.success(billingService.getInstallerBillingSummary(installerId, installerCode, startDate, endDate));
+        return ApiResponse.success(billingService.getInstallerBillingSummary(currentUserId, installerId, installerCode, startDate, endDate));
     }
 
     /**
      * 获取经销商账单汇总
+     * 权限说明：只能查看与当前用户关联的数据
      */
     @Operation(summary = "经销商账单汇总", description = "按经销商维度统计账单汇总")
     @GetMapping("/dealer-summary")
     public ApiResponse<Map<String, Object>> getDealerBillingSummary(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
             @RequestParam(required = false) String installerCode,
             @RequestParam(required = false) Long dealerId,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate) {
-        return ApiResponse.success(billingService.getDealerBillingSummary(installerCode, dealerId, startDate, endDate));
+        return ApiResponse.success(billingService.getDealerBillingSummary(currentUserId, installerCode, dealerId, startDate, endDate));
     }
 
     /**
@@ -90,10 +94,12 @@ public class BillingController {
 
     /**
      * 分页查询订单列表
+     * 权限说明：只能查看与当前用户关联的订单
      */
     @Operation(summary = "分页查询订单", description = "分页查询订单列表，支持多条件筛选")
     @GetMapping("/orders")
     public ApiResponse<Map<String, Object>> listOrders(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
             @RequestParam(defaultValue = "1") Integer page,
             @RequestParam(defaultValue = "20") Integer size,
             @RequestParam(required = false) String installerCode,
@@ -102,7 +108,7 @@ public class BillingController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate) {
-        return ApiResponse.success(billingService.listOrders(page, size, installerCode, dealerId, deviceId, status, startDate, endDate));
+        return ApiResponse.success(billingService.listOrders(currentUserId, page, size, installerCode, dealerId, deviceId, status, startDate, endDate));
     }
 
     /**
@@ -122,6 +128,19 @@ public class BillingController {
         } catch (RuntimeException e) {
             return ApiResponse.error(400, e.getMessage());
         }
+    }
+
+    /**
+     * 获取当前用户的账单汇总统计
+     * 返回设备总数、经销商分润等汇总数据
+     */
+    @Operation(summary = "当前用户账单汇总", description = "获取当前用户的设备总数、经销商分润等汇总统计")
+    @GetMapping("/my-summary")
+    public ApiResponse<Map<String, Object>> getMySummary(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate) {
+        return ApiResponse.success(billingService.getMySummary(currentUserId, startDate, endDate));
     }
 
     /**

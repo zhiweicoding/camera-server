@@ -301,17 +301,46 @@ public class DeviceProductionService {
     /**
      * 批量分配经销商到设备（扫码分配）
      * 同时设置设备的经销商佣金比例
+     * 只能分配当前用户设备管理列表中的设备
      *
+     * @param currentUserId  当前登录用户ID
      * @param deviceIds      设备ID列表
      * @param dealerCode     经销商代码（2位）
      * @param commissionRate 佣金比例
      * @return 处理结果
      */
     @Transactional
-    public Map<String, Object> batchAssignDealer(List<String> deviceIds, String dealerCode, java.math.BigDecimal commissionRate) {
+    public Map<String, Object> batchAssignDealer(Long currentUserId, List<String> deviceIds, String dealerCode, java.math.BigDecimal commissionRate) {
         // 校验经销商代码
         if (dealerCode == null || dealerCode.length() != 2) {
             throw new RuntimeException("经销商代码必须是2位");
+        }
+
+        // 获取当前用户信息，用于权限校验
+        String allowedInstallerCode = null;
+        String allowedDealerCode = null;
+        boolean isAdmin = false;
+        if (currentUserId != null) {
+            User currentUser = userRepository.selectById(currentUserId);
+            if (currentUser != null) {
+                isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
+                if (!isAdmin) {
+                    // 装机商只能分配自己关联的设备
+                    if (currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null) {
+                        Installer installer = installerRepository.selectById(currentUser.getInstallerId());
+                        if (installer != null) {
+                            allowedInstallerCode = installer.getInstallerCode();
+                        }
+                    }
+                    // 经销商只能分配自己关联的设备
+                    if (currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null) {
+                        Dealer userDealer = dealerRepository.selectById(currentUser.getDealerId());
+                        if (userDealer != null) {
+                            allowedDealerCode = userDealer.getDealerCode();
+                        }
+                    }
+                }
+            }
         }
 
         // 查找经销商（非"00"时）
@@ -326,8 +355,14 @@ public class DeviceProductionService {
         }
 
         List<Map<String, Object>> results = new ArrayList<>();
+        List<String> noPermissionDevices = new ArrayList<>(); // 无权限的设备列表
         int successCount = 0;
         int failCount = 0;
+
+        // 用于权限校验的最终变量
+        final String finalAllowedInstallerCode = allowedInstallerCode;
+        final String finalAllowedDealerCode = allowedDealerCode;
+        final boolean finalIsAdmin = isAdmin;
 
         for (String deviceId : deviceIds) {
             Map<String, Object> item = new HashMap<>();
@@ -342,6 +377,23 @@ public class DeviceProductionService {
                 ManufacturedDevice device = getDevice(deviceId);
                 if (device == null) {
                     throw new RuntimeException("设备不存在");
+                }
+
+                // 权限校验：非管理员只能分配自己设备管理列表中的设备
+                if (!finalIsAdmin && currentUserId != null) {
+                    boolean hasPermission = false;
+                    // 装机商权限校验
+                    if (finalAllowedInstallerCode != null && finalAllowedInstallerCode.equals(device.getAssemblerCode())) {
+                        hasPermission = true;
+                    }
+                    // 经销商权限校验
+                    if (finalAllowedDealerCode != null && finalAllowedDealerCode.equals(device.getVendorCode())) {
+                        hasPermission = true;
+                    }
+                    if (!hasPermission) {
+                        noPermissionDevices.add(deviceId);
+                        throw new RuntimeException("设备不在您的设备管理列表中，无权限分配");
+                    }
                 }
 
                 String oldVendorCode = device.getVendorCode();
@@ -399,6 +451,8 @@ public class DeviceProductionService {
         response.put("total", deviceIds.size());
         response.put("successCount", successCount);
         response.put("failCount", failCount);
+        response.put("noPermissionDevices", noPermissionDevices); // 无权限的设备ID列表
+        response.put("noPermissionCount", noPermissionDevices.size()); // 无权限设备数量
         return response;
     }
 

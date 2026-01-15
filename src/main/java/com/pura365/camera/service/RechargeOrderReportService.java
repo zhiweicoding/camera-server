@@ -57,6 +57,15 @@ public class RechargeOrderReportService {
     @Autowired
     private PlanCommissionService commissionService;
 
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private InstallerRepository installerRepository;
+
+    @Autowired
+    private DealerRepository dealerRepository;
+
     // 报表Excel列标题
     private static final String[] EXCEL_HEADERS = {
             "充值订单号", "下单时间", "设备ID", "我的身份", "所属经销商",
@@ -240,9 +249,53 @@ public class RechargeOrderReportService {
     /**
      * 构建查询条件
      * 直接使用订单表的快照字段进行筛选
+     * 根据当前用户角色自动过滤：
+     * - 管理员(role=3)：可查看所有订单
+     * - 装机商(isInstaller=1)：只能查看自己关联的订单
+     * - 经销商(isDealer=1)：只能查看自己关联的订单
+     * - 既是装机商又是经销商：可查看两者关联的订单(OR条件)
      */
     private QueryWrapper<PaymentOrder> buildQueryWrapper(RechargeOrderQueryRequest request) {
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
+
+        // 根据当前用户角色确定过滤条件
+        String effectiveInstallerCode = request.getInstallerCode();
+        String effectiveDealerCode = request.getVendorCode();
+        boolean needOrCondition = false; // 是否需要OR条件（既是装机商又是经销商）
+        
+        if (request.getCurrentUserId() != null) {
+            User currentUser = userRepository.selectById(request.getCurrentUserId());
+            if (currentUser != null) {
+                // 管理员可以查看所有订单，不需要强制过滤
+                boolean isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
+                
+                if (!isAdmin) {
+                    boolean isInstaller = currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null;
+                    boolean isDealer = currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null;
+                    
+                    // 装机商只能查看自己关联的订单
+                    if (isInstaller) {
+                        Installer installer = installerRepository.selectById(currentUser.getInstallerId());
+                        if (installer != null && installer.getInstallerCode() != null) {
+                            effectiveInstallerCode = installer.getInstallerCode();
+                            log.info("装机商用户查询充值订单, userId={}, installerCode={}", request.getCurrentUserId(), effectiveInstallerCode);
+                        }
+                    }
+                    
+                    // 经销商只能查看自己关联的订单
+                    if (isDealer) {
+                        Dealer dealer = dealerRepository.selectById(currentUser.getDealerId());
+                        if (dealer != null && dealer.getDealerCode() != null) {
+                            effectiveDealerCode = dealer.getDealerCode();
+                            log.info("经销商用户查询充值订单, userId={}, dealerCode={}", request.getCurrentUserId(), effectiveDealerCode);
+                        }
+                    }
+                    
+                    // 既是装机商又是经销商，需要OR条件
+                    needOrCondition = isInstaller && isDealer;
+                }
+            }
+        }
 
         if (request.getOrderId() != null && !request.getOrderId().trim().isEmpty()) {
             qw.lambda().like(PaymentOrder::getOrderId, request.getOrderId());
@@ -251,13 +304,24 @@ public class RechargeOrderReportService {
             qw.lambda().like(PaymentOrder::getDeviceId, request.getDeviceId());
         }
         
-        // 直接使用订单表的快照字段查询（vendorCode 已改为 dealerCode）
-        if (request.getVendorCode() != null && !request.getVendorCode().trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getDealerCode, request.getVendorCode());
-        }
-        // 装机商过滤
-        if (request.getInstallerCode() != null && !request.getInstallerCode().trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getInstallerCode, request.getInstallerCode());
+        // 如果既是装机商又是经销商，使用OR条件
+        if (needOrCondition && effectiveInstallerCode != null && effectiveDealerCode != null) {
+            final String finalInstallerCode = effectiveInstallerCode;
+            final String finalDealerCode = effectiveDealerCode;
+            qw.and(wrapper -> wrapper
+                .eq("installer_code", finalInstallerCode)
+                .or()
+                .eq("dealer_code", finalDealerCode)
+            );
+        } else {
+            // 经销商过滤
+            if (effectiveDealerCode != null && !effectiveDealerCode.trim().isEmpty()) {
+                qw.lambda().eq(PaymentOrder::getDealerCode, effectiveDealerCode);
+            }
+            // 装机商过滤
+            if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
+                qw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
+            }
         }
         // salesmanId 字段已废弃，PaymentOrder 表中不存在此字段
         // if (request.getSalesmanId() != null) {

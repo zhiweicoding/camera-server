@@ -13,6 +13,9 @@ import java.util.Date;
 @Schema(description = "充值订单报表查询请求")
 public class RechargeOrderQueryRequest {
 
+    @Schema(description = "当前用户ID（系统自动填充，用于权限过滤）", hidden = true)
+    private Long currentUserId;
+
     @Schema(description = "页码", example = "1")
     private Integer page = 1;
 

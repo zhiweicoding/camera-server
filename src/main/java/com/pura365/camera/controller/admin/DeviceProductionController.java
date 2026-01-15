@@ -394,6 +394,7 @@ public class DeviceProductionController {
     /**
      * 批量扫码分配经销商
      * 支持批量输入设备ID，同时设置抽佣比例
+     * 权限说明：只能分配当前用户设备管理列表中的设备
      * 请求体：{
      *   "deviceIds": ["A110000000000001", "A110000000000002"],
      *   "dealerCode": "01",
@@ -401,7 +402,9 @@ public class DeviceProductionController {
      * }
      */
     @PostMapping("/devices/batch-assign-dealer")
-    public ApiResponse<Map<String, Object>> batchAssignDealer(@RequestBody Map<String, Object> body) {
+    public ApiResponse<Map<String, Object>> batchAssignDealer(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
+            @RequestBody Map<String, Object> body) {
         try {
             @SuppressWarnings("unchecked")
             List<String> deviceIds = (List<String>) body.get("deviceIds");
@@ -417,7 +420,7 @@ public class DeviceProductionController {
                 return ApiResponse.error(400, "经销商代码必须是2位");
             }
 
-            Map<String, Object> result = productionService.batchAssignDealer(deviceIds, dealerCode, commissionRate);
+            Map<String, Object> result = productionService.batchAssignDealer(currentUserId, deviceIds, dealerCode, commissionRate);
             return ApiResponse.success(result);
         } catch (RuntimeException e) {
             return ApiResponse.error(400, e.getMessage());

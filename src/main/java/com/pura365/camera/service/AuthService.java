@@ -280,30 +280,30 @@ public class AuthService {
         boolean isDealer = user.getIsDealer() != null && user.getIsDealer() == 1;
         userMap.put("isDealer", isDealer);
 
-        // 装机商信息：根据 installer_id 查询装机商代码和公司名称
-        if (user.getInstallerId() != null) {
+        // 装机商信息：只有当用户是装机商时才返回装机商代码和公司名称
+        if (isInstaller && user.getInstallerId() != null) {
             Installer installer = installerRepository.selectById(user.getInstallerId());
             if (installer != null) {
                 userMap.put("installerId", installer.getId());
                 userMap.put("installerCode", installer.getInstallerCode());
                 userMap.put("installerName", installer.getInstallerName());
-                // 公司名称优先使用装机商的公司名称
+                // 装机商公司名称
                 if (installer.getCompanyName() != null && !installer.getCompanyName().isEmpty()) {
-                    userMap.put("companyName", installer.getCompanyName());
+                    userMap.put("installerCompanyName", installer.getCompanyName());
                 }
             }
         }
 
-        // 经销商信息：根据 dealer_id 查询经销商代码和公司名称
-        if (user.getDealerId() != null) {
+        // 经销商信息：只有当用户是经销商时才返回经销商代码和公司名称
+        if (isDealer && user.getDealerId() != null) {
             Dealer dealer = dealerRepository.selectById(user.getDealerId());
             if (dealer != null) {
                 userMap.put("dealerId", dealer.getId());
                 userMap.put("dealerCode", dealer.getDealerCode());
                 userMap.put("dealerName", dealer.getName());
-                // 如果公司名称还没有设置，使用经销商的公司名称
-                if (userMap.get("companyName") == null && dealer.getCompanyName() != null && !dealer.getCompanyName().isEmpty()) {
-                    userMap.put("companyName", dealer.getCompanyName());
+                // 经销商公司名称
+                if (dealer.getCompanyName() != null && !dealer.getCompanyName().isEmpty()) {
+                    userMap.put("dealerCompanyName", dealer.getCompanyName());
                 }
             }
         }

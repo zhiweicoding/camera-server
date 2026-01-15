@@ -40,10 +40,12 @@ public class RechargeOrderReportController {
 
     /**
      * 分页查询充值订单报表
+     * 权限说明：只能查看与当前用户关联的订单
      */
     @Operation(summary = "分页查询充值订单报表", description = "分页查询充值订单报表，支持多条件筛选")
     @GetMapping
     public ApiResponse<PageResult<RechargeOrderReportVO>> queryOrders(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
             @Parameter(description = "页码") @RequestParam(defaultValue = "1") Integer page,
             @Parameter(description = "每页数量") @RequestParam(defaultValue = "20") Integer size,
             @Parameter(description = "充值订单号") @RequestParam(required = false) String orderId,
@@ -65,6 +67,7 @@ public class RechargeOrderReportController {
                 page, size, vendorCode, salesmanId);
 
         RechargeOrderQueryRequest request = new RechargeOrderQueryRequest();
+        request.setCurrentUserId(currentUserId);
         request.setPage(page);
         request.setSize(size);
         request.setOrderId(orderId);
@@ -88,34 +91,42 @@ public class RechargeOrderReportController {
 
     /**
      * 通过POST请求分页查询（支持复杂条件）
+     * 权限说明：只能查看与当前用户关联的订单
      */
     @Operation(summary = "分页查询充值订单报表（POST）", description = "通过POST请求分页查询充值订单报表，支持复杂筛选条件")
     @PostMapping("/query")
     public ApiResponse<PageResult<RechargeOrderReportVO>> queryOrdersByPost(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
             @RequestBody RechargeOrderQueryRequest request) {
         log.info("POST分页查询充值订单报表: page={}, size={}", request.getPage(), request.getSize());
+        request.setCurrentUserId(currentUserId);
         PageResult<RechargeOrderReportVO> result = reportService.queryOrders(request);
         return ApiResponse.success(result);
     }
 
     /**
      * 查询所有符合条件的订单（不分页）
+     * 权限说明：只能查看与当前用户关联的订单
      */
     @Operation(summary = "查询所有订单", description = "查询所有符合条件的订单，用于前端预览或统计")
     @PostMapping("/list")
     public ApiResponse<List<RechargeOrderReportVO>> queryAllOrders(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
             @RequestBody RechargeOrderQueryRequest request) {
         log.info("查询所有充值订单");
+        request.setCurrentUserId(currentUserId);
         List<RechargeOrderReportVO> result = reportService.queryAllOrders(request);
         return ApiResponse.success(result);
     }
 
     /**
      * 导出充值订单报表Excel
+     * 权限说明：只能导出与当前用户关联的订单
      */
     @Operation(summary = "导出充值订单报表Excel", description = "根据筛选条件导出充值订单报表Excel文件")
     @GetMapping("/export")
     public ResponseEntity<byte[]> exportExcel(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
             @Parameter(description = "充值订单号") @RequestParam(required = false) String orderId,
             @Parameter(description = "设备ID") @RequestParam(required = false) String deviceId,
             @Parameter(description = "经销商代码") @RequestParam(required = false) String vendorCode,
@@ -134,6 +145,7 @@ public class RechargeOrderReportController {
         log.info("导出充值订单报表Excel: vendorCode={}, installerCode={}, salesmanId={}", vendorCode, installerCode, salesmanId);
 
         RechargeOrderQueryRequest request = new RechargeOrderQueryRequest();
+        request.setCurrentUserId(currentUserId);
         request.setOrderId(orderId);
         request.setDeviceId(deviceId);
         request.setVendorCode(vendorCode);
@@ -177,13 +189,16 @@ public class RechargeOrderReportController {
 
     /**
      * 通过POST请求导出（支持复杂条件）
+     * 权限说明：只能导出与当前用户关联的订单
      */
     @Operation(summary = "导出充值订单报表Excel（POST）", description = "通过POST请求导出充值订单报表Excel文件，支持复杂筛选条件")
     @PostMapping("/export")
     public ResponseEntity<byte[]> exportExcelByPost(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
             @RequestBody RechargeOrderQueryRequest request) {
 
         log.info("POST导出充值订单报表Excel");
+        request.setCurrentUserId(currentUserId);
 
         try {
             byte[] excelData = reportService.exportToExcel(request);
