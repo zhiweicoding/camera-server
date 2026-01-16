@@ -363,21 +363,68 @@ public class CommissionCalculateService {
     /**
      * 为订单填充分润信息
      * 在支付成功时调用
+     * 
+     * 字段对应：
+     * - 装机商: installer_id, installer_code, installer_rate, installer_amount
+     * - 经销商: dealer_id, dealer_code, dealer_rate, dealer_amount
      */
     public void fillOrderCommission(PaymentOrder order, String deviceId) {
+        // 获取设备信息
+        ManufacturedDevice device = getDeviceByDeviceId(deviceId);
+        if (device == null) {
+            log.warn("填充分润信息失败，设备不存在: deviceId={}", deviceId);
+            return;
+        }
+        
+        // 计算分润
         CommissionResult result = calculateCommission(deviceId, order.getAmount(), order.getProductId());
         
+        // ========== 财务信息 ==========
         order.setFeeAmount(result.getFeeAmount());
         order.setPlanCost(result.getPlanCost());
         order.setProfitAmount(result.getProfitAmount());
         
-        // 装机商信息
-        order.setInstallerId(result.getInstallerId());
-        order.setInstallerCode(result.getInstallerCode());
-        order.setInstallerAmount(result.getInstallerActualAmount());
+        // ========== 装机商信息 ==========
+        order.setInstallerId(device.getInstallerId());
         
-        // 经销商分润
-        order.setDealerAmount(result.getLevel1BaseAmount());
+        // 从 Installer 表获取装机商代码
+        if (device.getInstallerId() != null) {
+            Installer installer = installerRepository.selectById(device.getInstallerId());
+            if (installer != null) {
+                order.setInstallerCode(installer.getInstallerCode());
+            }
+        }
+        
+        // 装机商分润比例和金额
+        BigDecimal installerRate = device.getInstallerCommissionRate();
+        order.setInstallerRate(installerRate != null ? installerRate : BigDecimal.ZERO);
+        order.setInstallerAmount(result.getInstallerActualAmount() != null 
+                ? result.getInstallerActualAmount() : BigDecimal.ZERO);
+        
+        // ========== 经销商信息 ==========
+        order.setDealerId(device.getCurrentDealerId());
+        
+        // 从 Dealer 表获取经销商代码
+        if (device.getCurrentDealerId() != null) {
+            Dealer dealer = dealerRepository.selectById(device.getCurrentDealerId());
+            if (dealer != null) {
+                order.setDealerCode(dealer.getDealerCode());
+            }
+        }
+        
+        // 经销商分润比例和金额
+        BigDecimal dealerRate = device.getDealerCommissionRate();
+        order.setDealerRate(dealerRate != null ? dealerRate : BigDecimal.ZERO);
+        order.setDealerAmount(result.getLevel1BaseAmount() != null 
+                ? result.getLevel1BaseAmount() : BigDecimal.ZERO);
+        
+        // ========== 其他信息 ==========
+        order.setOnlineCountry(device.getCountry());
+        
+        log.info("填充分润信息完成: orderId={}, installerId={}, installerCode={}, installerRate={}, installerAmount={}, " +
+                "dealerId={}, dealerCode={}, dealerRate={}, dealerAmount={}",
+                order.getOrderId(), order.getInstallerId(), order.getInstallerCode(), order.getInstallerRate(), order.getInstallerAmount(),
+                order.getDealerId(), order.getDealerCode(), order.getDealerRate(), order.getDealerAmount());
     }
     
     /**

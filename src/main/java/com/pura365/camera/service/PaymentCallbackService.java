@@ -1,10 +1,13 @@
 package com.pura365.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.pura365.camera.domain.CloudPlan;
 import com.pura365.camera.domain.CloudSubscription;
 import com.pura365.camera.domain.Device;
 import com.pura365.camera.domain.PaymentOrder;
+import com.pura365.camera.enums.CloudPlanPeriod;
 import com.pura365.camera.enums.PaymentOrderStatus;
+import com.pura365.camera.repository.CloudPlanRepository;
 import com.pura365.camera.repository.CloudSubscriptionRepository;
 import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.repository.PaymentOrderRepository;
@@ -15,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Calendar;
 import java.util.Date;
 
 /**
@@ -34,16 +38,19 @@ public class PaymentCallbackService {
     private final PaymentOrderRepository paymentOrderRepository;
     private final CloudSubscriptionRepository cloudSubscriptionRepository;
     private final DeviceRepository deviceRepository;
+    private final CloudPlanRepository cloudPlanRepository;
     
     @Autowired
     private CommissionCalculateService commissionCalculateService;
 
     public PaymentCallbackService(PaymentOrderRepository paymentOrderRepository,
                                    CloudSubscriptionRepository cloudSubscriptionRepository,
-                                   DeviceRepository deviceRepository) {
+                                   DeviceRepository deviceRepository,
+                                   CloudPlanRepository cloudPlanRepository) {
         this.paymentOrderRepository = paymentOrderRepository;
         this.cloudSubscriptionRepository = cloudSubscriptionRepository;
         this.deviceRepository = deviceRepository;
+        this.cloudPlanRepository = cloudPlanRepository;
     }
 
     /**
@@ -113,19 +120,55 @@ public class PaymentCallbackService {
      */
     private boolean activateCloudStorage(PaymentOrder order) {
         try {
-            // 创建云存储订阅记录
-            CloudSubscription subscription = new CloudSubscription();
-            subscription.setUserId(order.getUserId());
-            subscription.setDeviceId(order.getDeviceId());
-            subscription.setPlanId(order.getProductId());
-            // TODO: 根据套餐类型计算过期时间，这里默认7天
-            Date expireAt = new Date(System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000L);
-            subscription.setExpireAt(expireAt);
-            subscription.setAutoRenew(0); // 默认不自动续费
-            subscription.setCreatedAt(new Date());
-            subscription.setUpdatedAt(new Date());
+            // 查询套餐信息以获取周期
+            CloudPlan plan = null;
+            if (order.getProductId() != null) {
+                LambdaQueryWrapper<CloudPlan> planWrapper = new LambdaQueryWrapper<>();
+                planWrapper.eq(CloudPlan::getPlanId, order.getProductId());
+                plan = cloudPlanRepository.selectOne(planWrapper);
+            }
+
+            // 查询现有订阅，如果存在则延长有效期
+            LambdaQueryWrapper<CloudSubscription> subWrapper = new LambdaQueryWrapper<>();
+            subWrapper.eq(CloudSubscription::getDeviceId, order.getDeviceId())
+                    .eq(CloudSubscription::getUserId, order.getUserId());
+            CloudSubscription existingSubscription = cloudSubscriptionRepository.selectOne(subWrapper);
+
+            // 计算到期时间：根据套餐周期
+            Date baseTime;
+            if (existingSubscription != null && existingSubscription.getExpireAt() != null 
+                    && existingSubscription.getExpireAt().after(new Date())) {
+                // 如果现有订阅未过期，从现有到期时间开始延长
+                baseTime = existingSubscription.getExpireAt();
+            } else {
+                // 否则从当前时间开始
+                baseTime = new Date();
+            }
+
+            Date expireAt = calculateExpireTime(baseTime, plan);
             
-            cloudSubscriptionRepository.insert(subscription);
+            if (existingSubscription != null) {
+                // 更新现有订阅
+                existingSubscription.setPlanId(order.getProductId());
+                existingSubscription.setPlanName(plan != null ? plan.getName() : null);
+                existingSubscription.setExpireAt(expireAt);
+                existingSubscription.setUpdatedAt(new Date());
+                cloudSubscriptionRepository.updateById(existingSubscription);
+                logger.info("已延长设备 {} 的云存储订阅至 {}", order.getDeviceId(), expireAt);
+            } else {
+                // 创建新的云存储订阅记录
+                CloudSubscription subscription = new CloudSubscription();
+                subscription.setUserId(order.getUserId());
+                subscription.setDeviceId(order.getDeviceId());
+                subscription.setPlanId(order.getProductId());
+                subscription.setPlanName(plan != null ? plan.getName() : null);
+                subscription.setExpireAt(expireAt);
+                subscription.setAutoRenew(0); // 默认不自动续费
+                subscription.setCreatedAt(new Date());
+                subscription.setUpdatedAt(new Date());
+                cloudSubscriptionRepository.insert(subscription);
+                logger.info("已创建设备 {} 的云存储订阅，到期时间 {}", order.getDeviceId(), expireAt);
+            }
 
             // 更新设备云存储配置
             Device device = deviceRepository.selectById(order.getDeviceId());
@@ -141,5 +184,33 @@ public class PaymentCallbackService {
             logger.error("激活云存储套餐失败: orderId={}", order.getOrderId(), e);
             return false;
         }
+    }
+
+    /**
+     * 根据套餐周期计算到期时间
+     */
+    private Date calculateExpireTime(Date baseTime, CloudPlan plan) {
+        Calendar cal = Calendar.getInstance();
+        cal.setTime(baseTime);
+        
+        if (plan != null && plan.getPeriod() != null) {
+            CloudPlanPeriod period = plan.getPeriod();
+            if (CloudPlanPeriod.YEAR == period) {
+                // 年付：加1年
+                cal.add(Calendar.YEAR, 1);
+            } else if (CloudPlanPeriod.MONTH == period) {
+                // 月付：加1个月
+                cal.add(Calendar.MONTH, 1);
+            } else {
+                // 默认：加30天
+                cal.add(Calendar.DAY_OF_MONTH, 30);
+            }
+        } else {
+            // 未找到套餐信息，默认加30天
+            cal.add(Calendar.DAY_OF_MONTH, 30);
+            logger.warn("未找到套餐信息，默认设置30天有效期");
+        }
+        
+        return cal.getTime();
     }
 }

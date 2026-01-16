@@ -122,7 +122,7 @@ public class AuthService {
         }
         userRepository.insert(user);
 
-        return buildLoginResult(user);
+        return  buildLoginResult(user);
     }
 
     /**
@@ -477,22 +477,26 @@ public class AuthService {
             // 已经存在绑定，直接返回用户
             User user = userRepository.selectById(existAuth.getUserId());
             if (user == null) {
-                throw new RuntimeException("用户不存在");
+                // 用户已被删除，删除旧的绑定记录，后续会创建新用户
+                log.warn("用户已被删除，删除旧的第三方登录绑定: authType={}, openId={}", authType, openId);
+                userAuthRepository.deleteById(existAuth.getId());
+                // 继续执行下面创建新用户的逻辑
+            } else {
+                // 更新用户信息（如果有新的）
+                boolean needUpdate = false;
+                if (nickname != null && !nickname.isEmpty() && (user.getNickname() == null || user.getNickname().isEmpty())) {
+                    user.setNickname(nickname);
+                    needUpdate = true;
+                }
+                if (avatar != null && !avatar.isEmpty() && (user.getAvatar() == null || user.getAvatar().isEmpty())) {
+                    user.setAvatar(avatar);
+                    needUpdate = true;
+                }
+                if (needUpdate) {
+                    userRepository.updateById(user);
+                }
+                return user;
             }
-            // 更新用户信息（如果有新的）
-            boolean needUpdate = false;
-            if (nickname != null && !nickname.isEmpty() && (user.getNickname() == null || user.getNickname().isEmpty())) {
-                user.setNickname(nickname);
-                needUpdate = true;
-            }
-            if (avatar != null && !avatar.isEmpty() && (user.getAvatar() == null || user.getAvatar().isEmpty())) {
-                user.setAvatar(avatar);
-                needUpdate = true;
-            }
-            if (needUpdate) {
-                userRepository.updateById(user);
-            }
-            return user;
         }
 
         // 如果有 email，尝试查找已存在的用户并绑定

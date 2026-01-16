@@ -136,6 +136,10 @@ public class Device {
     @TableField("white_led")
     private Integer whiteLed;
 
+    /** 灯泡功能状态: 0-不支持灯泡 1-支持灯泡 */
+    @TableField("bulbs_en")
+    private Integer bulbsEn;
+
     /** 最后心跳时间(用于离线检测) */
     @TableField("last_heartbeat_time")
     private LocalDateTime lastHeartbeatTime;

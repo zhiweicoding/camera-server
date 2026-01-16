@@ -56,6 +56,7 @@ public class BillingService {
     public Map<String, Object> getInstallerBillingSummary(Long currentUserId, Long installerId, String installerCode, Date startDate, Date endDate) {
         // 根据当前用户角色确定过滤条件
         String effectiveInstallerCode = installerCode;
+        Long effectiveInstallerId = installerId;
         Long effectiveDealerId = null;
         
         if (currentUserId != null) {
@@ -65,6 +66,7 @@ public class BillingService {
                 if (!isAdmin) {
                     // 装机商只能查看自己的数据
                     if (currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null) {
+                        effectiveInstallerId = currentUser.getInstallerId();
                         Installer installer = installerRepository.selectById(currentUser.getInstallerId());
                         if (installer != null) {
                             effectiveInstallerCode = installer.getInstallerCode();
@@ -80,10 +82,11 @@ public class BillingService {
         
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
-        if (installerId != null) {
-            qw.lambda().eq(PaymentOrder::getInstallerId, installerId);
-        }
-        if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
+        
+        // 装机商过滤：优先用installer_id，如果没有再用installer_code
+        if (effectiveInstallerId != null) {
+            qw.lambda().eq(PaymentOrder::getInstallerId, effectiveInstallerId);
+        } else if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
             qw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
         }
         if (effectiveDealerId != null) {

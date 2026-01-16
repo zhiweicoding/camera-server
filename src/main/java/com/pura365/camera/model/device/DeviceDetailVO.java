@@ -117,6 +117,13 @@ public class DeviceDetailVO {
     private Integer whiteLed;
 
     /**
+     * 灯泡功能状态: 0-不支持灯泡 1-支持灯泡
+     */
+    @JsonProperty("bulbs_en")
+    @Schema(description = "灯泡功能状态: 0-不支持灯泡 1-支持灯泡")
+    private Integer bulbsEn;
+
+    /**
      * 最后在线时间
      */
     @JsonProperty("last_online_at")
@@ -280,6 +287,14 @@ public class DeviceDetailVO {
 
     public void setWhiteLed(Integer whiteLed) {
         this.whiteLed = whiteLed;
+    }
+
+    public Integer getBulbsEn() {
+        return bulbsEn;
+    }
+
+    public void setBulbsEn(Integer bulbsEn) {
+        this.bulbsEn = bulbsEn;
     }
 
     public String getLastOnlineAt() {

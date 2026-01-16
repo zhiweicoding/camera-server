@@ -1232,9 +1232,9 @@ public class DeviceProductionService {
     // ==================== 私有方法 ====================
 
     /**
-     * 随机字符池：大小写字母 + 数字0-9
+     * 随机字符池：大小写字母 + 数字0-9（排除O和o，避免与数字0混淆）
      */
-    private static final String RANDOM_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    private static final String RANDOM_CHARS = "ABCDEFGHIJKLMNPQRSTUVWXYZabcdefghijklmnpqrstuvwxyz0123456789";
     private static final Random RANDOM = new Random();
 
     /**

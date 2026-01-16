@@ -341,6 +341,9 @@ public class MqttMessageService {
             if (msg.getWhiteled() != null) {
                 device.setWhiteLed(msg.getWhiteled());
             }
+            if (msg.getBulbsEn() != null) {
+                device.setBulbsEn(msg.getBulbsEn());
+            }
             
             // 更新在线状态和心跳时间
             device.setStatus(DeviceOnlineStatus.ONLINE);

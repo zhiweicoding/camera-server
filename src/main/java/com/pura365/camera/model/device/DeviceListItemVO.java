@@ -97,4 +97,18 @@ public class DeviceListItemVO {
     @JsonProperty("last_preview_url")
     private String lastPreviewUrl;
 
+    /**
+     * 白光灯状态: 0-禁用 1-启用
+     */
+    @Schema(description = "白光灯状态: 0-禁用 1-启用")
+    @JsonProperty("white_led")
+    private Integer whiteLed;
+
+    /**
+     * 灯泡功能状态: 0-不支持灯泡 1-支持灯泡
+     */
+    @Schema(description = "灯泡功能状态: 0-不支持灯泡 1-支持灯泡")
+    @JsonProperty("bulbs_en")
+    private Integer bulbsEn;
+
 }

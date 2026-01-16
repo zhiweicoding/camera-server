@@ -473,6 +473,8 @@ public class DeviceService {
         vo.setLastPreviewUrl(device.getLastPreviewUrl());
         vo.setLastOnlineAt(device.getLastOnlineTime() != null ?
                 device.getLastOnlineTime().toString() : null);
+        vo.setWhiteLed(device.getWhiteLed());
+        vo.setBulbsEn(device.getBulbsEn());
 
         return vo;
     }
@@ -510,6 +512,7 @@ public class DeviceService {
         vo.setRotate(device.getRotate());
         vo.setLightLed(device.getLightLed());
         vo.setWhiteLed(device.getWhiteLed());
+        vo.setBulbsEn(device.getBulbsEn());
 
         vo.setLastOnlineAt(device.getLastOnlineTime() != null ?
                 device.getLastOnlineTime().toString() : null);

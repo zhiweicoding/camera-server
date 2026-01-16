@@ -1,20 +1,10 @@
 package com.pura365.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.pura365.camera.domain.CloudPlan;
-import com.pura365.camera.domain.ManufacturedDevice;
-import com.pura365.camera.domain.PaymentOrder;
-import com.pura365.camera.domain.PaymentWechat;
-import com.pura365.camera.domain.Salesman;
-import com.pura365.camera.domain.UserDevice;
+import com.pura365.camera.domain.*;
 import com.pura365.camera.enums.PaymentOrderStatus;
 import com.pura365.camera.model.payment.*;
-import com.pura365.camera.repository.CloudPlanRepository;
-import com.pura365.camera.repository.ManufacturedDeviceRepository;
-import com.pura365.camera.repository.PaymentOrderRepository;
-import com.pura365.camera.repository.PaymentWechatRepository;
-import com.pura365.camera.repository.SalesmanRepository;
-import com.pura365.camera.repository.UserDeviceRepository;
+import com.pura365.camera.repository.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -65,7 +55,10 @@ public class PaymentService {
     private ManufacturedDeviceRepository manufacturedDeviceRepository;
 
     @Autowired
-    private SalesmanRepository salesmanRepository;
+    private InstallerRepository installerRepository;
+
+    @Autowired
+    private DealerRepository dealerRepository;
 
     @Autowired
     private PaypalService paypalService;
@@ -543,9 +536,12 @@ public class PaymentService {
 
     /**
      * 快照装机商/经销商分润信息到订单
-     * 修改分成比例不影响历史订单，改绑后历史单子不变
      * 
-     * 分润比例现在从设备表直接读取（在创建批次或扫码分配时设置）
+     * 字段对应：
+     * - 装机商: installer_id, installer_code, installer_rate, installer_amount
+     * - 经销商: dealer_id, dealer_code, dealer_rate, dealer_amount
+     * 
+     * 分润比例从设备表读取（installer_commission_rate, dealer_commission_rate）
      */
     private void snapshotVendorAndSalesmanInfo(PaymentOrder order, String deviceId) {
         // 根据设备ID获取生产设备信息
@@ -554,56 +550,69 @@ public class PaymentService {
         ManufacturedDevice device = manufacturedDeviceRepository.selectOne(wrapper);
         
         if (device == null) {
+            log.warn("设备不存在，无法快照分润信息: deviceId={}", deviceId);
+            return;
+        }
+        
+        BigDecimal orderAmount = order.getAmount();
+        if (orderAmount == null || orderAmount.compareTo(BigDecimal.ZERO) <= 0) {
             return;
         }
 
-        // 快照经销商代码
-        //order.setVendorCode(device.getVendorCode());
+        // ========== 装机商信息 ==========
+        order.setInstallerId(device.getInstallerId());
         
-        // 从设备表读取装机商和经销商的分润比例
-        BigDecimal installerRate = device.getInstallerCommissionRate();
-        BigDecimal dealerRate = device.getDealerCommissionRate();
-        BigDecimal orderAmount = order.getAmount();
-        
-        if (orderAmount == null) {
-            return;
+        // 从 Installer 表获取装机商代码
+        if (device.getInstallerId() != null) {
+            Installer installer = installerRepository.selectById(device.getInstallerId());
+            if (installer != null) {
+                order.setInstallerCode(installer.getInstallerCode());
+            }
         }
         
-        // 计算装机商分润金额
-        BigDecimal installerAmount = BigDecimal.ZERO;
+        // 装机商分润比例和金额
+        BigDecimal installerRate = device.getInstallerCommissionRate();
+        order.setInstallerRate(installerRate != null ? installerRate : BigDecimal.ZERO);
         if (installerRate != null && installerRate.compareTo(BigDecimal.ZERO) > 0) {
-            installerAmount = orderAmount
+            BigDecimal installerAmount = orderAmount
                     .multiply(installerRate)
                     .divide(new BigDecimal("100"), 2, BigDecimal.ROUND_HALF_UP);
+            order.setInstallerAmount(installerAmount);
+        } else {
+            order.setInstallerAmount(BigDecimal.ZERO);
+        }
+
+        // ========== 经销商信息 ==========
+        order.setDealerId(device.getCurrentDealerId());
+        
+        // 从 Dealer 表获取经销商代码
+        if (device.getCurrentDealerId() != null) {
+            Dealer dealer = dealerRepository.selectById(device.getCurrentDealerId());
+            if (dealer != null) {
+                order.setDealerCode(dealer.getDealerCode());
+            }
         }
         
-        // 计算经销商分润金额
-        BigDecimal dealerAmount = BigDecimal.ZERO;
+        // 经销商分润比例和金额
+        BigDecimal dealerRate = device.getDealerCommissionRate();
+        order.setDealerRate(dealerRate != null ? dealerRate : BigDecimal.ZERO);
         if (dealerRate != null && dealerRate.compareTo(BigDecimal.ZERO) > 0) {
-            dealerAmount = orderAmount
+            BigDecimal dealerAmount = orderAmount
                     .multiply(dealerRate)
                     .divide(new BigDecimal("100"), 2, BigDecimal.ROUND_HALF_UP);
+            order.setDealerAmount(dealerAmount);
+        } else {
+            order.setDealerAmount(BigDecimal.ZERO);
         }
+
+        // ========== 其他信息 ==========
+        // 设备上线国家
+        order.setOnlineCountry(device.getCountry());
         
-        // 快照装机商分润信息
-        order.setInstallerCode(device.getAssemblerCode()); // 装机商代码
-        order.setInstallerRate(installerRate);              // 装机商分润比例
-        order.setInstallerAmount(installerAmount);          // 装机商分润金额
-        
-        // 快照经销商分润信息
-        order.setDealerCode(device.getVendorCode());        // 经销商代码
-        order.setDealerRate(dealerRate);                    // 经销商分润比例
-        order.setDealerAmount(dealerAmount);                // 经销商分润金额
-        
-        // 如果有经销商ID，快照经销商ID
-        if (device.getCurrentDealerId() != null) {
-            order.setDealerId(device.getCurrentDealerId());
-        }
-        
-        // 兼容旧字段（保留原有逻辑，后续可删除）
-        order.setCommissionRate(installerRate);
-//        order.setVendorAmount(installerAmount);
-//        order.setSalesmanAmount(dealerAmount);
+        log.info("快照分润信息: deviceId={}, installerId={}, installerCode={}, installerRate={}, installerAmount={}, " +
+                "dealerId={}, dealerCode={}, dealerRate={}, dealerAmount={}",
+                deviceId, order.getInstallerId(), order.getInstallerCode(), order.getInstallerRate(), order.getInstallerAmount(),
+                order.getDealerId(), order.getDealerCode(), order.getDealerRate(), order.getDealerAmount());
     }
 
     /**

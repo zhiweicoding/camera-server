@@ -39,6 +39,9 @@ public class MqttDeviceInfoMessage extends MqttBaseMessage {
     @JsonProperty("whiteled")
     private Integer whiteled; // 0: 禁用白光, 1: 启用白光
     
+    @JsonProperty("bulbs_en")
+    private Integer bulbsEn; // 0: 不支持灯泡, 1: 支持灯泡
+    
     // Getters and Setters
     public String getUid() { return uid; }
     public void setUid(String uid) { this.uid = uid; }
@@ -72,4 +75,7 @@ public class MqttDeviceInfoMessage extends MqttBaseMessage {
     
     public Integer getWhiteled() { return whiteled; }
     public void setWhiteled(Integer whiteled) { this.whiteled = whiteled; }
+    
+    public Integer getBulbsEn() { return bulbsEn; }
+    public void setBulbsEn(Integer bulbsEn) { this.bulbsEn = bulbsEn; }
 }
