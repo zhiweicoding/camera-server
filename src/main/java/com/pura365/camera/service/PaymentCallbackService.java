@@ -128,10 +128,12 @@ public class PaymentCallbackService {
                 plan = cloudPlanRepository.selectOne(planWrapper);
             }
 
-            // 查询现有订阅，如果存在则延长有效期
+            // 查询现有订阅，如果存在则延长有效期（按到期时间降序取最新的一条）
             LambdaQueryWrapper<CloudSubscription> subWrapper = new LambdaQueryWrapper<>();
             subWrapper.eq(CloudSubscription::getDeviceId, order.getDeviceId())
-                    .eq(CloudSubscription::getUserId, order.getUserId());
+                    .eq(CloudSubscription::getUserId, order.getUserId())
+                    .orderByDesc(CloudSubscription::getExpireAt)
+                    .last("LIMIT 1");
             CloudSubscription existingSubscription = cloudSubscriptionRepository.selectOne(subWrapper);
 
             // 计算到期时间：根据套餐周期
