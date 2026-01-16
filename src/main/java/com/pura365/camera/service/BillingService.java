@@ -51,46 +51,33 @@ public class BillingService {
 
     /**
      * 获取装机商账单汇总统计
-     * 根据当前用户角色自动过滤
+     * 直接用 installerCode 查询 payment_order 表
      */
     public Map<String, Object> getInstallerBillingSummary(Long currentUserId, Long installerId, String installerCode, Date startDate, Date endDate) {
-        // 根据当前用户角色确定过滤条件
+        // 确定有效的装机商代码
         String effectiveInstallerCode = installerCode;
-        Long effectiveInstallerId = installerId;
-        Long effectiveDealerId = null;
         
+        // 非管理员只能查看自己的数据
         if (currentUserId != null) {
             User currentUser = userRepository.selectById(currentUserId);
             if (currentUser != null) {
                 boolean isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
-                if (!isAdmin) {
-                    // 装机商只能查看自己的数据
-                    if (currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null) {
-                        effectiveInstallerId = currentUser.getInstallerId();
-                        Installer installer = installerRepository.selectById(currentUser.getInstallerId());
-                        if (installer != null) {
-                            effectiveInstallerCode = installer.getInstallerCode();
-                        }
-                    }
-                    // 经销商只能查看自己的数据
-                    if (currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null) {
-                        effectiveDealerId = currentUser.getDealerId();
+                if (!isAdmin && currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null) {
+                    Installer installer = installerRepository.selectById(currentUser.getInstallerId());
+                    if (installer != null) {
+                        effectiveInstallerCode = installer.getInstallerCode();
                     }
                 }
             }
         }
         
+        // 构建查询条件
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
         
-        // 装机商过滤：优先用installer_id，如果没有再用installer_code
-        if (effectiveInstallerId != null) {
-            qw.lambda().eq(PaymentOrder::getInstallerId, effectiveInstallerId);
-        } else if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
+        // 用 installerCode 查询
+        if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
             qw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
-        }
-        if (effectiveDealerId != null) {
-            qw.lambda().eq(PaymentOrder::getDealerId, effectiveDealerId);
         }
         if (startDate != null) {
             qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
