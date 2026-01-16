@@ -117,10 +117,7 @@ public class DeviceService {
                 .map(UserDevice::getDeviceId)
                 .collect(Collectors.toList());
         
-        // 并行向所有设备发送 MQTT CODE 11，然后统一等待
-        requestDeviceInfoParallel(deviceIds);
-        
-        // 从数据库重新查询最新数据
+        // 直接从数据库查询设备信息（状态由定时心跳检测更新）
         List<Device> devices = deviceIds.stream()
                 .map(deviceRepository::selectById)
                 .filter(Objects::nonNull)
@@ -140,16 +137,8 @@ public class DeviceService {
      * @return 设备详情，不存在返回null
      */
     public DeviceDetailVO getDeviceDetail(Long userId, String deviceId) {
+        // 直接从数据库查询设备信息（状态由定时心跳检测更新）
         Device device = deviceRepository.selectById(deviceId);
-        if (device == null) {
-            return null;
-        }
-        
-        // 发送 MQTT CODE 11 并等待响应（包括离线设备，用于唤醒低功耗设备）
-        requestDeviceInfoSync(deviceId);
-        
-        // 从数据库重新查询最新数据
-        device = deviceRepository.selectById(deviceId);
         if (device == null) {
             return null;
         }
