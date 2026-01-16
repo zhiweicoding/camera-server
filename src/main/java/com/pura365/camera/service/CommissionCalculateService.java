@@ -117,8 +117,13 @@ public class CommissionCalculateService {
         // 1. 获取套餐分润配置（手续费、成本等）
         PlanCommission planCommission = getPlanCommission(planId);
         if (planCommission == null) {
-            log.warn("未找到套餐分润配置: planId={}", planId);
-            return result;
+            log.warn("未找到套餐分润配置: planId={}，将使用默认值计算", planId);
+            // 使用默认配置：手续费0，成本0
+            planCommission = new PlanCommission();
+            planCommission.setPlanId(planId);
+            planCommission.setFeeRate(BigDecimal.ZERO);
+            planCommission.setFeeFixed(BigDecimal.ZERO);
+            planCommission.setPlanCost(BigDecimal.ZERO);
         }
 
         // 2. 获取设备信息（分润比例存储在设备级别）
