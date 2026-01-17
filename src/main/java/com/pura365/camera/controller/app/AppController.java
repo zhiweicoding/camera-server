@@ -1,10 +1,14 @@
 package com.pura365.camera.controller.app;
 
+import com.pura365.camera.domain.ManufacturedDevice;
 import com.pura365.camera.model.ApiResponse;
+import com.pura365.camera.service.DeviceProductionService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -22,6 +26,9 @@ import java.util.Map;
 public class AppController {
 
     private static final Logger log = LoggerFactory.getLogger(AppController.class);
+
+    @Autowired
+    private DeviceProductionService deviceProductionService;
     /**
      * 版本检查
      * GET /api/app/version?platform=ios&current_version=1.0.0
@@ -82,5 +89,36 @@ public class AppController {
                 .format(new java.util.Date()));
         
         return ApiResponse.success(result);
+    }
+
+    /**
+     * 检查设备是否在库中
+     * GET /api/app/device/exists?device_id=xxx
+     * 用于APP扫描机身码时判断设备是否在manufactured_device表中
+     */
+    @Operation(summary = "检查设备是否在库中", description = "根据设备ID判断设备是否已入库(manufactured_device表)")
+    @GetMapping("/device/exists")
+    public ApiResponse<Map<String, Object>> checkDeviceExists(
+            @Parameter(description = "设备ID(机身码)") @RequestParam(name = "device_id") String deviceId) {
+
+        log.info("检查设备是否在库 deviceId={}", deviceId);
+
+        if (deviceId == null || deviceId.trim().isEmpty()) {
+            log.warn("检查设备缺少参数 deviceId={}", deviceId);
+            return ApiResponse.error(400, "device_id 不能为空");
+        }
+
+        ManufacturedDevice device = deviceProductionService.getDevice(deviceId.trim());
+        boolean exists = device != null;
+
+        Map<String, Object> data = new HashMap<>();
+        data.put("exists", exists);
+        data.put("device_id", deviceId);
+        if (exists) {
+            data.put("status", device.getStatus() != null ? device.getStatus().getCode() : null);
+        }
+
+        log.info("检查设备结果 deviceId={}, exists={}", deviceId, exists);
+        return ApiResponse.success(data);
     }
 }
