@@ -1,7 +1,10 @@
 package com.pura365.camera.controller.app;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.pura365.camera.domain.ManufacturedDevice;
+import com.pura365.camera.domain.UserDevice;
 import com.pura365.camera.model.ApiResponse;
+import com.pura365.camera.repository.UserDeviceRepository;
 import com.pura365.camera.service.DeviceProductionService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -29,6 +32,9 @@ public class AppController {
 
     @Autowired
     private DeviceProductionService deviceProductionService;
+
+    @Autowired
+    private UserDeviceRepository userDeviceRepository;
     /**
      * 版本检查
      * GET /api/app/version?platform=ios&current_version=1.0.0
@@ -118,7 +124,16 @@ public class AppController {
             data.put("status", device.getStatus() != null ? device.getStatus().getCode() : null);
         }
 
-        log.info("检查设备结果 deviceId={}, exists={}", deviceId, exists);
+        // 检查设备是否已被绑定
+        Long bindCount = userDeviceRepository.selectCount(
+                new LambdaQueryWrapper<UserDevice>().eq(UserDevice::getDeviceId, deviceId.trim()));
+        boolean bound = bindCount != null && bindCount > 0;
+        data.put("bound", bound);
+        if (bound) {
+            log.info("设备已被绑定 deviceId={}", deviceId);
+        }
+
+        log.info("检查设备结果 deviceId={}, exists={}, bound={}", deviceId, exists, bound);
         return ApiResponse.success(data);
     }
 }
