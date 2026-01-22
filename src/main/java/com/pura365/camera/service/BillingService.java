@@ -907,4 +907,278 @@ public class BillingService {
         result.put("deviceCount", devices.size());
         return result;
     }
+
+    /**
+     * 批量结算订单
+     * @param orderIds 订单ID列表
+     * @param operatorId 操作员ID
+     * @return 结算成功的订单数量
+     */
+    @Transactional
+    public int settleOrders(List<String> orderIds, Long operatorId) {
+        if (orderIds == null || orderIds.isEmpty()) {
+            return 0;
+        }
+        log.info("批量结算订单: operatorId={}, orderIds={}", operatorId, orderIds);
+        
+        int count = 0;
+        Date now = new Date();
+        for (String orderId : orderIds) {
+            QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
+            qw.lambda().eq(PaymentOrder::getOrderId, orderId)
+                    .eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID)
+                    .eq(PaymentOrder::getIsSettled, 0);
+            PaymentOrder order = orderRepository.selectOne(qw);
+            if (order != null) {
+                order.setIsSettled(1);
+                order.setUpdatedAt(now);
+                orderRepository.updateById(order);
+                count++;
+            }
+        }
+        log.info("结算完成: 成功结算 {} 笔订单", count);
+        return count;
+    }
+
+    /**
+     * 获取结算订单列表
+     * @param installerCode 装机商代码（可选）
+     * @param dealerId 经销商ID（可选）
+     * @param isSettled 结算状态：null-全部，0-未结算，1-已结算
+     * @param startDate 开始日期
+     * @param endDate 结束日期
+     * @param page 页码
+     * @param size 每页条数
+     */
+    public Map<String, Object> getSettlementOrders(String installerCode, Long dealerId, Integer isSettled,
+                                                    Date startDate, Date endDate, Integer page, Integer size) {
+        QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
+        qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
+        
+        if (installerCode != null && !installerCode.trim().isEmpty()) {
+            qw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
+        }
+        if (dealerId != null) {
+            qw.lambda().eq(PaymentOrder::getDealerId, dealerId);
+        }
+        if (isSettled != null) {
+            qw.lambda().eq(PaymentOrder::getIsSettled, isSettled);
+        }
+        if (startDate != null) {
+            qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
+        }
+        if (endDate != null) {
+            qw.lambda().le(PaymentOrder::getPaidAt, endDate);
+        }
+        qw.lambda().orderByDesc(PaymentOrder::getPaidAt);
+
+        // 分页查询
+        int offset = (page - 1) * size;
+        QueryWrapper<PaymentOrder> countQw = qw.clone();
+        qw.last("LIMIT " + offset + ", " + size);
+        List<PaymentOrder> list = orderRepository.selectList(qw);
+        long total = orderRepository.selectCount(countQw);
+
+        // 计算汇总数据
+        QueryWrapper<PaymentOrder> sumQw = new QueryWrapper<>();
+        sumQw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
+        if (installerCode != null && !installerCode.trim().isEmpty()) {
+            sumQw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
+        }
+        if (dealerId != null) {
+            sumQw.lambda().eq(PaymentOrder::getDealerId, dealerId);
+        }
+        if (startDate != null) {
+            sumQw.lambda().ge(PaymentOrder::getPaidAt, startDate);
+        }
+        if (endDate != null) {
+            sumQw.lambda().le(PaymentOrder::getPaidAt, endDate);
+        }
+        List<PaymentOrder> allOrders = orderRepository.selectList(sumQw);
+        
+        BigDecimal totalAmount = BigDecimal.ZERO;
+        BigDecimal settledAmount = BigDecimal.ZERO;
+        BigDecimal unsettledAmount = BigDecimal.ZERO;
+        BigDecimal totalProfitAmount = BigDecimal.ZERO;
+        BigDecimal settledProfitAmount = BigDecimal.ZERO;
+        BigDecimal unsettledProfitAmount = BigDecimal.ZERO;
+        
+        for (PaymentOrder order : allOrders) {
+            BigDecimal amount = order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO;
+            // 根据查询类型确定分润金额（装机商/经销商）
+            BigDecimal profit;
+            if (dealerId != null) {
+                profit = order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO;
+            } else {
+                profit = order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO;
+            }
+            
+            totalAmount = totalAmount.add(amount);
+            totalProfitAmount = totalProfitAmount.add(profit);
+            
+            if (order.getIsSettled() != null && order.getIsSettled() == 1) {
+                settledAmount = settledAmount.add(amount);
+                settledProfitAmount = settledProfitAmount.add(profit);
+            } else {
+                unsettledAmount = unsettledAmount.add(amount);
+                unsettledProfitAmount = unsettledProfitAmount.add(profit);
+            }
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("list", list);
+        result.put("total", total);
+        result.put("page", page);
+        result.put("size", size);
+        result.put("totalAmount", totalAmount);
+        result.put("settledAmount", settledAmount);
+        result.put("unsettledAmount", unsettledAmount);
+        result.put("totalProfitAmount", totalProfitAmount);
+        result.put("settledProfitAmount", settledProfitAmount);
+        result.put("unsettledProfitAmount", unsettledProfitAmount);
+        return result;
+    }
+
+    // 结算表Excel列标题
+    private static final String[] SETTLEMENT_HEADERS = {
+            "订单号", "设备ID", "上线国家", "装机商代码", "装机商名称", "经销商ID", "经销商名称",
+            "套餐名称", "支付金额", "支付币种", "支付时间", "分润金额", "结算状态"
+    };
+
+    /**
+     * 导出结算表Excel
+     */
+    public Map<String, Object> exportSettlementExcel(String installerCode, Long dealerId, 
+                                                      Date startDate, Date endDate) throws IOException {
+        log.info("导出结算表: installerCode={}, dealerId={}, startDate={}, endDate={}", 
+                installerCode, dealerId, startDate, endDate);
+
+        QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
+        qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
+        if (installerCode != null && !installerCode.trim().isEmpty()) {
+            qw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
+        }
+        if (dealerId != null) {
+            qw.lambda().eq(PaymentOrder::getDealerId, dealerId);
+        }
+        if (startDate != null) {
+            qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
+        }
+        if (endDate != null) {
+            qw.lambda().le(PaymentOrder::getPaidAt, endDate);
+        }
+        qw.lambda().orderByDesc(PaymentOrder::getPaidAt);
+
+        List<PaymentOrder> orders = orderRepository.selectList(qw);
+        boolean isDealerSettlement = dealerId != null;
+        
+        byte[] excelData = createSettlementExcel(orders, isDealerSettlement);
+        
+        Map<String, Object> result = new HashMap<>();
+        result.put("isZip", false);
+        result.put("data", excelData);
+        return result;
+    }
+
+    /**
+     * 创建结算表Excel
+     */
+    private byte[] createSettlementExcel(List<PaymentOrder> orders, boolean isDealerSettlement) throws IOException {
+        try (Workbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("结算表");
+
+            // 创建标题样式
+            CellStyle headerStyle = workbook.createCellStyle();
+            headerStyle.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
+            headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+            headerStyle.setBorderBottom(BorderStyle.THIN);
+            headerStyle.setBorderTop(BorderStyle.THIN);
+            headerStyle.setBorderLeft(BorderStyle.THIN);
+            headerStyle.setBorderRight(BorderStyle.THIN);
+            headerStyle.setAlignment(HorizontalAlignment.CENTER);
+            Font headerFont = workbook.createFont();
+            headerFont.setBold(true);
+            headerStyle.setFont(headerFont);
+
+            // 创建数据样式
+            CellStyle dataStyle = workbook.createCellStyle();
+            dataStyle.setBorderBottom(BorderStyle.THIN);
+            dataStyle.setBorderTop(BorderStyle.THIN);
+            dataStyle.setBorderLeft(BorderStyle.THIN);
+            dataStyle.setBorderRight(BorderStyle.THIN);
+
+            // 创建金额样式
+            CellStyle moneyStyle = workbook.createCellStyle();
+            moneyStyle.setBorderBottom(BorderStyle.THIN);
+            moneyStyle.setBorderTop(BorderStyle.THIN);
+            moneyStyle.setBorderLeft(BorderStyle.THIN);
+            moneyStyle.setBorderRight(BorderStyle.THIN);
+            DataFormat format = workbook.createDataFormat();
+            moneyStyle.setDataFormat(format.getFormat("#,##0.00"));
+
+            // 写入标题行
+            Row headerRow = sheet.createRow(0);
+            for (int i = 0; i < SETTLEMENT_HEADERS.length; i++) {
+                Cell cell = headerRow.createCell(i);
+                cell.setCellValue(SETTLEMENT_HEADERS[i]);
+                cell.setCellStyle(headerStyle);
+            }
+
+            // 写入数据行
+            SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+            int rowNum = 1;
+            BigDecimal totalProfit = BigDecimal.ZERO;
+            
+            for (PaymentOrder order : orders) {
+                Row row = sheet.createRow(rowNum++);
+                int col = 0;
+
+                createTextCell(row, col++, order.getOrderId(), dataStyle);
+                createTextCell(row, col++, order.getDeviceId(), dataStyle);
+                createTextCell(row, col++, order.getOnlineCountry(), dataStyle);
+                createTextCell(row, col++, order.getInstallerCode(), dataStyle);
+                createTextCell(row, col++, getInstallerName(order.getInstallerId()), dataStyle);
+                createTextCell(row, col++, order.getDealerId() != null ? String.valueOf(order.getDealerId()) : "", dataStyle);
+                createTextCell(row, col++, getDealerName(order.getDealerId()), dataStyle);
+                createTextCell(row, col++, getProductName(order.getProductId()), dataStyle);
+                createMoneyCell(row, col++, order.getAmount(), moneyStyle);
+                createTextCell(row, col++, order.getCurrency(), dataStyle);
+                createTextCell(row, col++, order.getPaidAt() != null ? sdf.format(order.getPaidAt()) : "", dataStyle);
+                
+                // 分润金额（根据类型）
+                BigDecimal profit = isDealerSettlement ? 
+                        (order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO) :
+                        (order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO);
+                createMoneyCell(row, col++, profit, moneyStyle);
+                totalProfit = totalProfit.add(profit);
+                
+                createTextCell(row, col++, order.getIsSettled() != null && order.getIsSettled() == 1 ? "已结算" : "未结算", dataStyle);
+            }
+
+            // 写入汇总行
+            Row sumRow = sheet.createRow(rowNum);
+            Cell sumLabelCell = sumRow.createCell(0);
+            sumLabelCell.setCellValue("合计");
+            sumLabelCell.setCellStyle(headerStyle);
+            
+            Cell sumProfitCell = sumRow.createCell(11);
+            sumProfitCell.setCellValue(totalProfit.doubleValue());
+            sumProfitCell.setCellStyle(moneyStyle);
+
+            // 自动调整列宽
+            for (int i = 0; i < SETTLEMENT_HEADERS.length; i++) {
+                sheet.autoSizeColumn(i);
+                int width = sheet.getColumnWidth(i);
+                if (width < 3000) {
+                    sheet.setColumnWidth(i, 3000);
+                } else if (width > 15000) {
+                    sheet.setColumnWidth(i, 15000);
+                }
+            }
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            workbook.write(out);
+            return out.toByteArray();
+        }
+    }
 }

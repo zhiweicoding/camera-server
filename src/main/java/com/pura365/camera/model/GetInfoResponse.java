@@ -1,7 +1,9 @@
 package com.pura365.camera.model;
 
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+@JsonAutoDetect(getterVisibility = JsonAutoDetect.Visibility.NONE)
 public class GetInfoResponse {
     @JsonProperty("DeviceID")
     private String DeviceID;

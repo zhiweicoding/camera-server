@@ -17,6 +17,7 @@ import com.pura365.camera.repository.CloudSubscriptionRepository;
 import com.pura365.camera.repository.CloudVideoRepository;
 import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.repository.DeviceShareRepository;
+import com.pura365.camera.repository.ManufacturedDeviceRepository;
 import com.pura365.camera.repository.UserDeviceRepository;
 import com.pura365.camera.util.TimeValidator;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -62,12 +63,21 @@ public class CameraService {
     @Autowired
     private MessageService messageService;
     
+    @Autowired
+    private ManufacturedDeviceRepository manufacturedDeviceRepository;
+    
     /**
      * 获取设备信息
      * 设备调用此接口时，自动新增或更新设备记录
      */
     public GetInfoResponse getDeviceInfo(GetInfoRequest info) {
         log.info("设备请求配置信息 - ID: {}, MAC: {}, Region: {}", info.getId(), info.getMac(), info.getRegion());
+        
+        // 校验设备ID是否是本系统生产的
+        if (!isManufacturedDevice(info.getId())) {
+            log.warn("设备ID校验失败，非本系统生产的设备 - ID: {}", info.getId());
+            return null;
+        }
         
         // 查找或创建设备记录
         Device device = null;
@@ -331,21 +341,22 @@ public class CameraService {
     /**
      * 配置云存储和S3凭证
      * 根据设备region选择七牛云（国内）或Vultr（国外）
+     * 注意：无论是否有订阅，都需要返回S3配置信息
      */
     private void configureCloudStorage(Device device, GetInfoResponse response) {
         // 检查是否有有效订阅
         boolean hasSubscription = checkCloudStorageSubscription(device.getId());
         
-        if (!hasSubscription) {
+        if (hasSubscription) {
+            // 有订阅，设置为连续存储模式
+            // TODO: 后续可从 CloudSubscription 表或 设备设置中读取具体模式
+            // 1 = 连续存储, 2 = 事件存储
+            response.setCloudStorage(1);
+        } else {
             response.setCloudStorage(0); // 未启用
-            return;
         }
         
-        // 有订阅，设置为连续存储模式
-        // TODO: 后续可从 CloudSubscription 表或 设备设置中读取具体模式
-        // 1 = 连续存储, 2 = 事件存储
-        response.setCloudStorage(1);
-        
+        // 无论是否有订阅，都返回S3配置信息
         // 判断设备区域
         boolean isChina = isChina(device.getRegion());
         
@@ -358,7 +369,7 @@ public class CameraService {
             response.setS3AccessKey(qiniuConfig.getAccessKey());
             response.setS3SecretKey(qiniuConfig.getSecretKey());
 
-            log.info("配置七牛云S3凭证 - deviceId: {}", device.getId());
+            log.info("配置七牛云S3凭证 - deviceId: {}, hasSubscription: {}", device.getId(), hasSubscription);
         } else {
             // 国外：使用Vultr S3配置
             // Bucket固定为 cloud-storage，摄像头默认使用
@@ -368,7 +379,25 @@ public class CameraService {
             response.setS3AccessKey(vultrConfig.getAccessKey());
             response.setS3SecretKey(vultrConfig.getSecretKey());
             
-            log.info("配置Vultr S3凭证 - deviceId: {}", device.getId());
+            log.info("配置Vultr S3凭证 - deviceId: {}, hasSubscription: {}", device.getId(), hasSubscription);
+        }
+    }
+    
+    /**
+     * 校验设备ID是否是本系统生产的
+     * 通过查询 manufactured_device 表确认
+     */
+    private boolean isManufacturedDevice(String deviceId) {
+        if (deviceId == null || deviceId.trim().isEmpty()) {
+            return false;
+        }
+        try {
+            QueryWrapper<com.pura365.camera.domain.ManufacturedDevice> qw = new QueryWrapper<>();
+            qw.lambda().eq(com.pura365.camera.domain.ManufacturedDevice::getDeviceId, deviceId);
+            return manufacturedDeviceRepository.selectCount(qw) > 0;
+        } catch (Exception e) {
+            log.error("校验设备ID失败 - deviceId: {}", deviceId, e);
+            return false;
         }
     }
     

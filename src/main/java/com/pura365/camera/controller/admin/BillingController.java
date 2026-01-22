@@ -11,6 +11,9 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import com.pura365.camera.domain.User;
+import com.pura365.camera.repository.UserRepository;
+
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -29,6 +32,9 @@ public class BillingController {
 
     @Autowired
     private BillingService billingService;
+
+    @Autowired
+    private UserRepository userRepository;
 
     /**
      * 获取装机商账单汇总
@@ -180,6 +186,92 @@ public class BillingController {
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(isZip ? MediaType.valueOf("application/zip") : MediaType.APPLICATION_OCTET_STREAM);
+            headers.set(HttpHeaders.CONTENT_DISPOSITION,
+                    "attachment; filename=\"" + encodedFilename + "\"; filename*=UTF-8''" + encodedFilename);
+            headers.setContentLength(data.length);
+
+            return ResponseEntity.ok()
+                    .headers(headers)
+                    .body(data);
+
+        } catch (IOException e) {
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    // ==================== 结算相关接口 ====================
+
+    /**
+     * 获取结算订单列表
+     * 用于查看指定装机商/经销商的待结算/已结算订单
+     */
+    @Operation(summary = "结算订单列表", description = "获取指定装机商/经销商的结算订单列表")
+    @GetMapping("/settlement-orders")
+    public ApiResponse<Map<String, Object>> getSettlementOrders(
+            @RequestParam(required = false) String installerCode,
+            @RequestParam(required = false) Long dealerId,
+            @RequestParam(required = false) Integer isSettled,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate,
+            @RequestParam(defaultValue = "1") Integer page,
+            @RequestParam(defaultValue = "20") Integer size) {
+        return ApiResponse.success(billingService.getSettlementOrders(installerCode, dealerId, isSettled, startDate, endDate, page, size));
+    }
+
+    /**
+     * 批量结算订单
+     * 权限：仅管理员(role=3)可操作
+     */
+    @Operation(summary = "批量结算", description = "批量结算订单，仅管理员可操作")
+    @PostMapping("/settle")
+    public ApiResponse<Map<String, Object>> settleOrders(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
+            @RequestBody Map<String, Object> body) {
+        // 权限校验：仅管理员可操作
+        if (currentUserId == null) {
+            return ApiResponse.error(401, "未登录");
+        }
+        User user = userRepository.selectById(currentUserId);
+        if (user == null || user.getRole() == null || user.getRole() != 3) {
+            return ApiResponse.error(403, "无权限操作，仅管理员可进行结算");
+        }
+
+        @SuppressWarnings("unchecked")
+        List<String> orderIds = (List<String>) body.get("orderIds");
+        if (orderIds == null || orderIds.isEmpty()) {
+            return ApiResponse.error(400, "订单ID列表不能为空");
+        }
+
+        int count = billingService.settleOrders(orderIds, currentUserId);
+        Map<String, Object> result = new java.util.HashMap<>();
+        result.put("settledCount", count);
+        result.put("message", "成功结算 " + count + " 笔订单");
+        return ApiResponse.success(result);
+    }
+
+    /**
+     * 导出结算表Excel
+     */
+    @Operation(summary = "导出结算表", description = "导出指定装机商/经销商的结算表Excel")
+    @GetMapping("/export-settlement")
+    public ResponseEntity<byte[]> exportSettlement(
+            @RequestParam(required = false) String installerCode,
+            @RequestParam(required = false) Long dealerId,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate) {
+        try {
+            Map<String, Object> result = billingService.exportSettlementExcel(installerCode, dealerId, startDate, endDate);
+            byte[] data = (byte[]) result.get("data");
+
+            // 生成文件名
+            String timestamp = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
+            String targetName = installerCode != null ? installerCode : (dealerId != null ? "经销商" + dealerId : "全部");
+            String filename = "结算表_" + targetName + "_" + timestamp + ".xlsx";
+            String encodedFilename = URLEncoder.encode(filename, StandardCharsets.UTF_8.toString())
+                    .replaceAll("\\+", "%20");
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             headers.set(HttpHeaders.CONTENT_DISPOSITION,
                     "attachment; filename=\"" + encodedFilename + "\"; filename*=UTF-8''" + encodedFilename);
             headers.setContentLength(data.length);

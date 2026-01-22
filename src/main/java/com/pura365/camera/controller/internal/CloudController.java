@@ -608,8 +608,11 @@ public class CloudController {
                 continue;
             }
 
-            // 必须包含M
-            int mIndex = fileName.indexOf('m');
+            // 必须包含M（大小写都检查）
+            int mIndex = fileName.indexOf('M');
+            if (mIndex <= 0) {
+                mIndex = fileName.indexOf('m');
+            }
             if (mIndex <= 0) {
                 continue;
             }
