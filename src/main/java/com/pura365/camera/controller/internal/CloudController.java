@@ -614,9 +614,9 @@ public class CloudController {
 
             // 检查是否包含M（大小写都检查）
             int mIndex = fileName.indexOf('M');
-            if (mIndex <= 0) {
-                mIndex = fileName.indexOf('m');
-            }
+//            if (mIndex <= 0) {
+//                mIndex = fileName.indexOf('m');
+//            }
 
             if (mIndex > 0) {
                 // 事件录像：文件名包含M

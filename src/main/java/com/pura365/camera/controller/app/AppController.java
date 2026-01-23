@@ -124,16 +124,16 @@ public class AppController {
             data.put("status", device.getStatus() != null ? device.getStatus().getCode() : null);
         }
 
-        // 检查设备是否已被绑定
-        Long bindCount = userDeviceRepository.selectCount(
-                new LambdaQueryWrapper<UserDevice>().eq(UserDevice::getDeviceId, deviceId.trim()));
-        boolean bound = bindCount != null && bindCount > 0;
-        data.put("bound", bound);
-        if (bound) {
-            log.info("设备已被绑定 deviceId={}", deviceId);
-        }
+//        // 检查设备是否已被绑定
+//        Long bindCount = userDeviceRepository.selectCount(
+//                new LambdaQueryWrapper<UserDevice>().eq(UserDevice::getDeviceId, deviceId.trim()));
+//        boolean bound = bindCount != null && bindCount > 0;
+        data.put("bound", false);
+//        if (bound) {
+//            log.info("设备已被绑定 deviceId={}", deviceId);
+//        }
 
-        log.info("检查设备结果 deviceId={}, exists={}, bound={}", deviceId, exists, bound);
+        log.info("检查设备结果 deviceId={}, exists={}", deviceId, exists);
         return ApiResponse.success(data);
     }
 }
