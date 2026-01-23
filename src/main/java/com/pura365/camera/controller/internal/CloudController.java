@@ -557,11 +557,12 @@ public class CloudController {
     }
 
     /**
-     * 过滤出文件名带 "M" 的视频，并根据规则绑定对应的 jpg 缩略图。
+     * 过滤视频文件，并根据文件名是否包含 "M" 设置类型。
      *
      * 约定：
-     *   - 视频文件：095337M0021.mp4、095358M0021.mp4（格式：6位数字+M+4位数字.mp4）
-     *   - 对应缩略图：095337.jpg、095358.jpg（M前面的部分）
+     *   - 事件录像：文件名包含M，如 095337M0021.mp4（格式：6位数字+M+4位数字.mp4）
+     *   - 普通录像：文件名不包含M
+     *   - 事件录像缩略图：095337.jpg（M前面的部分）
      */
     private List<Map<String, Object>> filterVideosWithThumbnails(List<Map<String, Object>> allObjects) {
         if (allObjects == null || allObjects.isEmpty()) {
@@ -592,7 +593,7 @@ public class CloudController {
             }
         }
 
-        // 第二步：过滤出文件名带M的视频，并给它匹配jpg
+        // 第二步：过滤出所有视频文件，根据是否包含M设置type
         List<Map<String, Object>> result = new ArrayList<>();
         for (Map<String, Object> obj : allObjects) {
             Object fileNameObj = obj.get("file_name");
@@ -608,25 +609,27 @@ public class CloudController {
                 continue;
             }
 
-            // 必须包含M（大小写都检查）
+            // 拷贝原数据
+            Map<String, Object> copy = new HashMap<>(obj);
+
+            // 检查是否包含M（大小写都检查）
             int mIndex = fileName.indexOf('M');
             if (mIndex <= 0) {
                 mIndex = fileName.indexOf('m');
             }
-            if (mIndex <= 0) {
-                continue;
-            }
 
-            // 取M之前的部分作为缩略图的基名
-            // 例：095337M0021.mp4 -> "095337"
-            String jpgBaseName = fileName.substring(0, mIndex);
-            String thumbnailUrl = jpgUrlMap.get(jpgBaseName);
-
-            // 拷贝原数据
-            Map<String, Object> copy = new HashMap<>(obj);
-            if (thumbnailUrl != null) {
+            if (mIndex > 0) {
+                // 事件录像：文件名包含M
+                copy.put("type", "event");
+                
+                // 取M之前的部分作为缩略图的基名
+                // 例：095337M0021.mp4 -> "095337"
+                String jpgBaseName = fileName.substring(0, mIndex);
+                String thumbnailUrl = jpgUrlMap.get(jpgBaseName);
                 copy.put("thumbnail", thumbnailUrl);
             } else {
+                // 普通录像：文件名不包含M
+                copy.put("type", "normal");
                 copy.put("thumbnail", null);
             }
 

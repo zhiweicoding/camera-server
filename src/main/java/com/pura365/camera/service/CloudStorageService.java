@@ -421,6 +421,7 @@ public class CloudStorageService {
         }
 
         // 默认值
+        // recording 就是事件
         video.put("type", "recording");
         video.put("title", "云录像");
         video.put("thumbnail_url", null);
