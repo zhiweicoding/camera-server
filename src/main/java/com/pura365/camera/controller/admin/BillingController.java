@@ -164,17 +164,19 @@ public class BillingController {
     /**
      * 导出充值明细Excel
      * 如果数据超过1万条，分成多个Excel文件并打包成zip
+     * 权限说明：非管理员只能导出与自己关联的数据
      */
     @Operation(summary = "导出充值明细Excel", description = "导出充值明细Excel文件，超过1万条数据分片打包成zip")
     @GetMapping("/export-detail")
     public ResponseEntity<byte[]> exportBillingDetail(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
             @RequestParam(required = false) String installerCode,
             @RequestParam(required = false) Long dealerId,
             @RequestParam(required = false) String deviceId,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate) {
         try {
-            Map<String, Object> result = billingService.exportBillingDetailExcel(installerCode, dealerId, deviceId, startDate, endDate);
+            Map<String, Object> result = billingService.exportBillingDetailExcel(currentUserId, installerCode, dealerId, deviceId, startDate, endDate);
             boolean isZip = (Boolean) result.get("isZip");
             byte[] data = (byte[]) result.get("data");
 
@@ -251,16 +253,18 @@ public class BillingController {
 
     /**
      * 导出结算表Excel
+     * 权限说明：非管理员只能导出与自己关联的数据
      */
     @Operation(summary = "导出结算表", description = "导出指定装机商/经销商的结算表Excel")
     @GetMapping("/export-settlement")
     public ResponseEntity<byte[]> exportSettlement(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
             @RequestParam(required = false) String installerCode,
             @RequestParam(required = false) Long dealerId,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate) {
         try {
-            Map<String, Object> result = billingService.exportSettlementExcel(installerCode, dealerId, startDate, endDate);
+            Map<String, Object> result = billingService.exportSettlementExcel(currentUserId, installerCode, dealerId, startDate, endDate);
             byte[] data = (byte[]) result.get("data");
 
             // 生成文件名

@@ -543,19 +543,45 @@ public class BillingService {
     /**
      * 导出充值明细Excel
      * 如果数据超过1万条，分成多个Excel文件并打包成zip
+     * 权限说明：非管理员只能导出与自己关联的数据
      * @return Map包含 "isZip" (boolean) 和 "data" (byte[])
      */
-    public Map<String, Object> exportBillingDetailExcel(String installerCode, Long dealerId, String deviceId, Date startDate, Date endDate) throws IOException {
-        log.info("开始导出充值明细Excel: installerCode={}, dealerId={}, deviceId={}, startDate={}, endDate={}", installerCode, dealerId, deviceId, startDate, endDate);
+    public Map<String, Object> exportBillingDetailExcel(Long currentUserId, String installerCode, Long dealerId, String deviceId, Date startDate, Date endDate) throws IOException {
+        // 根据当前用户角色确定过滤条件
+        String effectiveInstallerCode = installerCode;
+        Long effectiveDealerId = dealerId;
+        
+        if (currentUserId != null) {
+            User currentUser = userRepository.selectById(currentUserId);
+            if (currentUser != null) {
+                boolean isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
+                if (!isAdmin) {
+                    // 装机商只能导出自己关联的数据
+                    if (currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null) {
+                        Installer installer = installerRepository.selectById(currentUser.getInstallerId());
+                        if (installer != null) {
+                            effectiveInstallerCode = installer.getInstallerCode();
+                        }
+                    }
+                    // 经销商只能导出自己关联的数据
+                    if (currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null) {
+                        effectiveDealerId = currentUser.getDealerId();
+                    }
+                }
+            }
+        }
+        
+        log.info("开始导出充值明细Excel: currentUserId={}, installerCode={}, dealerId={}, deviceId={}, startDate={}, endDate={}", 
+                currentUserId, effectiveInstallerCode, effectiveDealerId, deviceId, startDate, endDate);
 
         // 查询所有符合条件的订单
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
-        if (installerCode != null && !installerCode.trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
+        if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
+            qw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
         }
-        if (dealerId != null) {
-            qw.lambda().eq(PaymentOrder::getDealerId, dealerId);
+        if (effectiveDealerId != null) {
+            qw.lambda().eq(PaymentOrder::getDealerId, effectiveDealerId);
         }
         if (deviceId != null && !deviceId.trim().isEmpty()) {
             qw.lambda().like(PaymentOrder::getDeviceId, deviceId);
@@ -1047,19 +1073,44 @@ public class BillingService {
 
     /**
      * 导出结算表Excel
+     * 权限说明：非管理员只能导出与自己关联的数据
      */
-    public Map<String, Object> exportSettlementExcel(String installerCode, Long dealerId, 
+    public Map<String, Object> exportSettlementExcel(Long currentUserId, String installerCode, Long dealerId, 
                                                       Date startDate, Date endDate) throws IOException {
-        log.info("导出结算表: installerCode={}, dealerId={}, startDate={}, endDate={}", 
-                installerCode, dealerId, startDate, endDate);
+        // 根据当前用户角色确定过滤条件
+        String effectiveInstallerCode = installerCode;
+        Long effectiveDealerId = dealerId;
+        
+        if (currentUserId != null) {
+            User currentUser = userRepository.selectById(currentUserId);
+            if (currentUser != null) {
+                boolean isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
+                if (!isAdmin) {
+                    // 装机商只能导出自己关联的数据
+                    if (currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null) {
+                        Installer installer = installerRepository.selectById(currentUser.getInstallerId());
+                        if (installer != null) {
+                            effectiveInstallerCode = installer.getInstallerCode();
+                        }
+                    }
+                    // 经销商只能导出自己关联的数据
+                    if (currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null) {
+                        effectiveDealerId = currentUser.getDealerId();
+                    }
+                }
+            }
+        }
+        
+        log.info("导出结算表: currentUserId={}, installerCode={}, dealerId={}, startDate={}, endDate={}", 
+                currentUserId, effectiveInstallerCode, effectiveDealerId, startDate, endDate);
 
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
-        if (installerCode != null && !installerCode.trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
+        if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
+            qw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
         }
-        if (dealerId != null) {
-            qw.lambda().eq(PaymentOrder::getDealerId, dealerId);
+        if (effectiveDealerId != null) {
+            qw.lambda().eq(PaymentOrder::getDealerId, effectiveDealerId);
         }
         if (startDate != null) {
             qw.lambda().ge(PaymentOrder::getPaidAt, startDate);

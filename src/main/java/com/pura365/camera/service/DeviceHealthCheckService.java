@@ -6,6 +6,7 @@ import com.pura365.camera.enums.DeviceOnlineStatus;
 import com.pura365.camera.repository.DeviceRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -22,9 +23,12 @@ import java.util.List;
  * 2. 离线: 收到CODE20遗言消息 或 发送CODE11后3秒内无响应
  */
 @Service
-public class DeviceHealthCheckService {
+public class DeviceHealthCheckService implements DisposableBean {
 
     private static final Logger log = LoggerFactory.getLogger(DeviceHealthCheckService.class);
+
+    /** 应用是否正在关闭 */
+    private volatile boolean shuttingDown = false;
 
     @Autowired
     private DeviceRepository deviceRepository;
@@ -50,7 +54,7 @@ public class DeviceHealthCheckService {
      */
     @Scheduled(fixedDelayString = "${device.health.check-interval:60000}")
     public void checkDeviceHealth() {
-        if (!healthCheckEnabled) {
+        if (!healthCheckEnabled || shuttingDown) {
             return;
         }
 
@@ -144,5 +148,11 @@ public class DeviceHealthCheckService {
         public long getTotal() { return total; }
         public long getOnline() { return online; }
         public long getOffline() { return offline; }
+    }
+
+    @Override
+    public void destroy() {
+        log.info("应用关闭中，停止设备健康检查任务");
+        shuttingDown = true;
     }
 }
