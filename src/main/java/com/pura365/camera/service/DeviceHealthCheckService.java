@@ -1,10 +1,8 @@
 package com.pura365.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.pura365.camera.domain.Device;
 import com.pura365.camera.enums.DeviceOnlineStatus;
-import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.repository.DeviceRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,18 +11,15 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDateTime;
 import java.util.List;
 
 /**
  * 设备健康检查服务
- * 定时向设备发送心跳检测，更新设备在线状态
+ * 定时向设备发送CODE11探测，检查设备在线状态
  * 
- * 心跳机制说明：
- * 1. 设备初始状态为离线(status=0)
- * 2. 只有当设备通过MQTT发送有效消息(CODE 138/139)时才会被标记为在线
- * 3. 定时任务会检查所有在线设备的心跳时间，超时则标记为离线
- * 4. 从未收到过有效心跳的设备（lastHeartbeatTime为null）会被直接标记为离线
+ * 设备在线/离线规则：
+ * 1. 在线: 收到CODE10上线消息 或 发送CODE11后有响应
+ * 2. 离线: 收到CODE20遗言消息 或 发送CODE11后3秒内无响应
  */
 @Service
 public class DeviceHealthCheckService {
@@ -41,9 +36,9 @@ public class DeviceHealthCheckService {
     @Value("${device.health.check-interval:60000}")
     private long checkInterval;
 
-    /** 离线判定阈值(秒)，默认180秒(3分钟) */
-    @Value("${device.health.offline-threshold:180}")
-    private int offlineThresholdSeconds;
+    /** CODE11响应超时时间(毫秒)，默认3秒 */
+    @Value("${device.health.response-timeout:3000}")
+    private long responseTimeoutMs;
 
     /** 是否启用健康检查 */
     @Value("${device.health.enabled:true}")
@@ -51,7 +46,7 @@ public class DeviceHealthCheckService {
 
     /**
      * 定时执行设备健康检查
-     * 每60秒执行一次
+     * 每60秒执行一次，向在线设备发送CODE11探测
      */
     @Scheduled(fixedDelayString = "${device.health.check-interval:60000}")
     public void checkDeviceHealth() {
@@ -62,71 +57,23 @@ public class DeviceHealthCheckService {
         log.info("开始执行设备健康检查...");
 
         try {
-            // 1. 检查超时未响应的设备，标记为离线
-            markOfflineDevices();
-            
-            // 2. 标记从未有过心跳的在线设备为离线（防止虚假设备）
-            markNeverHeartbeatDevicesOffline();
-
-            // 3. 向所有在线设备发送心跳请求
+            // 向所有在线设备发送CODE11探测，超时则标记离线
             sendHeartbeatToOnlineDevices();
-
         } catch (Exception e) {
             log.error("设备健康检查执行失败", e);
         }
     }
 
     /**
-     * 检查并标记离线设备
-     * 判断标准：最后心跳时间超过阈值的在线设备
-     */
-    private void markOfflineDevices() {
-        LocalDateTime threshold = LocalDateTime.now().minusSeconds(offlineThresholdSeconds);
-
-        // 查找需要标记为离线的设备：
-        // 条件1: 状态为在线(1)
-        // 条件2: 最后心跳时间不为空且早于阈值
-        LambdaUpdateWrapper<Device> updateWrapper = new LambdaUpdateWrapper<>();
-        updateWrapper.eq(Device::getStatus, DeviceOnlineStatus.ONLINE)
-                .isNotNull(Device::getLastHeartbeatTime) // 有过心跳记录
-                .lt(Device::getLastHeartbeatTime, threshold) // 心跳超时
-                .set(Device::getStatus, DeviceOnlineStatus.OFFLINE)
-                .set(Device::getUpdatedAt, LocalDateTime.now());
-
-        int updatedCount = deviceRepository.update(null, updateWrapper);
-        if (updatedCount > 0) {
-            log.info("已将 {} 个设备标记为离线(心跳超时 {}秒)", updatedCount, offlineThresholdSeconds);
-        }
-    }
-    
-    /**
-     * 标记从未有过心跳记录的在线设备为离线
-     * 这种情况通常是用户绑定了不存在的设备ID，或设备从未真正连接过
-     */
-    private void markNeverHeartbeatDevicesOffline() {
-        // 查找在线但从未有心跳的设备
-        LambdaUpdateWrapper<Device> updateWrapper = new LambdaUpdateWrapper<>();
-        updateWrapper.eq(Device::getStatus, DeviceOnlineStatus.ONLINE)
-                .isNull(Device::getLastHeartbeatTime) // 从未有心跳记录
-                .set(Device::getStatus, DeviceOnlineStatus.OFFLINE)
-                .set(Device::getUpdatedAt, LocalDateTime.now());
-
-        int updatedCount = deviceRepository.update(null, updateWrapper);
-        if (updatedCount > 0) {
-            log.info("已将 {} 个从未心跳的设备标记为离线", updatedCount);
-        }
-    }
-
-    /**
-     * 向所有在线设备发送心跳请求(CODE 11)
+     * 向所有在线设备发送CODE11探测
+     * 如果3秒内没有响应则标记为离线
      */
     private void sendHeartbeatToOnlineDevices() {
-        // 查询所有在线设备（必须有过心跳记录才发送，避免向虚假设备发送）
+        // 查询所有在线设备
         LambdaQueryWrapper<Device> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper
-                .isNotNull(Device::getLastHeartbeatTime) // 有过心跳记录
-                .isNotNull(Device::getSsid) // 过滤ssid为空的设备
-                .ne(Device::getSsid, ""); // 过滤ssid为空字符串的设备
+        queryWrapper.eq(Device::getStatus, DeviceOnlineStatus.ONLINE)
+                .isNotNull(Device::getSsid)
+                .ne(Device::getSsid, "");
 
         List<Device> onlineDevices = deviceRepository.selectList(queryWrapper);
 
@@ -135,12 +82,16 @@ public class DeviceHealthCheckService {
             return;
         }
 
-        log.info("开始向 {} 个在线设备发送心跳请求", onlineDevices.size());
+        log.info("开始向 {} 个在线设备发送CODE11探测", onlineDevices.size());
 
         for (Device device : onlineDevices) {
             try {
-                mqttMessageService.requestDeviceInfo(device.getId());
-                log.info("已向设备 {} 发送心跳请求", device.getId());
+                // 发送CODE11并等待响应，超时则标记离线
+                boolean responded = mqttMessageService.requestDeviceInfoAndWait(device.getId(), responseTimeoutMs);
+                if (!responded) {
+                    log.info("设备 {} CODE11响应超时({}ms)，标记为离线", device.getId(), responseTimeoutMs);
+                    mqttMessageService.markDeviceOffline(device.getId());
+                }
             } catch (Exception e) {
                 log.warn("向设备 {} 发送心跳请求失败: {}", device.getId(), e.getMessage());
             }

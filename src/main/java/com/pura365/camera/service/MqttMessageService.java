@@ -1,12 +1,15 @@
 package com.pura365.camera.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pura365.camera.domain.Device;
+import com.pura365.camera.domain.UserDevice;
 import com.pura365.camera.enums.DeviceOnlineStatus;
 import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.enums.SdCardStatus;
 import com.pura365.camera.model.mqtt.*;
 import com.pura365.camera.repository.DeviceRepository;
+import com.pura365.camera.repository.UserDeviceRepository;
 import com.pura365.camera.util.TimeValidator;
 import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
@@ -27,6 +30,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
  * MQTT 消息服务
@@ -60,6 +64,12 @@ public class MqttMessageService {
     
     @Autowired
     private NetworkPairingStatusService pairingStatusService;
+    
+    @Autowired
+    private JPushService jPushService;
+    
+    @Autowired
+    private UserDeviceRepository userDeviceRepository;
     
     // 缓存 WebRTC Offer：sid -> WebRtcMessage（最近一次）
     private final Map<String, WebRtcMessage> webrtcOfferCache = new ConcurrentHashMap<>();
@@ -541,7 +551,8 @@ public class MqttMessageService {
     // ==================== 设备离线检测 ====================
     
     /**
-     * 标记设备离线（可由定时任务或 MQTT 断开回调调用）
+     * 标记设备离线并发送推送通知
+     * 触发场景：1. 收到CODE20遗言  2. 发送CODE11后3秒内无响应
      */
     public void markDeviceOffline(String deviceId) {
         try {
@@ -551,9 +562,50 @@ public class MqttMessageService {
                 device.setUpdatedAt(LocalDateTime.now());
                 deviceRepository.updateById(device);
                 log.info("已标记设备 {} 为离线", deviceId);
+                
+                // 发送离线推送通知
+                sendOfflineNotification(device);
             }
         } catch (Exception e) {
             log.error("标记设备 {} 离线失败", deviceId, e);
+        }
+    }
+    
+    /**
+     * 发送设备离线推送通知
+     */
+    private void sendOfflineNotification(Device device) {
+        try {
+            // 查找该设备关联的所有用户
+            LambdaQueryWrapper<UserDevice> wrapper = new LambdaQueryWrapper<>();
+            wrapper.eq(UserDevice::getDeviceId, device.getId());
+            List<UserDevice> userDevices = userDeviceRepository.selectList(wrapper);
+
+            if (userDevices.isEmpty()) {
+                log.info("设备 {} 没有关联用户，跳过推送", device.getId());
+                return;
+            }
+
+            List<Long> userIds = userDevices.stream()
+                    .map(UserDevice::getUserId)
+                    .collect(Collectors.toList());
+
+            String deviceName = device.getName() != null ? device.getName() : device.getId();
+            String title = "设备离线通知";
+            String content = "您的设备 " + deviceName + " 已离线，请检查设备网络连接";
+
+            Map<String, String> extras = new HashMap<>();
+            extras.put("type", "device_offline");
+            extras.put("deviceId", device.getId());
+
+            boolean success = jPushService.pushToUsers(userIds, title, content, extras);
+            if (success) {
+                log.info("设备 {} 离线通知推送成功，通知用户: {}", device.getId(), userIds);
+            } else {
+                log.warn("设备 {} 离线通知推送失败", device.getId());
+            }
+        } catch (Exception e) {
+            log.error("发送设备 {} 离线通知失败", device.getId(), e);
         }
     }
     

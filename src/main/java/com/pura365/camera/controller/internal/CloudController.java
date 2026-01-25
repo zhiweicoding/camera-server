@@ -265,9 +265,9 @@ public class CloudController {
             log.warn("获取云存订阅状态 - 无权查看, userId={}, deviceId={}", currentUserId, deviceId);
             return ApiResponse.error(403, "无权查看该设备");
         }
+        // 查询设备的云存订阅（不区分用户，云存跟着设备走）
         QueryWrapper<CloudSubscription> qw = new QueryWrapper<>();
-        qw.lambda().eq(CloudSubscription::getUserId, currentUserId)
-                .eq(CloudSubscription::getDeviceId, deviceId)
+        qw.lambda().eq(CloudSubscription::getDeviceId, deviceId)
                 .orderByDesc(CloudSubscription::getExpireAt)
                 .last("limit 1");
         CloudSubscription sub = cloudSubscriptionRepository.selectOne(qw);
@@ -371,9 +371,9 @@ public class CloudController {
             return ApiResponse.error(400, "该设备已领取过免费云存储");
         }
         
-        // 创建7天免费订阅
+        // 创建7天免费订阅（不绑定用户，只绑定设备）
         CloudSubscription subscription = new CloudSubscription();
-        subscription.setUserId(currentUserId);
+        subscription.setUserId(null); // 免费云存跟设备走，不绑定特定用户
         subscription.setDeviceId(deviceId);
         subscription.setPlanId("free-trial-7d");
         subscription.setPlanName("7天免费试用");

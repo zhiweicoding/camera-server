@@ -643,12 +643,11 @@ public class DeviceService {
     }
 
     /**
-     * 查询用户设备的有效云存储订阅
+     * 查询设备的有效云存储订阅（云存跟着设备走，不区分用户）
      */
     private CloudSubscription findActiveSubscription(Long userId, String deviceId) {
         LambdaQueryWrapper<CloudSubscription> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(CloudSubscription::getUserId, userId)
-                .eq(CloudSubscription::getDeviceId, deviceId)
+        queryWrapper.eq(CloudSubscription::getDeviceId, deviceId)
                 .orderByDesc(CloudSubscription::getExpireAt)
                 .last("LIMIT 1");
         return cloudSubscriptionRepository.selectOne(queryWrapper);
