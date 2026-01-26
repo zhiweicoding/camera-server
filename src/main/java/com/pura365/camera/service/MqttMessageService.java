@@ -646,7 +646,7 @@ public class MqttMessageService {
         msg.put("code", 11);
         msg.put("time", TimeValidator.getCurrentTimestamp());
         sendToDevice(deviceId, msg, null);
-        log.debug("已请求设备 {} 的信息", deviceId);
+        log.info("已请求设备 {} 的信息", deviceId);
     }
     
     /**

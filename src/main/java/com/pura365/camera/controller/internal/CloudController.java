@@ -371,9 +371,9 @@ public class CloudController {
             return ApiResponse.error(400, "该设备已领取过免费云存储");
         }
         
-        // 创建7天免费订阅（不绑定用户，只绑定设备）
+        // 创建7天免费订阅（云存跟设备走，userId只记录领取人）
         CloudSubscription subscription = new CloudSubscription();
-        subscription.setUserId(null); // 免费云存跟设备走，不绑定特定用户
+        subscription.setUserId(currentUserId);
         subscription.setDeviceId(deviceId);
         subscription.setPlanId("free-trial-7d");
         subscription.setPlanName("7天免费试用");

@@ -98,6 +98,7 @@ public class DeviceService {
 
     /**
      * 获取用户的设备列表
+     * 会向所有设备发送CODE11探测，根据响应更新在线状态
      *
      * @param userId 用户ID
      * @return 设备列表
@@ -117,7 +118,11 @@ public class DeviceService {
                 .map(UserDevice::getDeviceId)
                 .collect(Collectors.toList());
         
-        // 直接从数据库查询设备信息（状态由定时心跳检测更新）
+        // 向所有设备发送CODE11探测，根据响应更新在线状态
+        // 有响应=在线，超时无响应=离线
+        requestDeviceInfoParallel(deviceIds);
+        
+        // 从MQTT探测后重新查询数据库（状态已被更新）
         List<Device> devices = deviceIds.stream()
                 .map(deviceRepository::selectById)
                 .filter(Objects::nonNull)
