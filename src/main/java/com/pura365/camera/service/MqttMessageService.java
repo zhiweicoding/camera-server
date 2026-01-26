@@ -717,6 +717,26 @@ public class MqttMessageService {
     }
     
     /**
+     * 发送WebRTC Candidate更新（CODE 159 = 128+31）
+     * 用于 Answer 发送后更新 Offer 端的 Candidate 信息
+     * 
+     * @param deviceId 设备ID
+     * @param sid Peer ID，用于区分连接的设备
+     * @param candidate Candidate 内容（仅 IPv4）
+     */
+    public void sendWebRtcCandidate159(String deviceId, String sid, String candidate) throws Exception {
+        Map<String, Object> msg = new HashMap<>();
+        msg.put("code", 159);  // 128 + 31
+        msg.put("uide", deviceId);  // 摄像头序列号
+        msg.put("time", TimeValidator.getCurrentTimestamp());
+        msg.put("sid", sid);
+        msg.put("candidate", candidate);
+        
+        sendToDevice(deviceId, msg, null);
+        log.info("已发送WebRTC Candidate159到设备 {} - SID: {}", deviceId, sid);
+    }
+    
+    /**
      * 获取最新的 WebRTC Offer（按 sid）
      */
     public WebRtcMessage getLatestOffer(String sid) {
