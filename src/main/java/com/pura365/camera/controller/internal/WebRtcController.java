@@ -53,12 +53,13 @@ public class WebRtcController {
     }
 
     /**
-     *      * 获取并清空指定 SID 下缓存的 WebRTC Candidates（由设备上报）
+     * 获取指定 SID 下缓存的 WebRTC Candidates（由设备上报，包括 Code 153 和 Code 159）
+     * 使用 peek 而非 drain，避免候选丢失，App 端通过 _processedCandidates 去重
      */
     @GetMapping("/candidates/{sid}")
     public ResponseEntity<Map<String, Object>> getCandidates(@PathVariable String sid) {
         Map<String, Object> result = new HashMap<>();
-        List<WebRtcMessage> list = mqttMessageService.drainCandidates(sid);
+        List<WebRtcMessage> list = mqttMessageService.peekCandidates(sid);
         if (list == null || list.isEmpty()) {
             result.put("found", false);
             result.put("candidates", new String[0]);
