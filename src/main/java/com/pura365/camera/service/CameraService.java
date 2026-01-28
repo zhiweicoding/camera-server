@@ -25,6 +25,7 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,6 +36,11 @@ import java.util.Date;
 public class CameraService {
     
     private static final Logger log = LoggerFactory.getLogger(CameraService.class);
+    
+    // 自注入，用于调用事务方法（使用@Lazy避免循环依赖）
+    @Autowired
+    @Lazy
+    private CameraService self;
     
     @Autowired
     private DeviceRepository deviceRepository;
@@ -132,16 +138,14 @@ public class CameraService {
         response.setMqttUser("camera_test");
         response.setMqttPass("123456");
         
-        // 检查云存储订阅状态并配置S3凭证
+        // 检查云存储订阅状态并配置S3凭证和AI配置
         if (device != null) {
             configureCloudStorage(device, response);
+            configureAI(device, response);
         } else {
             response.setCloudStorage(0);
+            response.setNormalAI(false);
         }
-        
-        // GPT/AI 配置（预留）
-        // response.setGPTHostname("ai.pura365.com");
-        // response.setGPTKey("gpt-access-key");
         
         return response;
     }
@@ -155,9 +159,8 @@ public class CameraService {
      * 
      * @return 0: 成功, 1: 设备不存在, 2: MAC地址不匹配, 3: 清理失败
      */
-    @Transactional(rollbackFor = Exception.class)
     public int resetDevice(ResetDeviceRequest request) {
-        log.info("重置设备 - ID: {}, MAC: {}", request.getId(), request.getMac());
+        log.info("resetdevice重置设备 - ID: {}, MAC: {}", request.getId(), request.getMac());
         
         String deviceId = request.getId();
         String mac = request.getMac();
@@ -165,7 +168,7 @@ public class CameraService {
         // 1. 验证设备序列号和MAC地址是否匹配
         Device device = deviceRepository.selectById(deviceId);
         if (device == null) {
-            log.warn("设备不存在 - ID: {}", deviceId);
+            log.error("resetdevice设备不存在 - ID: {}", deviceId);
             return 1; // 设备不存在
         }
         
@@ -174,34 +177,43 @@ public class CameraService {
 //        String requestMac = normalizeMac(mac);
 //        if (!storedMac.equals(requestMac)) {
 //            log.warn("MAC地址不匹配 - ID: {}, 期望: {}, 实际: {}", deviceId, device.getMac(), mac);
-//            return 2; // MAC地址不匹配
+//            return 2; // MAC地址不匙配
 //        }
         
         try {
-            // 2. 清除设备分享信息（device_share 表）
-            int deletedShares = deleteDeviceShares(deviceId);
-            log.info("已删除设备分享记录 - ID: {}, 删除数量: {}", deviceId, deletedShares);
+            // 2. 先删除云存储文件（耗时操作，但不占用数据库锁）
+            // 暂时注释掉，避免删除云录像
+            // int deletedFiles = cloudStorageService.deleteAllDeviceVideos(deviceId);
+            // log.info("已删除云存储文件 - ID: {}, 删除数量: {}", deviceId, deletedFiles);
             
-            // 3. 清除APP连接信息（user_device 表）
-            int deletedUserDevices = deleteUserDevices(deviceId);
-            log.info("已删除用户设备关联记录 - ID: {}, 删除数量: {}", deviceId, deletedUserDevices);
-            
-            // 4. 清除云存储历史数据
-            // 4.1 删除云视频数据库记录（cloud_video 表）
-            int deletedVideos = deleteCloudVideos(deviceId);
-            log.info("已删除云视频记录 - ID: {}, 删除数量: {}", deviceId, deletedVideos);
-            
-            // 4.2 删除云存储中的实际文件
-            int deletedFiles = cloudStorageService.deleteAllDeviceVideos(deviceId);
-            log.info("已删除云存储文件 - ID: {}, 删除数量: {}", deviceId, deletedFiles);
+            // 3. 在短事务中删除数据库记录（通过self代理调用以触发事务）
+            self.resetDeviceDatabaseRecords(deviceId);
             
             log.info("设备重置成功 - ID: {}", deviceId);
             return 0; // 成功
             
         } catch (Exception e) {
             log.error("设备重置失败 - ID: {}", deviceId, e);
-            throw e; // 抛出异常触发事务回滚
+            return 3; // 清理失败
         }
+    }
+    
+    /**
+     * 在事务中删除设备相关的数据库记录（短事务，快速释放锁）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void resetDeviceDatabaseRecords(String deviceId) {
+        // 清除设备分享信息（device_share 表）
+        int deletedShares = deleteDeviceShares(deviceId);
+        log.info("已删除设备分享记录 - ID: {}, 删除数量: {}", deviceId, deletedShares);
+        
+        // 清除APP连接信息（user_device 表）
+        int deletedUserDevices = deleteUserDevices(deviceId);
+        log.info("已删除用户设备关联记录 - ID: {}, 删除数量: {}", deviceId, deletedUserDevices);
+        
+        // 删除云视频数据库记录（cloud_video 表）
+        int deletedVideos = deleteCloudVideos(deviceId);
+        log.info("已删除云视频记录 - ID: {}, 删除数量: {}", deviceId, deletedVideos);
     }
     
     /**
@@ -380,6 +392,26 @@ public class CameraService {
             response.setS3SecretKey(vultrConfig.getSecretKey());
             
             log.info("配置Vultr S3凭证 - deviceId: {}, hasSubscription: {}", device.getId(), hasSubscription);
+        }
+    }
+    
+    /**
+     * 配置AI功能
+     * 如果设备有云存储订阅或购买了AI，就启用AI功能
+     */
+    private void configureAI(Device device, GetInfoResponse response) {
+        // 检查是否有有效订阅（当前逻辑：有云存储订阅就启用AI）
+        boolean hasSubscription = checkCloudStorageSubscription(device.getId());
+        // TODO: 后续如果有独立的AI订阅，也需要检查
+        
+        if (hasSubscription) {
+            response.setNormalAI(true);
+            response.setGPTHostname("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions");
+            response.setGPTKey("sk-74ec79b9dc20469fb04e335881e6f731");
+            log.info("配置AI功能 - deviceId: {}, 已启用", device.getId());
+        } else {
+            response.setNormalAI(false);
+            log.info("配置AI功能 - deviceId: {}, 未启用", device.getId());
         }
     }
     

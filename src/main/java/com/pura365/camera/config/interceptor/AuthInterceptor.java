@@ -59,7 +59,7 @@ public class AuthInterceptor implements HandlerInterceptor {
             return true;
         }
         // 设备 HTTP 接口
-        if (path.equals("/get_time") || path.equals("/get_info") || path.equals("/reset_device") || path.equals("/send_msg")) {
+        if (path.equals("/get_time") || path.equals("/get_info") || path.equals("/resetdevice") || path.equals("/send_msg")) {
             return true;
         }
         // MQTT / WebRTC / DataChannel 调试接口（含 /api/internal/... 前缀）

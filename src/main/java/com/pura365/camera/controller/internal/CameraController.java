@@ -222,30 +222,30 @@ public class CameraController {
      * 摄像头第一次配网连接后请求该 API，用于清除历史数据
      */
     @Operation(summary = "重置设备", description = "清除设备历史数据等初始化操作")
-    @PostMapping(value = "/reset_device",
+    @PostMapping(value = "/resetdevice",
             consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<?> resetDevice(HttpServletRequest request) {
-        log.info("=== /reset_device 请求 ===");
+        log.info("=== /resetdevice 请求 ===");
 
         try {
             String rawBody = getRequestBody(request);
-            log.info("请求体: {}", rawBody);
+            log.info("resetdevice请求体: {}", rawBody);
 
             String token = extractJwtToken(request, rawBody);
             if (token == null) {
                 return ResponseEntity.badRequest().body("无法解析加密数据，请检查请求格式");
             }
-            log.info("接收到的 token: {}", token);
+            log.info("resetdevice接收到的 token: {}", token);
 
             ResetDeviceRequest resetRequest = parseResetDeviceRequestFromToken(token);
-            log.info("解析出的请求参数: id={}, exp={}, mac={}, ssid={}",
+            log.info("resetdevice解析出的请求参数: id={}, exp={}, mac={}, ssid={}",
                     resetRequest.getId(), resetRequest.getExp(), resetRequest.getMac(), resetRequest.getSsid());
 
             // 如果请求中包含 SSID，保存到 MQTT 服务
             if (resetRequest.getSsid() != null && !resetRequest.getSsid().isEmpty() && mqttMessageService != null) {
                 mqttMessageService.registerDeviceSsid(resetRequest.getId(), resetRequest.getSsid());
-                log.info("已保存设备 {} 的 SSID", resetRequest.getId());
+                log.info("resetdevice已保存设备 {} 的 SSID", resetRequest.getId());
             }
 
             if (resetRequest.getId() == null || resetRequest.getExp() == null || resetRequest.getMac() == null) {
@@ -260,11 +260,11 @@ public class CameraController {
             int code = cameraService.resetDevice(resetRequest);
             ResetDeviceResponse response = new ResetDeviceResponse(code);
 
-            log.info("=== /reset_device 响应 === code={}", code);
+            log.info("=== /resetdevice 响应 === code={}", code);
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
-            log.error("/reset_device 异常", e);
+            log.error("/resetdevice 异常", e);
             return ResponseEntity.badRequest().body("Error: " + e.getMessage());
         }
     }
