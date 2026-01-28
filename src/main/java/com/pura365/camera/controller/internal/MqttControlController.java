@@ -309,6 +309,36 @@ public class MqttControlController {
     }
 
     /**
+     * 发送 WebRTC Candidate 更新（CODE 159 = 128+31）
+     * 用于 Answer 发送后更新 Offer 端的 Candidate 信息
+     */
+    @Operation(summary = "发送 WebRTC Candidate159", description = "通过 MQTT 向摄像头发送 WebRTC Candidate 更新（Answer 后）")
+    @PostMapping("/device/{deviceId}/webrtc/candidate159")
+    public ResponseEntity<Map<String, Object>> sendWebRtcCandidate159(
+            @PathVariable String deviceId,
+            @RequestParam String sid,
+            @RequestParam String candidate) {
+
+        log.info("发送 WebRTC Candidate159 到设备 {} - SID: {}", deviceId, sid);
+
+        try {
+            mqttMessageService.sendWebRtcCandidate159(deviceId, sid, candidate);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("message", "已发送 WebRTC Candidate159");
+            return ResponseEntity.ok(result);
+
+        } catch (Exception e) {
+            log.error("发送 WebRTC Candidate159 失败", e);
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", false);
+            result.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(result);
+        }
+    }
+
+    /**
      * 设置灯泡参数（CODE 29）
      */
     @Operation(summary = "设置灯泡参数", description = "配置灯泡工作模式、亮度、定时等参数")

@@ -230,6 +230,10 @@ public class MqttMessageService {
                 WebRtcMessage candidateMsg = objectMapper.readValue(json, WebRtcMessage.class);
                 handleWebRtcCandidate(candidateMsg, deviceId);
                 break;
+            case 159: // CODE 128 + 31: 摄像头发送的 ICE Candidate 更新
+                WebRtcMessage candidate159Msg = objectMapper.readValue(json, WebRtcMessage.class);
+                handleWebRtcCandidate159(candidate159Msg, deviceId);
+                break;
             case 148: // CODE 20 + 128: 遗言消息（设备断开连接）
                 handleDeviceWill(deviceId);
                 break;
@@ -428,6 +432,26 @@ public class MqttMessageService {
             log.info("已缓存 WebRTC Candidate, SID: {}", msg.getSid());
         }
         // 通过 WebSocket 转发 Candidate 给对应的客户端
+        notifyWebRtcMessage(deviceId, "candidate", msg);
+    }
+    
+    /**
+     * 处理摄像头发送的 ICE Candidate 更新 (CODE 159 = 128+31)
+     * 摄像头在收到 Answer 后发送自己的 ICE Candidate 给 App
+     */
+    private void handleWebRtcCandidate159(WebRtcMessage msg, String deviceId) {
+        log.info("收到摄像头 ICE Candidate (CODE 159) - SID: {}, Candidate: {}", 
+                msg.getSid(), msg.getCandidate());
+        
+        // 缓存候选，供 App 轮询
+        if (msg.getSid() != null) {
+            webrtcCandidateCache
+                    .computeIfAbsent(msg.getSid(), k -> new CopyOnWriteArrayList<>())
+                    .add(msg);
+            log.info("已缓存摄像头 ICE Candidate (CODE 159), SID: {}", msg.getSid());
+        }
+        
+        // 通过 WebSocket 转发给 App
         notifyWebRtcMessage(deviceId, "candidate", msg);
     }
     
@@ -717,6 +741,26 @@ public class MqttMessageService {
     }
     
     /**
+     * 发送WebRTC Candidate更新（CODE 159 = 128+31）
+     * 用于 Answer 发送后更新 Offer 端的 Candidate 信息
+     * 
+     * @param deviceId 设备ID
+     * @param sid Peer ID，用于区分连接的设备
+     * @param candidate Candidate 内容（仅 IPv4）
+     */
+    public void sendWebRtcCandidate159(String deviceId, String sid, String candidate) throws Exception {
+        Map<String, Object> msg = new HashMap<>();
+        msg.put("code", 159);  // 128 + 31
+        msg.put("uide", deviceId);  // 摄像头序列号
+        msg.put("time", TimeValidator.getCurrentTimestamp());
+        msg.put("sid", sid);
+        msg.put("candidate", candidate);
+        
+        sendToDevice(deviceId, msg, null);
+        log.info("已发送WebRTC Candidate159到设备 {} - SID: {}", deviceId, sid);
+    }
+    
+    /**
      * 获取最新的 WebRTC Offer（按 sid）
      */
     public WebRtcMessage getLatestOffer(String sid) {
@@ -728,6 +772,14 @@ public class MqttMessageService {
      */
     public List<WebRtcMessage> drainCandidates(String sid) {
         return webrtcCandidateCache.remove(sid);
+    }
+    
+    /**
+     * 获取指定 sid 下缓存的 WebRTC Candidates（只读取不删除）
+     * App 端通过 _processedCandidates 去重，避免重复处理
+     */
+    public List<WebRtcMessage> peekCandidates(String sid) {
+        return webrtcCandidateCache.get(sid);
     }
     
     /**
