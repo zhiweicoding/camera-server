@@ -34,12 +34,14 @@ public class WebRtcController {
     }
 
     /**
-     *      * 获取指定 SID 对应的最新 WebRTC Offer（由设备通过 MQTT CODE 151 上报）
+     * 获取指定 SID 对应的最新 WebRTC Offer（由设备通过 MQTT CODE 151 上报）
+     * 注意：使用 consumeOffer 获取后删除缓存，防止 App 重复轮询获取同一个 Offer
      */
     @GetMapping("/offer/{sid}")
     public ResponseEntity<Map<String, Object>> getOffer(@PathVariable String sid) {
         Map<String, Object> result = new HashMap<>();
-        WebRtcMessage msg = mqttMessageService.getLatestOffer(sid);
+        // 使用 consumeOffer 获取后删除，防止重复获取
+        WebRtcMessage msg = mqttMessageService.consumeOffer(sid);
         if (msg == null) {
             result.put("found", false);
             return ResponseEntity.ok(result);
