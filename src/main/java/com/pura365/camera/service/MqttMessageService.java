@@ -762,10 +762,18 @@ public class MqttMessageService {
     }
     
     /**
-     * 获取最新的 WebRTC Offer（按 sid）
+     * 获取最新的 WebRTC Offer（按 sid），不删除缓存
      */
     public WebRtcMessage getLatestOffer(String sid) {
         return webrtcOfferCache.get(sid);
+    }
+    
+    /**
+     * 获取并删除 WebRTC Offer（按 sid）
+     * 用于 App 轮询获取 Offer 后清除缓存，防止重复获取
+     */
+    public WebRtcMessage consumeOffer(String sid) {
+        return webrtcOfferCache.remove(sid);
     }
     
     /**
