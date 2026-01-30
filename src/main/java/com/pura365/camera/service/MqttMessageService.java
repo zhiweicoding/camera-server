@@ -621,6 +621,7 @@ public class MqttMessageService {
             Map<String, String> extras = new HashMap<>();
             extras.put("type", "device_offline");
             extras.put("deviceId", device.getId());
+            extras.put("time", String.valueOf(System.currentTimeMillis()));
 
             boolean success = jPushService.pushToUsers(userIds, title, content, extras);
             if (success) {
