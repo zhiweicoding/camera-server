@@ -15,6 +15,7 @@ import com.qiniu.util.Auth;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
@@ -27,6 +28,11 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 import software.amazon.awssdk.services.s3.model.S3Object;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
+import software.amazon.awssdk.services.s3.model.Delete;
+import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
+import software.amazon.awssdk.services.s3.model.S3Error;
 import software.amazon.awssdk.services.s3.model.CommonPrefix;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
@@ -68,7 +74,7 @@ public class CloudStorageService {
     @Autowired
     private CloudSubscriptionRepository cloudSubscriptionRepository;
 
-    @Autowired
+@Autowired
     private CloudPlanRepository cloudPlanRepository;
 
     /**
@@ -580,7 +586,24 @@ public class CloudStorageService {
     }
 
     /**
-     * 删除设备的所有云存储视频文件
+     * 异步删除设备的所有云存储视频文件
+     * 用于 App 用户清除云录像，立即返回，后台异步执行
+     * 
+     * @param deviceId 设备ID
+     */
+    @Async("cloudCleanupExecutor")
+    public void deleteAllDeviceVideosAsync(String deviceId) {
+        log.info("异步删除任务开始 - deviceId: {}", deviceId);
+        try {
+            int count = deleteAllDeviceVideos(deviceId);
+            log.info("异步删除任务完成 - deviceId: {}, deletedCount: {}", deviceId, count);
+        } catch (Exception e) {
+            log.error("异步删除任务失败 - deviceId: {}", deviceId, e);
+        }
+    }
+
+    /**
+     * 删除设备的所有云存储视频文件（同步）
      * 用于设备重置时清除所有历史数据
      * 
      * @param deviceId 设备ID
@@ -809,41 +832,63 @@ public class CloudStorageService {
     }
 
     /**
-     * 删除文件夹下的所有对象
+     * 删除文件夹下的所有对象（批量删除，每次最多1000个）
      */
     private int deleteAllObjectsInFolder(S3Client s3Client, String bucket, String folderPath) {
         int deletedCount = 0;
         
         // 列出文件夹下的所有对象
-        ListObjectsV2Request listRequest = ListObjectsV2Request.builder()
+        ListObjectsV2Request.Builder listRequestBuilder = ListObjectsV2Request.builder()
             .bucket(bucket)
             .prefix(folderPath)
-            .build();
+            .maxKeys(1000); // S3批量删除最多支持1000个
         
         ListObjectsV2Response response;
         do {
-            response = s3Client.listObjectsV2(listRequest);
+            response = s3Client.listObjectsV2(listRequestBuilder.build());
             
-            for (S3Object obj : response.contents()) {
-                try {
-                    DeleteObjectRequest deleteRequest = DeleteObjectRequest.builder()
-                        .bucket(bucket)
-                        .key(obj.key())
-                        .build();
-                    s3Client.deleteObject(deleteRequest);
-                    deletedCount++;
-                    log.info("已删除对象: {}", obj.key());
-                } catch (Exception e) {
-                    log.warn("删除对象失败: {}", obj.key(), e);
+            List<S3Object> objects = response.contents();
+            if (objects.isEmpty()) {
+                break;
+            }
+            
+            // 构建批量删除请求
+            List<ObjectIdentifier> keysToDelete = new ArrayList<>();
+            for (S3Object obj : objects) {
+                keysToDelete.add(ObjectIdentifier.builder().key(obj.key()).build());
+            }
+            
+            Delete delete = Delete.builder()
+                .objects(keysToDelete)
+                .quiet(true) // 静默模式，只返回失败的
+                .build();
+            
+            DeleteObjectsRequest deleteRequest = DeleteObjectsRequest.builder()
+                .bucket(bucket)
+                .delete(delete)
+                .build();
+            
+            try {
+                DeleteObjectsResponse deleteResponse = s3Client.deleteObjects(deleteRequest);
+                int batchDeleted = keysToDelete.size();
+                
+                // 检查是否有删除失败的
+                if (deleteResponse.hasErrors() && !deleteResponse.errors().isEmpty()) {
+                    for (S3Error error : deleteResponse.errors()) {
+                        log.warn("批量删除失败 - key: {}, code: {}, message: {}", 
+                            error.key(), error.code(), error.message());
+                    }
+                    batchDeleted -= deleteResponse.errors().size();
                 }
+                
+                deletedCount += batchDeleted;
+                log.info("批量删除完成 - prefix: {}, 本批次: {} 个", folderPath, batchDeleted);
+            } catch (Exception e) {
+                log.error("批量删除失败 - prefix: {}", folderPath, e);
             }
             
             // 处理分页
-            listRequest = ListObjectsV2Request.builder()
-                .bucket(bucket)
-                .prefix(folderPath)
-                .continuationToken(response.nextContinuationToken())
-                .build();
+            listRequestBuilder.continuationToken(response.nextContinuationToken());
                 
         } while (response.isTruncated());
         

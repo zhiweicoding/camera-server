@@ -313,6 +313,40 @@ public class DeviceController {
     }
 
     /**
+     * 清除云录像
+     * 异步删除设备的所有云存储视频文件，立即返回
+     *
+     * @param currentUserId 当前登录用户ID
+     * @param deviceId      设备ID
+     * @return 提示信息
+     */
+    @Operation(summary = "清除云录像", description = "异步删除指定设备的所有云存储视频文件，立即返回")
+    @DeleteMapping("/{id}/cloud-videos")
+    public ApiResponse<Void> clearCloudVideos(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @Parameter(description = "设备ID") @PathVariable("id") String deviceId) {
+        log.info("清除云录像 - userId={}, deviceId={}", currentUserId, deviceId);
+        
+//        // 检查用户是否有该设备的权限
+//        if (!deviceService.hasUserDevice(currentUserId, deviceId)) {
+//            log.warn("清除云录像失败，无权限 - userId={}, deviceId={}", currentUserId, deviceId);
+//            return ApiResponse.error(HTTP_FORBIDDEN, MSG_NO_PERMISSION);
+//        }
+//
+//        // 检查设备是否存在
+//        if (!deviceService.deviceExists(deviceId)) {
+//            log.warn("清除云录像失败，设备不存在 - deviceId={}", deviceId);
+//            return ApiResponse.error(HTTP_NOT_FOUND, MSG_DEVICE_NOT_FOUND);
+//        }
+        
+        // 异步删除，立即返回
+        cloudStorageService.deleteAllDeviceVideosAsync(deviceId);
+        log.info("清除云录像任务已提交 - userId={}, deviceId={}", currentUserId, deviceId);
+        
+        return ApiResponse.success("清除任务已提交，正在后台删除中", null);
+    }
+
+    /**
      * 云台PTZ控制
      *
      * @param currentUserId 当前登录用户ID
