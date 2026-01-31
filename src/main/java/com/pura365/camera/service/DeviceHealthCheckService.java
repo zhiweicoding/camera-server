@@ -16,11 +16,11 @@ import java.util.List;
 
 /**
  * 设备健康检查服务
- * 定时向设备发送CODE11探测，检查设备在线状态
  * 
- * 设备在线/离线规则：
- * 1. 在线: 收到CODE10上线消息 或 发送CODE11后有响应
- * 2. 离线: 收到CODE20遗言消息 或 发送CODE11后3秒内无响应
+ * 注意：定时检测已禁用，设备在线状态由以下机制维护：
+ * - CODE10: 设备上线
+ * - CODE11: 设备列表/手动刷新时发送探测，3秒无响应标记离线
+ * - CODE20: 设备遗言消息，立即标记离线
  */
 @Service
 public class DeviceHealthCheckService implements DisposableBean {
@@ -44,8 +44,8 @@ public class DeviceHealthCheckService implements DisposableBean {
     @Value("${device.health.response-timeout:3000}")
     private long responseTimeoutMs;
 
-    /** 是否启用健康检查 */
-    @Value("${device.health.enabled:true}")
+    /** 是否启用健康检查（默认禁用） */
+    @Value("${device.health.enabled:false}")
     private boolean healthCheckEnabled;
 
     /**

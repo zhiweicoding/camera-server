@@ -26,9 +26,12 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -79,6 +82,10 @@ public class MqttMessageService {
     private final Map<String, CompletableFuture<Boolean>> deviceInfoWaiters = new ConcurrentHashMap<>();
     // 等待灯泡配置响应的 Future
     private final Map<String, CompletableFuture<MqttBulbConfigMessage>> bulbConfigWaiters = new ConcurrentHashMap<>();
+    // 正在等待CODE11响应的设备（用于3秒超时检测）
+    private final Set<String> pendingProbeDevices = ConcurrentHashMap.newKeySet();
+    // 延时任务调度器
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
     
     private MqttClient mqttClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -251,16 +258,22 @@ public class MqttMessageService {
     }
     
     /**
-     * 处理设备MQTT连接消息
+     * 处理设备MQTT连接消息 (CODE 10)
+     * 设备上线，标记为在线
      */
     private void handleMqttConnected(MqttCode10Message msg, String deviceId) {
         log.info("设备 {} MQTT已连接 - Status: {}", deviceId, msg.getStatus());
         
+        // 设备上线，从pending列表移除
+        onDeviceResponded(deviceId);
+        
         // 更新设备在线状态到数据库（同时视为一次心跳）
+        String deviceName = null;
         try {
             LocalDateTime now = LocalDateTime.now();
             Device device = deviceRepository.selectById(deviceId);
             if (device != null) {
+                deviceName = device.getName();
                 device.setStatus(DeviceOnlineStatus.ONLINE);
                 device.setLastOnlineTime(now);
                 device.setLastHeartbeatTime(now); // MQTT连接也视为心跳
@@ -291,16 +304,69 @@ public class MqttMessageService {
             // 更新Redis中的配网状态为成功
             pairingStatusService.setSuccess(deviceId);
         }
+        
+        // 发送设备上线通知给绑定该设备的所有用户
+        sendDeviceOnlineNotification(deviceId, deviceName);
     }
     
     /**
-     * 处理设备信息响应(CODE 139)
+     * 发送设备上线通知给绑定该设备的所有用户
+     */
+    private void sendDeviceOnlineNotification(String deviceId, String deviceName) {
+        try {
+            // 查询绑定该设备的所有用户
+            LambdaQueryWrapper<UserDevice> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(UserDevice::getDeviceId, deviceId);
+            List<UserDevice> userDevices = userDeviceRepository.selectList(queryWrapper);
+            
+            if (userDevices == null || userDevices.isEmpty()) {
+                log.info("设备 {} 没有绑定用户，跳过上线通知", deviceId);
+                return;
+            }
+            
+            // 获取所有用户ID
+            List<Long> userIds = userDevices.stream()
+                    .map(UserDevice::getUserId)
+                    .distinct()
+                    .collect(Collectors.toList());
+            
+            // 构建通知内容
+            String displayName = (deviceName != null && !deviceName.isEmpty()) ? deviceName : deviceId;
+            String title = "设备上线通知";
+            String content = "您的设备 " + displayName + " 已上线";
+            
+            // 构建附加数据
+            Map<String, String> extras = new HashMap<>();
+            extras.put("type", "device_online");
+            extras.put("deviceId", deviceId);
+            extras.put("time", String.valueOf(System.currentTimeMillis()));
+            if (deviceName != null) {
+                extras.put("deviceName", deviceName);
+            }
+            
+            // 发送推送通知
+            boolean success = jPushService.pushToUsers(userIds, title, content, extras);
+            if (success) {
+                log.info("已发送设备 {} 上线通知给 {} 个用户", deviceId, userIds.size());
+            } else {
+                log.warn("发送设备 {} 上线通知失败", deviceId);
+            }
+        } catch (Exception e) {
+            log.error("发送设备 {} 上线通知异常", deviceId, e);
+        }
+    }
+    
+    /**
+     * 处理设备信息响应(CODE 139 = CODE 11 + 128)
      * 更新设备的完整状态信息到数据库，同时作为心跳响应更新在线状态
      */
     private void handleDeviceInfo(MqttDeviceInfoMessage msg, String deviceId) {
         log.info("收到设备信息 - 设备: {}, WiFi: {}, RSSI: {}, 版本: {}, TF卡: {}", 
                 deviceId, msg.getWifiname(), msg.getWifirssi(), msg.getVer(), 
                 msg.getSdstate() == 1 ? "有" : "无");
+        
+        // 设备响应了CODE11，从pending列表移除
+        onDeviceResponded(deviceId);
         
         // 更新设备信息到数据库
         try {
@@ -570,6 +636,84 @@ public class MqttMessageService {
         } else {
             log.info("设备 {} 没有注册监听器，消息类型: {}", deviceId, type);
         }
+    }
+    
+    // ==================== 设备在线探测 ====================
+    
+    /**
+     * CODE11响应超时时间（3秒）
+     */
+    private static final long PROBE_TIMEOUT_MS = 3000;
+    
+    /**
+     * 异步探测多个设备的在线状态
+     * 发送CODE11后，3秒内无响应则标记离线并推送
+     * 
+     * @param deviceIds 设备ID列表
+     */
+    public void probeDevicesAsync(List<String> deviceIds) {
+        if (deviceIds == null || deviceIds.isEmpty()) {
+            return;
+        }
+        
+        for (String deviceId : deviceIds) {
+            probeDeviceAsync(deviceId);
+        }
+    }
+    
+    /**
+     * 异步探测单个设备的在线状态
+     * 发送CODE11后，3秒内无响应则标记离线并推送
+     * 
+     * @param deviceId 设备ID
+     */
+    public void probeDeviceAsync(String deviceId) {
+        if (deviceId == null) {
+            return;
+        }
+        
+        // 检查设备是否有效（ssid不为空）
+        Device device = deviceRepository.selectById(deviceId);
+        if (device == null || device.getSsid() == null || device.getSsid().isEmpty()) {
+            log.debug("设备 {} ssid为空，跳过探测", deviceId);
+            return;
+        }
+        
+        // 如果设备已经在等待响应中，跳过重复探测
+        if (pendingProbeDevices.contains(deviceId)) {
+            log.debug("设备 {} 已在探测中，跳过", deviceId);
+            return;
+        }
+        
+        // 标记设备正在等待响应
+        pendingProbeDevices.add(deviceId);
+        
+        try {
+            // 发送CODE11探测
+            requestDeviceInfo(deviceId);
+            log.info("已发送CODE11探测到设备 {}", deviceId);
+            
+            // 3秒后检查是否收到响应
+            scheduler.schedule(() -> {
+                if (pendingProbeDevices.remove(deviceId)) {
+                    // 仍在等待列表中，说明未收到响应，标记离线
+                    log.info("设备 {} CODE11响应超时(3秒)，标记为离线", deviceId);
+                    markDeviceOffline(deviceId);
+                }
+            }, PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            
+        } catch (Exception e) {
+            pendingProbeDevices.remove(deviceId);
+            log.error("发送CODE11探测失败 - deviceId={}", deviceId, e);
+        }
+    }
+    
+    /**
+     * 设备响应了CODE11（或CODE10上线），从等待列表移除
+     * 在处理CODE10、CODE11响应时调用
+     */
+    private void onDeviceResponded(String deviceId) {
+        pendingProbeDevices.remove(deviceId);
     }
     
     // ==================== 设备离线检测 ====================
