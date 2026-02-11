@@ -2,7 +2,6 @@ package com.pura365.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.*;
-import com.pura365.camera.enums.CloudPlanType;
 import com.pura365.camera.enums.CommissionFeeType;
 import com.pura365.camera.enums.PaymentOrderStatus;
 import com.pura365.camera.model.report.PageResult;
@@ -398,7 +397,7 @@ public class RechargeOrderReportService {
         CloudPlan plan = getPlanByPlanId(order.getProductId());
         if (plan != null) {
             vo.setPlanName(plan.getName());
-            vo.setPlanType(plan.getType() != null ? plan.getType().getCode() : null);
+            vo.setPlanType(plan.getType());
             vo.setPlanTypeName(commissionService.getPlanTypeName(plan.getType()));
             vo.setCloudType(getCloudType(plan.getType()));
             vo.setOriginalPrice(plan.getPrice());
@@ -560,8 +559,8 @@ public class RechargeOrderReportService {
     /**
      * 获取云存类型
      */
-    private String getCloudType(CloudPlanType planType) {
-        if (CloudPlanType.TRAFFIC == planType) {
+    private String getCloudType(String planType) {
+        if ("traffic".equals(planType)) {
             return "流量";
         }
         return "云存";

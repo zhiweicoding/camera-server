@@ -300,7 +300,7 @@ public class PlanCommissionService {
         CloudPlan plan = planRepository.selectOne(planQw);
         if (plan != null) {
             vo.setPlanName(plan.getName());
-            vo.setPlanType(plan.getType() != null ? plan.getType().getCode() : null);
+            vo.setPlanType(plan.getType());
             vo.setPlanTypeName(getPlanTypeName(plan.getType()));
             vo.setPlanPrice(plan.getPrice());
         }

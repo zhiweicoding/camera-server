@@ -4,8 +4,6 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.pura365.camera.enums.CloudPlanPeriod;
-import com.pura365.camera.enums.CloudPlanType;
 import com.pura365.camera.enums.EnableStatus;
 import lombok.Data;
 
@@ -53,15 +51,35 @@ public class CloudPlan {
 
     /** 周期: month-月付, year-年付 */
     @TableField("period")
-    private CloudPlanPeriod period;
+    private String period;
+
+    /** 周期月数: 1/3/12 */
+    @TableField("period_num")
+    private Integer periodNum;
 
     /** 套餐特性(JSON) */
     @TableField("features")
     private String features;
 
-    /** 套餐类型: motion-动态录像, fulltime-全天录像, traffic-4G流量 */
+    /** 套餐类型: motion-动态录像, fulltime-全天录像, traffic-4G流量 等 */
     @TableField("type")
-    private CloudPlanType type;
+    private String type;
+
+    /** 机型代码(关联network_lens字典) */
+    @TableField("device_model")
+    private String deviceModel;
+
+    /** 流量(GB), 仅4G流量类型使用 */
+    @TableField("traffic_gb")
+    private Integer trafficGb;
+
+    /** 语言设置: zh/en等 */
+    @TableField("language")
+    private String language;
+
+    /** 是否自动续费: 0-否 1-是 */
+    @TableField("auto_renew")
+    private Integer autoRenew;
 
     /** 排序序号 */
     @TableField("sort_order")

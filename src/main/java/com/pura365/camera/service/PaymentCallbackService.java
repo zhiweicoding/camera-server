@@ -5,7 +5,6 @@ import com.pura365.camera.domain.CloudPlan;
 import com.pura365.camera.domain.CloudSubscription;
 import com.pura365.camera.domain.Device;
 import com.pura365.camera.domain.PaymentOrder;
-import com.pura365.camera.enums.CloudPlanPeriod;
 import com.pura365.camera.enums.PaymentOrderStatus;
 import com.pura365.camera.repository.CloudPlanRepository;
 import com.pura365.camera.repository.CloudSubscriptionRepository;
@@ -196,11 +195,13 @@ public class PaymentCallbackService {
         cal.setTime(baseTime);
         
         if (plan != null && plan.getPeriod() != null) {
-            CloudPlanPeriod period = plan.getPeriod();
-            if (CloudPlanPeriod.YEAR == period) {
+            // 优先使用 periodNum（月数），兼容旧的 period 字符串
+            if (plan.getPeriodNum() != null && plan.getPeriodNum() > 0) {
+                cal.add(Calendar.MONTH, plan.getPeriodNum());
+            } else if ("year".equals(plan.getPeriod())) {
                 // 年付：加1年
                 cal.add(Calendar.YEAR, 1);
-            } else if (CloudPlanPeriod.MONTH == period) {
+            } else if ("month".equals(plan.getPeriod())) {
                 // 月付：加1个月
                 cal.add(Calendar.MONTH, 1);
             } else {

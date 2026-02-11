@@ -14,7 +14,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS `device`;
 CREATE TABLE `device` (
   `id` varchar(50) NOT NULL COMMENT '设备序列号，主键',
-  `mac` varchar(20) NOT NULL COMMENT '设备 MAC 地址',
+  `mac` varchar(20) DEFAULT NULL COMMENT '设备 MAC 地址',
   `ssid` varchar(32) DEFAULT NULL COMMENT 'WiFi SSID',
   `region` varchar(10) DEFAULT NULL COMMENT '区域，如 cn/us',
   `name` varchar(100) DEFAULT NULL COMMENT '设备名称',
@@ -189,9 +189,9 @@ CREATE TABLE `user_push_token` (
   `user_id` bigint NOT NULL COMMENT '用户ID',
   `device_type` varchar(20) DEFAULT NULL COMMENT '设备类型: iOS/Android',
   `registration_id` varchar(255) NOT NULL COMMENT '极光推送Registration ID',
-  `app_version` varchar(20) DEFAULT NULL COMMENT 'APP版本号',
-  `device_model` varchar(50) DEFAULT NULL COMMENT '设备型号',
-  `os_version` varchar(20) DEFAULT NULL COMMENT '系统版本',
+  `app_version` varchar(50) DEFAULT NULL COMMENT 'APP版本号',
+  `device_model` varchar(100) DEFAULT NULL COMMENT '设备型号',
+  `os_version` varchar(100) DEFAULT NULL COMMENT '系统版本',
   `enabled` tinyint(1) NOT NULL DEFAULT 1 COMMENT '是否启用: 0-禁用 1-启用',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
