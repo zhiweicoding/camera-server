@@ -83,4 +83,8 @@ public class CloudPlanVO {
     @JsonProperty("sort_order")
     @Schema(description = "排序序号", example = "1")
     private Integer sortOrder;
+
+    @JsonProperty("currency")
+    @Schema(description = "甯佺: CNY-浜烘皯甯? USD-缇庡厓", example = "CNY")
+    private String currency;
 }

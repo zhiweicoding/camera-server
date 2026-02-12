@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pura365.camera.domain.CloudPlan;
 import com.pura365.camera.domain.CloudSubscription;
 import com.pura365.camera.domain.UserDevice;
+import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.model.ApiResponse;
 import com.pura365.camera.model.cloud.*;
 import com.pura365.camera.repository.CloudPlanRepository;
@@ -21,6 +22,7 @@ import com.pura365.camera.service.CloudVideoCleanupService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -44,6 +46,8 @@ import java.util.*;
 public class CloudController {
 
     private static final Logger log = LoggerFactory.getLogger(CloudController.class);
+    private static final String DEFAULT_CURRENCY = "CNY";
+    private static final String USD_CURRENCY = "USD";
 
     @Autowired
     private CloudPlanRepository cloudPlanRepository;
@@ -66,6 +70,9 @@ public class CloudController {
     @Autowired
     private CloudVideoCleanupService cloudVideoCleanupService;
 
+    @Value("${app.payment.default-currency:CNY}")
+    private String serverCurrency;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -76,7 +83,8 @@ public class CloudController {
     public ApiResponse<CloudPlansResponse> getCloudPlans(@RequestAttribute("currentUserId") Long currentUserId) {
         log.info("获取云存储套餐列表 - userId={}", currentUserId);
         QueryWrapper<CloudPlan> qw = new QueryWrapper<>();
-        qw.orderByAsc("type", "sort_order");
+        qw.eq("status", EnableStatus.ENABLED.getCode())
+                .orderByAsc("type", "sort_order");
         List<CloudPlan> plans = cloudPlanRepository.selectList(qw);
         
         // 按类型分组
@@ -98,12 +106,13 @@ public class CloudController {
                 item.setFeatures(parseFeatures(plan.getFeatures()));
                 item.setType(plan.getType());
                 item.setSortOrder(plan.getSortOrder());
+                item.setCurrency(resolveServerCurrency());
                 
                 String type = plan.getType() != null ? plan.getType() : "motion";
                 if (groupedPlans.containsKey(type)) {
                     groupedPlans.get(type).add(item);
                 } else {
-                    groupedPlans.get("motion").add(item);
+                    log.warn("忽略未知套餐类型: planId={}, type={}", plan.getPlanId(), type);
                 }
             }
         }
@@ -144,6 +153,9 @@ public class CloudController {
         if (plan == null) {
             return ApiResponse.error(404, "云存储套餐不存在");
         }
+        if (plan.getStatus() != EnableStatus.ENABLED) {
+            return ApiResponse.error(400, "套餐已下架，暂不可购买");
+        }
 
         BigDecimal amount = plan.getPrice();
         if (amount == null) {
@@ -156,7 +168,7 @@ public class CloudController {
         CloudSubscribeResponse response = new CloudSubscribeResponse();
         response.setOrderId(orderId);
         response.setAmount(amount);
-        response.setCurrency("CNY");
+        response.setCurrency(resolveServerCurrency());
         response.setPaymentMethod(paymentMethod);
 
         if ("wechat".equalsIgnoreCase(paymentMethod)) {
@@ -669,6 +681,13 @@ public class CloudController {
             }
         }
         return list;
+    }
+
+    private String resolveServerCurrency() {
+        if (USD_CURRENCY.equalsIgnoreCase(serverCurrency)) {
+            return USD_CURRENCY;
+        }
+        return DEFAULT_CURRENCY;
     }
 
     private String formatIsoTime(Date date) {

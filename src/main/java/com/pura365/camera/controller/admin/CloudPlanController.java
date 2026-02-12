@@ -33,7 +33,11 @@ public class CloudPlanController {
             @RequestParam(required = false) String type,
             @RequestParam(required = false) String name,
             @RequestParam(required = false) Integer status) {
-        return ApiResponse.success(planService.listPlans(page, size, type, name, status));
+        try {
+            return ApiResponse.success(planService.listPlans(page, size, type, name, status));
+        } catch (RuntimeException e) {
+            return ApiResponse.error(400, e.getMessage());
+        }
     }
 
     /**

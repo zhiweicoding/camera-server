@@ -96,13 +96,16 @@ public class DeviceProductionService {
     public Map<String, Object> getOptions() {
         Map<String, Object> map = new HashMap<>();
         // 网络+镜头配置（机身号第1-2位）
-        map.put("network_lens", Arrays.asList("A1", "A2", "A3", "B1", "B2", "B3", "C1", "C2", "R1"));
+        map.put("network_lens", getDictCodesOrDefault("network_lens",
+                Arrays.asList("A1", "A2", "A3", "B1", "B2", "B3", "C1", "C2", "R1")));
         // 设备形态（机身号第3位）
-        map.put("device_form", Arrays.asList("1", "2", "3", "4", "5"));
+        map.put("device_form", getDictCodesOrDefault("device_form",
+                Arrays.asList("1", "2", "3", "4", "5")));
         // 特殊要求（机身号第4位）
-        map.put("special_req", Arrays.asList("0", "1", "2", "3"));
+        map.put("special_req", getDictCodesOrDefault("special_req",
+                Arrays.asList("0", "1", "2", "3")));
         // 预留位（机身号第8位）
-        map.put("reserved", Collections.singletonList("0"));
+        map.put("reserved", getDictCodesOrDefault("reserved", Collections.singletonList("0")));
         // 装机商列表（installer表，机身号第5位），转换为前端所需格式
         List<Map<String, Object>> installerList = new ArrayList<>();
         for (Installer installer : listInstallers()) {
@@ -138,6 +141,23 @@ public class DeviceProductionService {
         // 保留旧字段兼容
         map.put("assemblers", listAssemblers());
         return map;
+    }
+
+    private List<String> getDictCodesOrDefault(String category, List<String> defaults) {
+        List<SysDict> dictItems = sysDictService.listByCategory(category);
+        if (dictItems == null || dictItems.isEmpty()) {
+            return new ArrayList<>(defaults);
+        }
+        List<String> codes = new ArrayList<>();
+        for (SysDict item : dictItems) {
+            if (item.getCode() != null && !item.getCode().trim().isEmpty()) {
+                codes.add(item.getCode().trim());
+            }
+        }
+        if (codes.isEmpty()) {
+            return new ArrayList<>(defaults);
+        }
+        return codes;
     }
 
     /**

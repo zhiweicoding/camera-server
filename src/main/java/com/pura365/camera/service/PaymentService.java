@@ -2,12 +2,14 @@ package com.pura365.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.pura365.camera.domain.*;
+import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.enums.PaymentOrderStatus;
 import com.pura365.camera.model.payment.*;
 import com.pura365.camera.repository.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -35,6 +37,7 @@ public class PaymentService {
 
     /** 默认货币 */
     private static final String DEFAULT_CURRENCY = "CNY";
+    private static final String USD_CURRENCY = "USD";
 
     /** 商品类型: 云存储 */
     private static final String PRODUCT_TYPE_CLOUD_STORAGE = "cloud_storage";
@@ -62,6 +65,9 @@ public class PaymentService {
 
     @Autowired
     private PaypalService paypalService;
+
+    @Value("${app.payment.default-currency:CNY}")
+    private String serverCurrency;
 
     /**
      * 创建支付订单
@@ -94,12 +100,18 @@ public class PaymentService {
 
         // 根据商品类型获取价格
         BigDecimal amount;
+        String currency = resolveServerCurrency();
         CloudPlan plan = null;
         if (PRODUCT_TYPE_CLOUD_STORAGE.equals(request.getProductType())) {
             plan = findPlanByPlanId(request.getProductId());
             if (plan == null) {
                 result.setErrorCode(404);
                 result.setErrorMessage("云存储套餐不存在");
+                return result;
+            }
+            if (plan.getStatus() != EnableStatus.ENABLED) {
+                result.setErrorCode(400);
+                result.setErrorMessage("套餐已下架，暂不可购买");
                 return result;
             }
             amount = plan.getPrice() != null ? plan.getPrice() : BigDecimal.ZERO;
@@ -138,7 +150,7 @@ public class PaymentService {
         order.setProductType(request.getProductType());
         order.setProductId(request.getProductId());
         order.setAmount(amount);
-        order.setCurrency(DEFAULT_CURRENCY);
+        order.setCurrency(currency);
         order.setStatus(PaymentOrderStatus.PENDING);
         order.setPaymentMethod(paymentMethod);
         order.setCreatedAt(new Date());
@@ -439,6 +451,13 @@ public class PaymentService {
             return amount.divide(new BigDecimal("7.2"), 2, BigDecimal.ROUND_HALF_UP);
         }
         return amount;
+    }
+
+    private String resolveServerCurrency() {
+        if (USD_CURRENCY.equalsIgnoreCase(serverCurrency)) {
+            return USD_CURRENCY;
+        }
+        return DEFAULT_CURRENCY;
     }
 
     /**
