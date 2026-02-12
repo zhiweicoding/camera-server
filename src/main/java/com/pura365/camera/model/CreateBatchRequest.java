@@ -15,6 +15,12 @@ public class CreateBatchRequest {
     private String networkLens;
 
     /**
+     * 机型描述（可选），用于保存到 sys_dict.name
+     */
+    @JsonAlias("deviceModelDesc")
+    private String networkLensDesc;
+
+    /**
      * 设备形态 (第3位)
      * 可选值: 1-常电卡片机, 2-常电摇头机, 3-PIR电池卡片机, 4-PIR电池摇头机, 5-AOV电池卡片机
      */
@@ -93,6 +99,14 @@ public class CreateBatchRequest {
 
     public void setNetworkLens(String networkLens) {
         this.networkLens = networkLens;
+    }
+
+    public String getNetworkLensDesc() {
+        return networkLensDesc;
+    }
+
+    public void setNetworkLensDesc(String networkLensDesc) {
+        this.networkLensDesc = networkLensDesc;
     }
 
     public String getDeviceForm() {

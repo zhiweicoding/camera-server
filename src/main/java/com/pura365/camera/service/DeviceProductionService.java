@@ -98,6 +98,8 @@ public class DeviceProductionService {
         // 网络+镜头配置（机身号第1-2位）
         map.put("network_lens", getDictCodesOrDefault("network_lens",
                 Arrays.asList("A1", "A2", "A3", "B1", "B2", "B3", "C1", "C2", "R1")));
+        map.put("network_lens_options", getDictOptionsOrDefault("network_lens",
+                Arrays.asList("A1", "A2", "A3", "B1", "B2", "B3", "C1", "C2", "R1")));
         // 设备形态（机身号第3位）
         map.put("device_form", getDictCodesOrDefault("device_form",
                 Arrays.asList("1", "2", "3", "4", "5")));
@@ -122,16 +124,26 @@ public class DeviceProductionService {
         List<Map<String, Object>> dealersWithDefault = new ArrayList<>();
         // 添加默认选项
         Map<String, Object> defaultDealer = new HashMap<>();
+        defaultDealer.put("dealerCode", "00");
         defaultDealer.put("dealerIdCode", "00");
         defaultDealer.put("vendorCode", "00");
+        defaultDealer.put("installerCode", "");
+        defaultDealer.put("installerIdCode", "");
         defaultDealer.put("name", "先不指定");
         defaultDealer.put("companyName", null);
         dealersWithDefault.add(defaultDealer);
         // 添加实际经销商（从 dealer 表获取）
         for (Dealer d : listDealers()) {
+            String dealerCode = d.getDealerCode() != null ? d.getDealerCode().trim() : "";
+            if (dealerCode.isEmpty() || "00".equals(dealerCode)) {
+                continue;
+            }
             Map<String, Object> dealer = new HashMap<>();
-            dealer.put("dealerIdCode", d.getDealerCode());
-            dealer.put("vendorCode", d.getDealerCode());
+            dealer.put("dealerCode", dealerCode);
+            dealer.put("dealerIdCode", dealerCode);
+            dealer.put("vendorCode", dealerCode);
+            dealer.put("installerCode", d.getInstallerCode());
+            dealer.put("installerIdCode", d.getInstallerCode());
             dealer.put("name", d.getName());
             dealer.put("companyName", d.getCompanyName());
             dealer.put("id", d.getId());
@@ -148,7 +160,7 @@ public class DeviceProductionService {
         if (dictItems == null || dictItems.isEmpty()) {
             return new ArrayList<>(defaults);
         }
-        List<String> codes = new ArrayList<>();
+        Set<String> codes = new LinkedHashSet<>();
         for (SysDict item : dictItems) {
             if (item.getCode() != null && !item.getCode().trim().isEmpty()) {
                 codes.add(item.getCode().trim());
@@ -157,7 +169,40 @@ public class DeviceProductionService {
         if (codes.isEmpty()) {
             return new ArrayList<>(defaults);
         }
-        return codes;
+        return new ArrayList<>(codes);
+    }
+
+    private List<Map<String, String>> getDictOptionsOrDefault(String category, List<String> defaults) {
+        List<SysDict> dictItems = sysDictService.listByCategory(category);
+        List<Map<String, String>> options = new ArrayList<>();
+        if (dictItems != null && !dictItems.isEmpty()) {
+            Set<String> seen = new LinkedHashSet<>();
+            for (SysDict item : dictItems) {
+                if (item.getCode() == null) {
+                    continue;
+                }
+                String code = item.getCode().trim();
+                if (code.isEmpty() || seen.contains(code)) {
+                    continue;
+                }
+                Map<String, String> option = new HashMap<>();
+                option.put("code", code);
+                option.put("name", item.getName() != null && !item.getName().trim().isEmpty() ? item.getName().trim() : code);
+                options.add(option);
+                seen.add(code);
+            }
+            if (!options.isEmpty()) {
+                return options;
+            }
+        }
+
+        for (String code : defaults) {
+            Map<String, String> option = new HashMap<>();
+            option.put("code", code);
+            option.put("name", code);
+            options.add(option);
+        }
+        return options;
     }
 
     /**
@@ -556,7 +601,10 @@ public class DeviceProductionService {
         String assemblerCode = request.getAssemblerCode();
         String vendorCode = request.getVendorCode();
         String reserved = request.getReserved() != null ? request.getReserved() : "0";
+        String networkLensDesc = request.getNetworkLensDesc();
         int quantity = request.getQuantity();
+
+        ensureNetworkLensDictItem(networkLens, networkLensDesc);
 
         // 校验经销商是否存在且启用（00表示先不指定，跳过校验）
         if (!"00".equals(vendorCode)) {
@@ -617,6 +665,18 @@ public class DeviceProductionService {
      * 校验创建批次请求参数
      */
     private void validateBatchRequest(CreateBatchRequest request) {
+        if (request == null) {
+            throw new RuntimeException("Request cannot be null");
+        }
+
+        request.setNetworkLens(normalizeCode(request.getNetworkLens(), true));
+        request.setDeviceForm(normalizeCode(request.getDeviceForm(), false));
+        request.setSpecialReq(normalizeCode(request.getSpecialReq(), false));
+        request.setAssemblerCode(normalizeCode(request.getAssemblerCode(), false));
+        request.setVendorCode(normalizeCode(request.getVendorCode(), false));
+        String normalizedReserved = normalizeCode(request.getReserved(), false);
+        request.setReserved(normalizedReserved != null ? normalizedReserved : "0");
+        request.setNetworkLensDesc(normalizeText(request.getNetworkLensDesc()));
         if (request.getNetworkLens() == null || request.getNetworkLens().length() != 2) {
             throw new RuntimeException("网络+镜头配置(第1-2位)必须是2位");
         }
@@ -637,6 +697,66 @@ public class DeviceProductionService {
         }
         if (request.getQuantity() == null || request.getQuantity() <= 0) {
             throw new RuntimeException("生产数量必须大于0");
+        }
+    }
+
+    /**
+     * 规范化代码：去空格，必要时转大写
+     */
+    private String normalizeCode(String value, boolean uppercase) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim();
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        return uppercase ? normalized.toUpperCase(Locale.ROOT) : normalized;
+    }
+
+    private String normalizeText(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim();
+        return normalized.isEmpty() ? null : normalized;
+    }
+
+    private void ensureNetworkLensDictItem(String networkLens, String networkLensDesc) {
+        if (networkLens == null || networkLens.trim().isEmpty()) {
+            return;
+        }
+        String inputName = normalizeText(networkLensDesc);
+        String createName = inputName != null ? inputName : networkLens;
+
+        SysDict existing = sysDictService.getByCategoryAndCode("network_lens", networkLens);
+        if (existing == null) {
+            try {
+                SysDict dict = new SysDict();
+                dict.setCategory("network_lens");
+                dict.setCode(networkLens);
+                dict.setName(createName);
+                dict.setStatus(EnableStatus.ENABLED);
+                sysDictService.create(dict);
+                return;
+            } catch (RuntimeException ex) {
+                // 骞跺彂鍒涘缓鍚屼竴涓満鍨嬩唬鐮佹椂锛岃嫢宸叉湁璁板綍鍒欑户缁悗缁祦绋?
+                existing = sysDictService.getByCategoryAndCode("network_lens", networkLens);
+                if (existing == null) {
+                    throw ex;
+                }
+            }
+        }
+
+        if (!EnableStatus.ENABLED.equals(existing.getStatus())) {
+            sysDictService.updateStatus(existing.getId(), EnableStatus.ENABLED.getCode());
+        }
+
+        String existingName = normalizeText(existing.getName());
+        if (existingName == null || (inputName != null && !inputName.equals(existingName))) {
+            SysDict update = new SysDict();
+            update.setName(inputName != null ? inputName : networkLens);
+            sysDictService.update(existing.getId(), update);
         }
     }
 

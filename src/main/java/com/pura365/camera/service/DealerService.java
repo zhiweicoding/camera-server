@@ -136,6 +136,9 @@ public class DealerService {
             if (dealer.getDealerCode().length() != 2) {
                 throw new RuntimeException("经销商代号必须为2位");
             }
+            if ("00".equals(dealer.getDealerCode())) {
+                throw new RuntimeException("经销商代码00为系统保留值，不能使用");
+            }
             Dealer existing = getByCode(dealer.getDealerCode());
             if (existing != null) {
                 throw new RuntimeException("经销商代号已存在: " + dealer.getDealerCode());
@@ -170,6 +173,9 @@ public class DealerService {
         if (dealer.getDealerCode() != null && !dealer.getDealerCode().equals(existing.getDealerCode())) {
             if (dealer.getDealerCode().length() != 2) {
                 throw new RuntimeException("经销商代号必须为2位");
+            }
+            if ("00".equals(dealer.getDealerCode())) {
+                throw new RuntimeException("经销商代码00为系统保留值，不能使用");
             }
             Dealer byCode = getByCode(dealer.getDealerCode());
             if (byCode != null && !byCode.getId().equals(id)) {

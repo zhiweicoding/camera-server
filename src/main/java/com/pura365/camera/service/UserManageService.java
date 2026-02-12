@@ -493,6 +493,9 @@ public class UserManageService {
         for (int i = 0; i < DEALER_CODE_CHARS.length(); i++) {
             for (int j = 0; j < DEALER_CODE_CHARS.length(); j++) {
                 String code = String.valueOf(DEALER_CODE_CHARS.charAt(i)) + DEALER_CODE_CHARS.charAt(j);
+                if ("00".equals(code)) {
+                    continue;
+                }
                 if (!usedCodes.contains(code)) {
                     return code;
                 }
