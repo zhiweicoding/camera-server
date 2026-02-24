@@ -287,17 +287,57 @@ public class CloudController {
         CloudSubscriptionVO response = new CloudSubscriptionVO();
         boolean isSubscribed = sub != null && (sub.getExpireAt() == null || sub.getExpireAt().after(new Date()));
         response.setIsSubscribed(isSubscribed);
+        response.setAutoRenew(sub != null && sub.getAutoRenew() != null && sub.getAutoRenew() == 1);
         if (isSubscribed && sub != null) {
             response.setPlanId(sub.getPlanId());
             response.setPlanName(sub.getPlanName());
             response.setExpireAt(sub.getExpireAt() != null ? formatIsoTime(sub.getExpireAt()) : null);
-            response.setAutoRenew(sub.getAutoRenew() != null && sub.getAutoRenew() == 1);
         } else {
             response.setPlanId(null);
             response.setPlanName(null);
             response.setExpireAt(null);
-            response.setAutoRenew(false);
         }
+        return ApiResponse.success(response);
+    }
+
+    /**
+     * Set cloud subscription auto-renew flag for a device.
+     */
+    @Operation(summary = "Set auto renew", description = "Update auto renew flag of latest cloud subscription")
+    @PutMapping("/subscription/{deviceId}/auto-renew")
+    public ApiResponse<CloudSubscriptionVO> updateSubscriptionAutoRenew(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @Parameter(description = "璁惧ID", required = true, example = "DEVICE123456")
+            @PathVariable("deviceId") String deviceId,
+            @RequestBody UpdateAutoRenewRequest request) {
+        log.info("Update auto renew - userId={}, deviceId={}, autoRenew={}",
+                currentUserId, deviceId, request != null ? request.getAutoRenew() : null);
+        if (request == null || request.getAutoRenew() == null) {
+            return ApiResponse.error(400, "auto_renew cannot be null");
+        }
+        if (!hasUserDevice(currentUserId, deviceId)) {
+            return ApiResponse.error(403, "no permission for this device");
+        }
+
+        QueryWrapper<CloudSubscription> qw = new QueryWrapper<>();
+        qw.lambda().eq(CloudSubscription::getDeviceId, deviceId)
+                .orderByDesc(CloudSubscription::getExpireAt)
+                .last("limit 1");
+        CloudSubscription sub = cloudSubscriptionRepository.selectOne(qw);
+        if (sub == null) {
+            return ApiResponse.error(404, "cloud subscription not found for device");
+        }
+
+        sub.setAutoRenew(Boolean.TRUE.equals(request.getAutoRenew()) ? 1 : 0);
+        sub.setUpdatedAt(new Date());
+        cloudSubscriptionRepository.updateById(sub);
+
+        CloudSubscriptionVO response = new CloudSubscriptionVO();
+        response.setIsSubscribed(sub.getExpireAt() == null || sub.getExpireAt().after(new Date()));
+        response.setPlanId(sub.getPlanId());
+        response.setPlanName(sub.getPlanName());
+        response.setExpireAt(sub.getExpireAt() != null ? formatIsoTime(sub.getExpireAt()) : null);
+        response.setAutoRenew(Boolean.TRUE.equals(request.getAutoRenew()));
         return ApiResponse.success(response);
     }
     

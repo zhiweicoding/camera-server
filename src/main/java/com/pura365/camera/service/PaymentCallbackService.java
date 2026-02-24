@@ -164,7 +164,8 @@ public class PaymentCallbackService {
                 subscription.setPlanId(order.getProductId());
                 subscription.setPlanName(plan != null ? plan.getName() : null);
                 subscription.setExpireAt(expireAt);
-                subscription.setAutoRenew(0); // 默认不自动续费
+                int defaultAutoRenew = (plan != null && plan.getAutoRenew() != null) ? plan.getAutoRenew() : 0;
+                subscription.setAutoRenew(defaultAutoRenew);
                 subscription.setCreatedAt(new Date());
                 subscription.setUpdatedAt(new Date());
                 cloudSubscriptionRepository.insert(subscription);

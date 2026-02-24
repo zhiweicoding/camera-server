@@ -66,6 +66,9 @@ public class PaymentService {
     @Autowired
     private PaypalService paypalService;
 
+    @Autowired
+    private CommissionCalculateService commissionCalculateService;
+
     @Value("${app.payment.default-currency:CNY}")
     private String serverCurrency;
 
@@ -186,6 +189,14 @@ public class PaymentService {
                .eq(PaymentOrder::getStatus, PaymentOrderStatus.PENDING)
                .last("LIMIT 1");
         return paymentOrderRepository.selectOne(wrapper);
+    }
+
+    private void fillOrderCommissionSafely(PaymentOrder order, String scene) {
+        try {
+            commissionCalculateService.fillOrderCommission(order, order.getDeviceId());
+        } catch (Exception e) {
+            log.error("分润计算失败: scene={}, orderId={}", scene, order != null ? order.getOrderId() : null, e);
+        }
     }
 
     /**
@@ -376,6 +387,7 @@ public class PaymentService {
             order.setStatus(PaymentOrderStatus.PAID);
             order.setPaidAt(new Date());
             order.setUpdatedAt(new Date());
+            fillOrderCommissionSafely(order, "paypal_return");
             paymentOrderRepository.updateById(order);
 
             // 激活云存储服务
@@ -420,6 +432,7 @@ public class PaymentService {
         order.setStatus(PaymentOrderStatus.PAID);
         order.setPaidAt(new Date());
         order.setUpdatedAt(new Date());
+        fillOrderCommissionSafely(order, "paypal_webhook");
         paymentOrderRepository.updateById(order);
 
         // 激活云存储服务
@@ -484,6 +497,7 @@ public class PaymentService {
         order.setThirdOrderId("apple_" + order.getOrderId());
         order.setPaidAt(new Date());
         order.setUpdatedAt(new Date());
+        fillOrderCommissionSafely(order, "apple_pay");
         paymentOrderRepository.updateById(order);
 
         ApplePayVO vo = new ApplePayVO();

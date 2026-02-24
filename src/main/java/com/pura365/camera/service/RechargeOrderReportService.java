@@ -3,6 +3,7 @@ package com.pura365.camera.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.*;
 import com.pura365.camera.enums.CommissionFeeType;
+import com.pura365.camera.enums.CommissionProfitMode;
 import com.pura365.camera.enums.PaymentOrderStatus;
 import com.pura365.camera.model.report.PageResult;
 import com.pura365.camera.model.report.RechargeOrderQueryRequest;
@@ -412,6 +413,9 @@ public class RechargeOrderReportService {
         vo.setPayOrderId(order.getOrderId());
         vo.setPaidAt(order.getPaidAt());
         vo.setThirdOrderId(order.getThirdOrderId());
+        BigDecimal snapshotFeeAmount = order.getFeeAmount();
+        BigDecimal snapshotPlanCost = order.getPlanCost();
+        BigDecimal snapshotProfitAmount = order.getProfitAmount();
 
         // 获取分润配置
         PlanCommission commission = getCommissionByPlanId(order.getProductId());
@@ -421,15 +425,18 @@ public class RechargeOrderReportService {
             vo.setFeeRateDesc(commissionService.buildFeeDesc(commission));
 
             // 计算手续费
-            BigDecimal feeAmount = calculateFee(order.getAmount(), commission);
+            BigDecimal feeAmount = snapshotFeeAmount != null ? snapshotFeeAmount : calculateFee(order.getAmount(), commission);
             vo.setFeeAmount(feeAmount);
 
             // 套餐返点和成本
             vo.setRebateDesc(commission.getRebateRate() != null ? commission.getRebateRate() + "%" : "-");
-            vo.setPlanCost(commission.getPlanCost());
+            BigDecimal planCost = snapshotPlanCost != null ? snapshotPlanCost
+                    : (commission.getPlanCost() != null ? commission.getPlanCost() : BigDecimal.ZERO);
+            vo.setPlanCost(planCost);
 
             // 计算可分润金额
-            BigDecimal profitAmount = calculateProfitAmount(order.getAmount(), feeAmount, commission);
+            BigDecimal profitAmount = snapshotProfitAmount != null ? snapshotProfitAmount
+                    : calculateProfitAmount(order.getAmount(), feeAmount, planCost, commission);
             vo.setProfitAmount(profitAmount);
 
             // 分润模式
@@ -456,10 +463,10 @@ public class RechargeOrderReportService {
             // 无分润配置时的默认值
             vo.setPayeeEntity("-");
             vo.setFeeRateDesc("-");
-            vo.setFeeAmount(BigDecimal.ZERO);
+            vo.setFeeAmount(snapshotFeeAmount != null ? snapshotFeeAmount : BigDecimal.ZERO);
             vo.setRebateDesc("-");
-            vo.setPlanCost(BigDecimal.ZERO);
-            vo.setProfitAmount(BigDecimal.ZERO);
+            vo.setPlanCost(snapshotPlanCost != null ? snapshotPlanCost : BigDecimal.ZERO);
+            vo.setProfitAmount(snapshotProfitAmount != null ? snapshotProfitAmount : BigDecimal.ZERO);
             vo.setProfitMode("-");
             vo.setProfitModeName("-");
             vo.setInstallerRateDesc("0%");
@@ -482,17 +489,19 @@ public class RechargeOrderReportService {
         }
 
         BigDecimal fee = BigDecimal.ZERO;
-        CommissionFeeType feeType = commission.getFeeType();
         BigDecimal feeRate = commission.getFeeRate();
         BigDecimal feeFixed = commission.getFeeFixed();
+        CommissionFeeType feeType = commission.getFeeType();
+        if (feeType == null) {
+            feeType = (feeFixed != null && feeFixed.compareTo(BigDecimal.ZERO) > 0)
+                    ? CommissionFeeType.MIXED : CommissionFeeType.FIXED;
+        }
 
-        if (CommissionFeeType.MIXED == feeType && feeRate != null && feeFixed != null) {
-            // 混合类型：百分比 + 固定金额
-            fee = amount.multiply(feeRate).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP)
-                    .add(feeFixed);
-        } else if (feeRate != null) {
-            // 固定比例
+        if (feeRate != null) {
             fee = amount.multiply(feeRate).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+        }
+        if (CommissionFeeType.MIXED == feeType && feeFixed != null) {
+            fee = fee.add(feeFixed);
         }
 
         return fee.setScale(2, RoundingMode.HALF_UP);
@@ -501,15 +510,18 @@ public class RechargeOrderReportService {
     /**
      * 计算可分润金额
      */
-    private BigDecimal calculateProfitAmount(BigDecimal amount, BigDecimal fee, PlanCommission commission) {
+    private BigDecimal calculateProfitAmount(BigDecimal amount, BigDecimal fee, BigDecimal planCost, PlanCommission commission) {
         if (amount == null) {
             return BigDecimal.ZERO;
         }
 
-        // 可分润金额 = 支付金额 - 手续费 - 套餐成本
+        CommissionProfitMode profitMode = commission != null && commission.getProfitMode() != null
+                ? commission.getProfitMode() : CommissionProfitMode.PROFIT;
+
+        // PROFIT: payment - fee - planCost; REVENUE: payment - fee
         BigDecimal profit = amount.subtract(fee != null ? fee : BigDecimal.ZERO);
-        if (commission != null && commission.getPlanCost() != null) {
-            profit = profit.subtract(commission.getPlanCost());
+        if (CommissionProfitMode.REVENUE != profitMode) {
+            profit = profit.subtract(planCost != null ? planCost : BigDecimal.ZERO);
         }
 
         return profit.compareTo(BigDecimal.ZERO) > 0 ? profit.setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO;

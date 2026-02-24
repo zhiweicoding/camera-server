@@ -2,6 +2,8 @@ package com.pura365.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.*;
+import com.pura365.camera.enums.CommissionFeeType;
+import com.pura365.camera.enums.CommissionProfitMode;
 import com.pura365.camera.repository.*;
 import lombok.Data;
 import org.slf4j.Logger;
@@ -142,10 +144,10 @@ public class CommissionCalculateService {
         result.setPlanCost(planCost);
 
         // 5. 计算可分润金额 = 支付金额 - 手续费 - 套餐成本
-        BigDecimal profitAmount = payAmount.subtract(feeAmount).subtract(planCost);
-        if (profitAmount.compareTo(BigDecimal.ZERO) < 0) {
-            profitAmount = BigDecimal.ZERO;
-        }
+        CommissionProfitMode profitMode = planCommission.getProfitMode() != null
+                ? planCommission.getProfitMode() : CommissionProfitMode.PROFIT;
+
+        BigDecimal profitAmount = calculateProfitAmount(payAmount, feeAmount, planCost, profitMode);
         result.setProfitAmount(profitAmount);
 
         // 6. 从设备获取分润比例（来自创建批次时的设置）
@@ -193,8 +195,8 @@ public class CommissionCalculateService {
             log.debug("双重身份检查失败: {}", e.getMessage());
         }
 
-        log.info("分润计算完成: deviceId={}, payAmount={}, profitAmount={}, installerAmount={}, dealerAmount={}, companyAmount={}",
-                deviceId, payAmount, profitAmount, installerAmount, dealerAmount, companyAmount);
+        log.info("分润计算完成: deviceId={}, payAmount={}, profitMode={}, profitAmount={}, installerAmount={}, dealerAmount={}, companyAmount={}",
+                deviceId, payAmount, profitMode, profitAmount, installerAmount, dealerAmount, companyAmount);
 
         return result;
     }
@@ -341,16 +343,36 @@ public class CommissionCalculateService {
 
         BigDecimal feeRate = commission.getFeeRate();
         BigDecimal feeFixed = commission.getFeeFixed();
+        CommissionFeeType feeType = commission.getFeeType();
+        if (feeType == null) {
+            feeType = (feeFixed != null && feeFixed.compareTo(BigDecimal.ZERO) > 0)
+                    ? CommissionFeeType.MIXED : CommissionFeeType.FIXED;
+        }
 
         BigDecimal fee = BigDecimal.ZERO;
         if (feeRate != null) {
             fee = payAmount.multiply(feeRate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
         }
-        if (feeFixed != null) {
+        if (CommissionFeeType.MIXED == feeType && feeFixed != null) {
             fee = fee.add(feeFixed);
         }
 
         return fee.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal calculateProfitAmount(BigDecimal payAmount, BigDecimal feeAmount, BigDecimal planCost,
+                                             CommissionProfitMode profitMode) {
+        if (payAmount == null) {
+            return BigDecimal.ZERO;
+        }
+
+        BigDecimal distributable = payAmount.subtract(feeAmount != null ? feeAmount : BigDecimal.ZERO);
+        if (CommissionProfitMode.REVENUE != profitMode) {
+            distributable = distributable.subtract(planCost != null ? planCost : BigDecimal.ZERO);
+        }
+
+        return distributable.compareTo(BigDecimal.ZERO) > 0
+                ? distributable.setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
     }
 
     /**

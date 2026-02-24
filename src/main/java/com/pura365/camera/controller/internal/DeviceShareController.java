@@ -44,6 +44,8 @@ public class DeviceShareController {
             @RequestAttribute("currentUserId") Long currentUserId,
             @RequestBody ShareGenerateRequest request) {
 
+        log.info("生成分享码请求 userId={}, deviceId={}, permission={}, targetAccount={}",
+                currentUserId, request.getDeviceId(), request.getPermission(), request.getTargetAccount());
         String deviceId = request.getDeviceId();
         String permission = request.getPermission();
         String targetAccount = request.getTargetAccount();

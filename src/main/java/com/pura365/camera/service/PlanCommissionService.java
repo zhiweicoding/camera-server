@@ -170,6 +170,7 @@ public class PlanCommissionService {
         commission.setStatus(request.getStatus() != null ? EnableStatus.fromCode(request.getStatus()) : EnableStatus.ENABLED);
         commission.setFeeType(request.getFeeType() != null ? CommissionFeeType.fromCode(request.getFeeType()) : CommissionFeeType.FIXED);
         commission.setProfitMode(request.getProfitMode() != null ? CommissionProfitMode.fromCode(request.getProfitMode()) : CommissionProfitMode.PROFIT);
+        normalizeCommissionFeeFields(commission);
 
         commissionRepository.insert(commission);
         log.info("创建套餐分润配置: planId={}, id={}", request.getPlanId(), commission.getId());
@@ -234,6 +235,7 @@ public class PlanCommissionService {
         if (request.getRemark() != null) {
             existing.setRemark(request.getRemark());
         }
+        normalizeCommissionFeeFields(existing);
         existing.setUpdatedAt(new Date());
 
         commissionRepository.updateById(existing);
@@ -374,6 +376,21 @@ public class PlanCommissionService {
     /**
      * 获取分润模式名称
      */
+    private void normalizeCommissionFeeFields(PlanCommission commission) {
+        if (commission == null) {
+            return;
+        }
+
+        CommissionFeeType feeType = commission.getFeeType() != null ? commission.getFeeType() : CommissionFeeType.FIXED;
+        commission.setFeeType(feeType);
+
+        if (CommissionFeeType.MIXED != feeType) {
+            commission.setFeeFixed(null);
+        } else if (commission.getFeeFixed() == null) {
+            commission.setFeeFixed(BigDecimal.ZERO);
+        }
+    }
+
     public String getProfitModeName(CommissionProfitMode profitMode) {
         if (profitMode == null) {
             return "未知";

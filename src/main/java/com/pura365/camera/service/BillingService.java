@@ -48,6 +48,22 @@ public class BillingService {
     @Autowired
     private CloudPlanRepository cloudPlanRepository;
 
+    private BigDecimal calculateRemainingProfit(BigDecimal totalProfitAmount,
+                                                BigDecimal totalInstallerAmount,
+                                                BigDecimal totalDealerAmount,
+                                                String dimension) {
+        BigDecimal safeProfitAmount = totalProfitAmount != null ? totalProfitAmount : BigDecimal.ZERO;
+        BigDecimal safeInstallerAmount = totalInstallerAmount != null ? totalInstallerAmount : BigDecimal.ZERO;
+        BigDecimal safeDealerAmount = totalDealerAmount != null ? totalDealerAmount : BigDecimal.ZERO;
+        BigDecimal remainingProfit = safeProfitAmount.subtract(safeInstallerAmount).subtract(safeDealerAmount);
+        if (remainingProfit.compareTo(BigDecimal.ZERO) < 0) {
+            log.warn("Remaining profit is negative, clamp to zero. dimension={}, totalProfitAmount={}, totalInstallerAmount={}, totalDealerAmount={}, rawRemainingProfit={}",
+                    dimension, safeProfitAmount, safeInstallerAmount, safeDealerAmount, remainingProfit);
+            return BigDecimal.ZERO;
+        }
+        return remainingProfit;
+    }
+
 
     /**
      * 获取装机商账单汇总统计
@@ -173,7 +189,8 @@ public class BillingService {
         }
 
         // 计算剩余利润 = 可分润金额 - 装机商分润 - 经销商分润
-        BigDecimal totalRemainingProfit = totalProfitAmount.subtract(totalInstallerAmount).subtract(totalDealerAmount);
+        BigDecimal totalRemainingProfit = calculateRemainingProfit(
+                totalProfitAmount, totalInstallerAmount, totalDealerAmount, "installer");
 
         Map<String, Object> result = new HashMap<>();
         result.put("list", installerList);
@@ -308,7 +325,8 @@ public class BillingService {
             }
         }
 
-        BigDecimal totalRemainingProfit = totalProfitAmount.subtract(totalInstallerAmount).subtract(totalDealerAmount);
+        BigDecimal totalRemainingProfit = calculateRemainingProfit(
+                totalProfitAmount, totalInstallerAmount, totalDealerAmount, "dealer");
 
         Map<String, Object> result = new HashMap<>();
         result.put("list", dealerList);
