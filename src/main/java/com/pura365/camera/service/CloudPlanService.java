@@ -337,10 +337,29 @@ public class CloudPlanService {
     }
 
     public List<Map<String, String>> listTypes() {
+        LinkedHashMap<String, String> typeNameMap = new LinkedHashMap<>();
+        typeNameMap.put("motion", "动态录像");
+        typeNameMap.put("fulltime", "全天录像");
+        typeNameMap.put("traffic", "4G流量");
+
+        QueryWrapper<CloudPlan> queryWrapper = new QueryWrapper<>();
+        queryWrapper.select("DISTINCT type")
+                .isNotNull("type")
+                .ne("type", "")
+                .orderByAsc("type");
+        List<Object> dbTypes = planRepository.selectObjs(queryWrapper);
+        for (Object dbType : dbTypes) {
+            String typeCode = dbType == null ? "" : dbType.toString().trim();
+            if (typeCode.isEmpty()) {
+                continue;
+            }
+            typeNameMap.putIfAbsent(typeCode, typeCode);
+        }
+
         List<Map<String, String>> types = new ArrayList<>();
-        types.add(createTypeMap("motion", "动态录像"));
-        types.add(createTypeMap("fulltime", "全天录像"));
-        types.add(createTypeMap("traffic", "4G流量"));
+        for (Map.Entry<String, String> entry : typeNameMap.entrySet()) {
+            types.add(createTypeMap(entry.getKey(), entry.getValue()));
+        }
         return types;
     }
 
