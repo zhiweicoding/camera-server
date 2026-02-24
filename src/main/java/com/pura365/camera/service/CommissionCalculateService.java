@@ -46,6 +46,9 @@ public class CommissionCalculateService {
     private PlanCommissionRepository planCommissionRepository;
 
     @Autowired
+    private CloudPlanRepository cloudPlanRepository;
+
+    @Autowired
     private DeviceDealerRepository deviceDealerRepository;
 
     @Autowired
@@ -125,7 +128,6 @@ public class CommissionCalculateService {
             planCommission.setPlanId(planId);
             planCommission.setFeeRate(BigDecimal.ZERO);
             planCommission.setFeeFixed(BigDecimal.ZERO);
-            planCommission.setPlanCost(BigDecimal.ZERO);
         }
 
         // 2. 获取设备信息（分润比例存储在设备级别）
@@ -139,8 +141,8 @@ public class CommissionCalculateService {
         BigDecimal feeAmount = calculateFeeAmount(payAmount, planCommission);
         result.setFeeAmount(feeAmount);
 
-        // 4. 获取套餐成本
-        BigDecimal planCost = planCommission.getPlanCost() != null ? planCommission.getPlanCost() : BigDecimal.ZERO;
+        // 4. 获取套餐成本（优先分润配置，其次回退套餐表）
+        BigDecimal planCost = resolvePlanCost(planId, planCommission);
         result.setPlanCost(planCost);
 
         // 5. 计算可分润金额 = 支付金额 - 手续费 - 套餐成本
@@ -375,6 +377,19 @@ public class CommissionCalculateService {
                 ? distributable.setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
     }
 
+    private BigDecimal resolvePlanCost(String planId, PlanCommission commission) {
+        if (commission != null && commission.getPlanCost() != null) {
+            return commission.getPlanCost();
+        }
+
+        CloudPlan plan = getCloudPlanByPlanId(planId);
+        if (plan != null && plan.getPlanCost() != null) {
+            return plan.getPlanCost();
+        }
+
+        return BigDecimal.ZERO;
+    }
+
     /**
      * 获取套餐分润配置
      */
@@ -385,6 +400,24 @@ public class CommissionCalculateService {
         QueryWrapper<PlanCommission> qw = new QueryWrapper<>();
         qw.lambda().eq(PlanCommission::getPlanId, planId);
         return planCommissionRepository.selectOne(qw);
+    }
+
+    private CloudPlan getCloudPlanByPlanId(String planId) {
+        if (planId == null || planId.trim().isEmpty()) {
+            return null;
+        }
+        QueryWrapper<CloudPlan> qw = new QueryWrapper<>();
+        qw.lambda().eq(CloudPlan::getPlanId, planId);
+        CloudPlan plan = cloudPlanRepository.selectOne(qw);
+        if (plan != null) {
+            return plan;
+        }
+        try {
+            Long id = Long.parseLong(planId);
+            return cloudPlanRepository.selectById(id);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     /**
