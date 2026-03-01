@@ -36,3 +36,9 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+logs
+.idea
+doc
+docs
+dzw-local-camera-server-tcpcampura365cn1883
