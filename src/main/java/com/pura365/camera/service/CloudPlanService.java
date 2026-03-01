@@ -28,6 +28,8 @@ public class CloudPlanService {
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final int MAX_PAGE_SIZE = 100;
     private static final String PRODUCT_TYPE_CLOUD_STORAGE = "cloud_storage";
+    private static final String LANG_ZH = "zh";
+    private static final String LANG_EN = "en";
 
     @Autowired
     private CloudPlanRepository planRepository;
@@ -42,11 +44,25 @@ public class CloudPlanService {
      * 获取所有启用的套餐列表（按类型和排序号）
      */
     public List<CloudPlan> listActivePlans() {
-        QueryWrapper<CloudPlan> qw = new QueryWrapper<>();
-        qw.lambda().eq(CloudPlan::getStatus, EnableStatus.ENABLED)
-                .orderByAsc(CloudPlan::getType)
-                .orderByAsc(CloudPlan::getSortOrder);
-        return planRepository.selectList(qw);
+        return listActivePlans(LANG_ZH);
+    }
+
+    /**
+     * 获取所有启用的套餐列表（按语言过滤，带回退）
+     */
+    public List<CloudPlan> listActivePlans(String lang) {
+        String normalizedLang = normalizeLanguage(lang);
+        List<CloudPlan> plans = queryActivePlans(null, normalizedLang, true);
+        if (!plans.isEmpty()) {
+            return plans;
+        }
+        if (!LANG_ZH.equals(normalizedLang)) {
+            plans = queryActivePlans(null, LANG_ZH, true);
+            if (!plans.isEmpty()) {
+                return plans;
+            }
+        }
+        return queryActivePlans(null, null, false);
     }
 
     /**
@@ -54,11 +70,27 @@ public class CloudPlanService {
      * @param type 类型: motion/fulltime/traffic
      */
     public List<CloudPlan> listActivePlansByType(String type) {
-        QueryWrapper<CloudPlan> qw = new QueryWrapper<>();
-        qw.lambda().eq(CloudPlan::getType, type)
-                .eq(CloudPlan::getStatus, EnableStatus.ENABLED)
-                .orderByAsc(CloudPlan::getSortOrder);
-        return planRepository.selectList(qw);
+        return listActivePlansByType(type, LANG_ZH);
+    }
+
+    /**
+     * 按类型获取启用的套餐列表（按语言过滤，带回退）
+     * @param type 类型: motion/fulltime/traffic
+     * @param lang 语言: zh/en
+     */
+    public List<CloudPlan> listActivePlansByType(String type, String lang) {
+        String normalizedLang = normalizeLanguage(lang);
+        List<CloudPlan> plans = queryActivePlans(type, normalizedLang, true);
+        if (!plans.isEmpty()) {
+            return plans;
+        }
+        if (!LANG_ZH.equals(normalizedLang)) {
+            plans = queryActivePlans(type, LANG_ZH, true);
+            if (!plans.isEmpty()) {
+                return plans;
+            }
+        }
+        return queryActivePlans(type, null, false);
     }
 
     /**
@@ -337,10 +369,15 @@ public class CloudPlanService {
     }
 
     public List<Map<String, String>> listTypes() {
-        LinkedHashMap<String, String> typeNameMap = new LinkedHashMap<>();
-        typeNameMap.put("motion", "动态录像");
-        typeNameMap.put("fulltime", "全天录像");
-        typeNameMap.put("traffic", "4G流量");
+        return listTypes(LANG_ZH);
+    }
+
+    /**
+     * 获取套餐类型列表（按语言返回类型名称）
+     */
+    public List<Map<String, String>> listTypes(String lang) {
+        String normalizedLang = normalizeLanguage(lang);
+        LinkedHashMap<String, String> typeNameMap = createDefaultTypeNameMap(normalizedLang);
 
         QueryWrapper<CloudPlan> queryWrapper = new QueryWrapper<>();
         queryWrapper.select("DISTINCT type")
@@ -361,6 +398,41 @@ public class CloudPlanService {
             types.add(createTypeMap(entry.getKey(), entry.getValue()));
         }
         return types;
+    }
+
+    private List<CloudPlan> queryActivePlans(String type, String lang, boolean filterByLang) {
+        QueryWrapper<CloudPlan> qw = new QueryWrapper<>();
+        qw.lambda().eq(CloudPlan::getStatus, EnableStatus.ENABLED);
+        if (type != null && !type.trim().isEmpty()) {
+            qw.lambda().eq(CloudPlan::getType, type);
+        }
+        if (filterByLang && lang != null && !lang.trim().isEmpty()) {
+            qw.lambda().likeRight(CloudPlan::getLanguage, lang);
+        }
+        qw.lambda().orderByAsc(CloudPlan::getType).orderByAsc(CloudPlan::getSortOrder);
+        return planRepository.selectList(qw);
+    }
+
+    private LinkedHashMap<String, String> createDefaultTypeNameMap(String lang) {
+        LinkedHashMap<String, String> typeNameMap = new LinkedHashMap<>();
+        if (LANG_ZH.equals(lang)) {
+            typeNameMap.put("motion", "动态录像");
+            typeNameMap.put("fulltime", "全天录像");
+            typeNameMap.put("traffic", "4G流量");
+        } else {
+            typeNameMap.put("motion", "Motion Recording");
+            typeNameMap.put("fulltime", "24/7 Recording");
+            typeNameMap.put("traffic", "4G Data");
+        }
+        return typeNameMap;
+    }
+
+    private String normalizeLanguage(String lang) {
+        if (lang == null || lang.trim().isEmpty()) {
+            return LANG_ZH;
+        }
+        String lower = lang.trim().toLowerCase(Locale.ROOT);
+        return lower.startsWith("zh") ? LANG_ZH : LANG_EN;
     }
 
     private Map<String, String> createTypeMap(String code, String name) {

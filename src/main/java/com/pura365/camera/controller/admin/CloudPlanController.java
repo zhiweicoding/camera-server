@@ -45,8 +45,11 @@ public class CloudPlanController {
      */
     @Operation(summary = "获取启用的套餐", description = "获取所有启用的套餐列表")
     @GetMapping("/active")
-    public ApiResponse<List<CloudPlan>> listActivePlans() {
-        return ApiResponse.success(planService.listActivePlans());
+    public ApiResponse<List<CloudPlan>> listActivePlans(
+            @RequestParam(value = "lang", required = false) String lang,
+            @RequestHeader(value = "Accept-Language", required = false) String acceptLanguage) {
+        String resolvedLang = resolveLanguage(lang, acceptLanguage);
+        return ApiResponse.success(planService.listActivePlans(resolvedLang));
     }
 
     /**
@@ -54,8 +57,12 @@ public class CloudPlanController {
      */
     @Operation(summary = "按类型获取套餐", description = "获取指定类型的启用套餐")
     @GetMapping("/type/{type}")
-    public ApiResponse<List<CloudPlan>> listByType(@PathVariable String type) {
-        return ApiResponse.success(planService.listActivePlansByType(type));
+    public ApiResponse<List<CloudPlan>> listByType(
+            @PathVariable String type,
+            @RequestParam(value = "lang", required = false) String lang,
+            @RequestHeader(value = "Accept-Language", required = false) String acceptLanguage) {
+        String resolvedLang = resolveLanguage(lang, acceptLanguage);
+        return ApiResponse.success(planService.listActivePlansByType(type, resolvedLang));
     }
 
     /**
@@ -63,8 +70,11 @@ public class CloudPlanController {
      */
     @Operation(summary = "获取套餐类型", description = "获取所有套餐类型")
     @GetMapping("/types")
-    public ApiResponse<List<Map<String, String>>> listTypes() {
-        return ApiResponse.success(planService.listTypes());
+    public ApiResponse<List<Map<String, String>>> listTypes(
+            @RequestParam(value = "lang", required = false) String lang,
+            @RequestHeader(value = "Accept-Language", required = false) String acceptLanguage) {
+        String resolvedLang = resolveLanguage(lang, acceptLanguage);
+        return ApiResponse.success(planService.listTypes(resolvedLang));
     }
 
     /**
@@ -165,5 +175,14 @@ public class CloudPlanController {
         } catch (RuntimeException e) {
             return ApiResponse.error(400, e.getMessage());
         }
+    }
+
+    private String resolveLanguage(String lang, String acceptLanguage) {
+        String source = (lang != null && !lang.trim().isEmpty()) ? lang : acceptLanguage;
+        if (source == null || source.trim().isEmpty()) {
+            return "zh";
+        }
+        String lower = source.trim().toLowerCase();
+        return lower.startsWith("zh") ? "zh" : "en";
     }
 }

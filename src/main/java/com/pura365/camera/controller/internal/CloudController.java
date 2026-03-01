@@ -48,6 +48,8 @@ public class CloudController {
     private static final Logger log = LoggerFactory.getLogger(CloudController.class);
     private static final String DEFAULT_CURRENCY = "CNY";
     private static final String USD_CURRENCY = "USD";
+    private static final String LANG_ZH = "zh";
+    private static final String LANG_EN = "en";
 
     @Autowired
     private CloudPlanRepository cloudPlanRepository;
@@ -80,12 +82,13 @@ public class CloudController {
      */
     @Operation(summary = "获取云存储套餐列表", description = "列出所有可用的云存储套餐，按类型分组返回")
     @GetMapping("/plans")
-    public ApiResponse<CloudPlansResponse> getCloudPlans(@RequestAttribute("currentUserId") Long currentUserId) {
-        log.info("获取云存储套餐列表 - userId={}", currentUserId);
-        QueryWrapper<CloudPlan> qw = new QueryWrapper<>();
-        qw.eq("status", EnableStatus.ENABLED.getCode())
-                .orderByAsc("type", "sort_order");
-        List<CloudPlan> plans = cloudPlanRepository.selectList(qw);
+    public ApiResponse<CloudPlansResponse> getCloudPlans(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @RequestParam(value = "lang", required = false) String lang,
+            @RequestHeader(value = "Accept-Language", required = false) String acceptLanguage) {
+        String resolvedLang = resolveLanguage(lang, acceptLanguage);
+        log.info("获取云存储套餐列表 - userId={}, lang={}", currentUserId, resolvedLang);
+        List<CloudPlan> plans = loadLocalizedPlans(resolvedLang);
         
         // 按类型分组
         Map<String, List<CloudPlanVO>> groupedPlans = new LinkedHashMap<>();
@@ -123,6 +126,44 @@ public class CloudController {
         response.setTraffic(groupedPlans.get("traffic"));
         
         return ApiResponse.success(response);
+    }
+
+    private List<CloudPlan> loadLocalizedPlans(String lang) {
+        String normalizedLang = normalizeLanguage(lang);
+        List<CloudPlan> plans = queryEnabledPlansByLanguage(normalizedLang, true);
+        if (!plans.isEmpty()) {
+            return plans;
+        }
+        if (!LANG_ZH.equals(normalizedLang)) {
+            plans = queryEnabledPlansByLanguage(LANG_ZH, true);
+            if (!plans.isEmpty()) {
+                return plans;
+            }
+        }
+        return queryEnabledPlansByLanguage(null, false);
+    }
+
+    private List<CloudPlan> queryEnabledPlansByLanguage(String lang, boolean filterByLang) {
+        QueryWrapper<CloudPlan> qw = new QueryWrapper<>();
+        qw.eq("status", EnableStatus.ENABLED.getCode());
+        if (filterByLang && lang != null && !lang.trim().isEmpty()) {
+            qw.likeRight("language", lang);
+        }
+        qw.orderByAsc("type", "sort_order");
+        return cloudPlanRepository.selectList(qw);
+    }
+
+    private String resolveLanguage(String lang, String acceptLanguage) {
+        String source = (lang != null && !lang.trim().isEmpty()) ? lang : acceptLanguage;
+        return normalizeLanguage(source);
+    }
+
+    private String normalizeLanguage(String source) {
+        if (source == null || source.trim().isEmpty()) {
+            return LANG_ZH;
+        }
+        String lower = source.trim().toLowerCase(Locale.ROOT);
+        return lower.startsWith("zh") ? LANG_ZH : LANG_EN;
     }
 
     /**
