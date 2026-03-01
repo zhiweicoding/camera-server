@@ -45,4 +45,11 @@ public class ShareGenerateResponse {
     @JsonProperty("permission")
     @Schema(description = "分享权限", example = "view_only")
     private String permission;
+
+    /**
+     * 二维码图片（Base64 PNG）
+     */
+    @JsonProperty("qr_image_base64")
+    @Schema(description = "二维码图片Base64（PNG，不含data:image前缀）")
+    private String qrImageBase64;
 }

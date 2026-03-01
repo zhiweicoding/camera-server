@@ -1,6 +1,12 @@
 package com.pura365.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.EncodeHintType;
+import com.google.zxing.WriterException;
+import com.google.zxing.common.BitMatrix;
+import com.google.zxing.qrcode.QRCodeWriter;
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
 import com.pura365.camera.domain.DeviceShare;
 import com.pura365.camera.domain.User;
 import com.pura365.camera.domain.UserDevice;
@@ -16,6 +22,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
 import java.util.*;
 
 /**
@@ -28,6 +39,8 @@ public class DeviceShareService {
 
     /** 分享码有效期（小时） */
     private static final int SHARE_CODE_EXPIRE_HOURS = 24;
+    private static final int SHARE_QR_SIZE = 360;
+    private static final String SHARE_QR_PREFIX = "PURA365_SHARE:";
 
     @Autowired
     private DeviceShareRepository deviceShareRepository;
@@ -59,10 +72,7 @@ public class DeviceShareService {
      */
     public Map<String, Object> generateShareCode(Long ownerUserId, String deviceId, String permission, String targetAccount) {
         // 验证权限参数
-        DeviceSharePermission sharePermission = DeviceSharePermission.fromCode(permission);
-        if (sharePermission == null) {
-            sharePermission = DeviceSharePermission.VIEW_ONLY; // 默认仅查看
-        }
+        DeviceSharePermission sharePermission = resolveSharePermission(permission);
 
         User targetUser = null;
         // 如果指定了分享目标账号，则先查出对应用户，限定分享对象
@@ -111,11 +121,15 @@ public class DeviceShareService {
                 ownerUserId, deviceId, shareCode, sharePermission.getCode(), targetUser != null ? targetUser.getId() : null);
 
         Map<String, Object> result = new HashMap<>();
+        String qrContent = SHARE_QR_PREFIX + shareCode;
         result.put("share_code", shareCode);
+        result.put("device_id", deviceId);
         result.put("permission", sharePermission.getCode());
-        result.put("expire_at", share.getExpireAt());
-        // 二维码内容：可以是分享码本身，前端生成二维码
-        result.put("qrcode_content", "PURA365_SHARE:" + shareCode);
+        result.put("expire_at", formatDateToIso8601(share.getExpireAt()));
+        // 兼容字段：qr_content 为当前接口标准字段，qrcode_content 为历史字段
+        result.put("qr_content", qrContent);
+        result.put("qrcode_content", qrContent);
+        result.put("qr_image_base64", generateQrImageBase64(qrContent));
         if (targetUser != null) {
             result.put("target_user_id", targetUser.getId());
             result.put("target_nickname", targetUser.getNickname());
@@ -321,6 +335,72 @@ public class DeviceShareService {
      */
     private String generateUniqueCode() {
         return UUID.randomUUID().toString().replace("-", "").substring(0, 16).toUpperCase();
+    }
+
+    /**
+     * 兼容客户端权限入参：
+     * - 新标准：view_only / full_control
+     * - 历史别名：view / control
+     */
+    private DeviceSharePermission resolveSharePermission(String permission) {
+        if (permission == null || permission.trim().isEmpty()) {
+            return DeviceSharePermission.VIEW_ONLY;
+        }
+
+        String normalizedPermission = permission.trim().toLowerCase(Locale.ROOT);
+        if ("view".equals(normalizedPermission)) {
+            return DeviceSharePermission.VIEW_ONLY;
+        }
+        if ("control".equals(normalizedPermission)) {
+            return DeviceSharePermission.FULL_CONTROL;
+        }
+
+        DeviceSharePermission sharePermission = DeviceSharePermission.fromCode(normalizedPermission);
+        return sharePermission != null ? sharePermission : DeviceSharePermission.VIEW_ONLY;
+    }
+
+    /**
+     * 日期转 ISO8601（UTC）字符串
+     */
+    private String formatDateToIso8601(Date date) {
+        if (date == null) {
+            return null;
+        }
+        SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'");
+        formatter.setTimeZone(TimeZone.getTimeZone("UTC"));
+        return formatter.format(date);
+    }
+
+    /**
+     * 生成二维码图片并返回 Base64 编码（PNG）
+     */
+    private String generateQrImageBase64(String qrContent) {
+        QRCodeWriter qrCodeWriter = new QRCodeWriter();
+        Map<EncodeHintType, Object> hints = new EnumMap<>(EncodeHintType.class);
+        hints.put(EncodeHintType.CHARACTER_SET, "UTF-8");
+        hints.put(EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.M);
+        hints.put(EncodeHintType.MARGIN, 1);
+
+        try {
+            BitMatrix bitMatrix = qrCodeWriter.encode(
+                    qrContent, BarcodeFormat.QR_CODE, SHARE_QR_SIZE, SHARE_QR_SIZE, hints);
+
+            BufferedImage image = new BufferedImage(
+                    bitMatrix.getWidth(), bitMatrix.getHeight(), BufferedImage.TYPE_INT_RGB);
+
+            for (int x = 0; x < bitMatrix.getWidth(); x++) {
+                for (int y = 0; y < bitMatrix.getHeight(); y++) {
+                    image.setRGB(x, y, bitMatrix.get(x, y) ? 0xFF000000 : 0xFFFFFFFF);
+                }
+            }
+
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            ImageIO.write(image, "PNG", outputStream);
+            return Base64.getEncoder().encodeToString(outputStream.toByteArray());
+        } catch (WriterException | IOException e) {
+            log.error("生成二维码图片失败, qrContent={}", qrContent, e);
+            throw new RuntimeException("生成二维码失败");
+        }
     }
 
     /**

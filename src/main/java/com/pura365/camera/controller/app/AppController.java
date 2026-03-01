@@ -1,9 +1,11 @@
 package com.pura365.camera.controller.app;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.pura365.camera.domain.AppVersion;
 import com.pura365.camera.domain.ManufacturedDevice;
 import com.pura365.camera.domain.UserDevice;
 import com.pura365.camera.model.ApiResponse;
+import com.pura365.camera.repository.AppVersionRepository;
 import com.pura365.camera.repository.UserDeviceRepository;
 import com.pura365.camera.service.DeviceProductionService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -14,6 +16,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -35,6 +39,10 @@ public class AppController {
 
     @Autowired
     private UserDeviceRepository userDeviceRepository;
+
+    @Autowired
+    private AppVersionRepository appVersionRepository;
+
     /**
      * 版本检查
      * GET /api/app/version?platform=ios&current_version=1.0.0
@@ -43,22 +51,126 @@ public class AppController {
     @GetMapping("/version")
     public ApiResponse<Map<String, Object>> checkVersion(
             @RequestParam String platform,
-            @RequestParam(name = "current_version") String currentVersion) {
+            @RequestParam(name = "current_version", required = false) String currentVersion) {
 
         log.info("版本检查请求 platform={}, currentVersion={}", platform, currentVersion);
 
-        if (platform == null || currentVersion == null) {
-            log.warn("版本检查缺少参数 platform={}, currentVersion={}", platform, currentVersion);
-            return ApiResponse.error(400, "platform 和 current_version 不能为空");
+        if (platform == null || platform.trim().isEmpty()) {
+            log.warn("版本检查缺少参数 platform={}", platform);
+            return ApiResponse.error(400, "platform 不能为空");
         }
 
+        String normalizedPlatform = platform.trim().toLowerCase();
+        if (!"android".equals(normalizedPlatform) && !"ios".equals(normalizedPlatform)) {
+            return ApiResponse.error(400, "platform 仅支持 android 或 ios");
+        }
+
+        LambdaQueryWrapper<AppVersion> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper
+                .apply("LOWER(platform) = {0}", normalizedPlatform)
+                .orderByDesc(AppVersion::getId)
+                .last("LIMIT 1");
+
+        AppVersion latest = appVersionRepository.selectOne(queryWrapper);
+        if (latest == null) {
+            log.warn("未找到版本配置 platform={}", normalizedPlatform);
+            Map<String, Object> data = new HashMap<>();
+            String safeCurrentVersion = sanitizeVersion(currentVersion, "1.0.0");
+            data.put("latest_version", safeCurrentVersion);
+            data.put("latest_version_code", toVersionCode(safeCurrentVersion));
+            data.put("min_version", safeCurrentVersion);
+            data.put("min_version_code", toVersionCode(safeCurrentVersion));
+            data.put("version", safeCurrentVersion);
+            data.put("version_code", toVersionCode(safeCurrentVersion));
+            data.put("force_update", false);
+            data.put("has_update", false);
+            data.put("update_description", "");
+            data.put("release_notes", "");
+            data.put("download_url", "");
+            data.put("apk_url", "");
+            data.put("app_store_url", "");
+            data.put("platform", normalizedPlatform);
+            return ApiResponse.success(data);
+        }
+
+        String latestVersion = sanitizeVersion(latest.getLatestVersion(), "1.0.0");
+        String minVersion = sanitizeVersion(latest.getMinVersion(), latestVersion);
+        String safeCurrentVersion = sanitizeVersion(currentVersion, latestVersion);
+
+        boolean hasUpdate = compareVersion(latestVersion, safeCurrentVersion) > 0;
+        boolean forceByConfig = latest.getForceUpdate() != null && latest.getForceUpdate() == 1;
+        boolean forceByMinVersion = compareVersion(safeCurrentVersion, minVersion) < 0;
+        boolean forceUpdate = forceByConfig || forceByMinVersion;
+
+        String releaseDate = formatDate(latest.getUpdatedAt() != null ? latest.getUpdatedAt() : latest.getCreatedAt());
+        String downloadUrl = latest.getDownloadUrl() == null ? "" : latest.getDownloadUrl();
+        String appStoreUrl = "ios".equals(normalizedPlatform) ? downloadUrl : "";
+        String apkUrl = "android".equals(normalizedPlatform) ? downloadUrl : "";
+
         Map<String, Object> data = new HashMap<>();
-        data.put("latest_version", "1.0.1");
-        data.put("min_version", "1.0.0");
-        data.put("download_url", "https://example.com/download");
-        data.put("release_notes", "修复了一些问题");
-        data.put("force_update", false);
+        data.put("latest_version", latestVersion);
+        data.put("latest_version_code", toVersionCode(latestVersion));
+        data.put("min_version", minVersion);
+        data.put("min_version_code", toVersionCode(minVersion));
+        data.put("version", latestVersion);
+        data.put("version_code", toVersionCode(latestVersion));
+        data.put("force_update", forceUpdate);
+        data.put("has_update", hasUpdate);
+        data.put("update_description", latest.getReleaseNotes() == null ? "" : latest.getReleaseNotes());
+        data.put("release_notes", latest.getReleaseNotes() == null ? "" : latest.getReleaseNotes());
+        data.put("download_url", downloadUrl);
+        data.put("apk_url", apkUrl);
+        data.put("app_store_url", appStoreUrl);
+        data.put("release_date", releaseDate);
+        data.put("platform", normalizedPlatform);
         return ApiResponse.success(data);
+    }
+
+    private String sanitizeVersion(String version, String fallback) {
+        if (version == null || version.trim().isEmpty()) {
+            return fallback;
+        }
+        return version.trim();
+    }
+
+    private Integer toVersionCode(String version) {
+        String[] parts = sanitizeVersion(version, "0.0.0").split("\\.");
+        int major = parsePart(parts, 0);
+        int minor = parsePart(parts, 1);
+        int patch = parsePart(parts, 2);
+        return major * 10000 + minor * 100 + patch;
+    }
+
+    private int parsePart(String[] parts, int index) {
+        if (parts == null || index >= parts.length) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(parts[index].replaceAll("[^0-9]", ""));
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private int compareVersion(String v1, String v2) {
+        String[] p1 = sanitizeVersion(v1, "0.0.0").split("\\.");
+        String[] p2 = sanitizeVersion(v2, "0.0.0").split("\\.");
+        int maxLen = Math.max(p1.length, p2.length);
+        for (int i = 0; i < maxLen; i++) {
+            int n1 = parsePart(p1, i);
+            int n2 = parsePart(p2, i);
+            if (n1 != n2) {
+                return n1 - n2;
+            }
+        }
+        return 0;
+    }
+
+    private String formatDate(Date date) {
+        if (date == null) {
+            return null;
+        }
+        return new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'").format(date);
     }
 
     /**

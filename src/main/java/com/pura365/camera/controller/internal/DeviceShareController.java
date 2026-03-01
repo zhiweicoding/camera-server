@@ -11,9 +11,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.TimeZone;
 
 /**
  * 设备分享接口
@@ -63,10 +66,11 @@ public class DeviceShareController {
             Map<String, Object> result = deviceShareService.generateShareCode(currentUserId, deviceId, permission, targetAccount);
             ShareGenerateResponse response = new ShareGenerateResponse();
             response.setShareCode((String) result.get("share_code"));
-            response.setQrContent((String) result.get("qr_content"));
-            response.setExpireAt((String) result.get("expire_at"));
+            response.setQrContent(firstNonBlankString(result.get("qr_content"), result.get("qrcode_content")));
+            response.setExpireAt(formatExpireAt(result.get("expire_at")));
             response.setDeviceId((String) result.get("device_id"));
             response.setPermission((String) result.get("permission"));
+            response.setQrImageBase64((String) result.get("qr_image_base64"));
             return ApiResponse.success(response);
         } catch (Exception e) {
             log.error("生成分享码失败", e);
@@ -251,5 +255,32 @@ public class DeviceShareController {
         response.setIsOwner("owner".equals(permission));
 
         return ApiResponse.success(response);
+    }
+
+    private String firstNonBlankString(Object... values) {
+        if (values == null) {
+            return null;
+        }
+        for (Object value : values) {
+            if (value instanceof String && !((String) value).trim().isEmpty()) {
+                return (String) value;
+            }
+        }
+        return null;
+    }
+
+    private String formatExpireAt(Object expireAt) {
+        if (expireAt == null) {
+            return null;
+        }
+        if (expireAt instanceof String) {
+            return (String) expireAt;
+        }
+        if (expireAt instanceof Date) {
+            SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'");
+            formatter.setTimeZone(TimeZone.getTimeZone("UTC"));
+            return formatter.format((Date) expireAt);
+        }
+        return String.valueOf(expireAt);
     }
 }

@@ -58,6 +58,10 @@ public class AuthInterceptor implements HandlerInterceptor {
         if (path.startsWith("/api/app/auth")) {
             return true;
         }
+        // 版本检查接口（支持未登录调用）
+        if (path.equals("/api/app/version")) {
+            return true;
+        }
         // 设备 HTTP 接口
         if (path.equals("/get_time") || path.equals("/get_info") || path.equals("/resetdevice") || path.equals("/send_msg")) {
             return true;
