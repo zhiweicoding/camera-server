@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.text.SimpleDateFormat;
@@ -180,17 +181,32 @@ public class DeviceService {
      * @param userId   用户ID
      * @param deviceId 设备ID
      */
+    @Transactional(rollbackFor = Exception.class)
     public void deleteDevice(Long userId, String deviceId) {
-        // 删除用户设备绑定关系
+        // 仅删除当前用户与设备的绑定关系
         LambdaQueryWrapper<UserDevice> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(UserDevice::getUserId, userId)
                 .eq(UserDevice::getDeviceId, deviceId);
-        userDeviceRepository.delete(queryWrapper);
+        int deletedBindings = userDeviceRepository.delete(queryWrapper);
+
+        if (deletedBindings <= 0) {
+            log.warn("用户 {} 解绑设备 {} 时未找到绑定关系", userId, deviceId);
+            return;
+        }
+
         log.info("用户 {} 解绑设备 {}", userId, deviceId);
-        
-        // 删除设备表数据
-        deviceRepository.deleteById(deviceId);
-        log.info("删除设备表数据 deviceId={}", deviceId);
+
+        // 仅当该设备已无任何用户绑定时，才删除设备表数据
+        LambdaQueryWrapper<UserDevice> remainingBindingsQuery = new LambdaQueryWrapper<>();
+        remainingBindingsQuery.eq(UserDevice::getDeviceId, deviceId);
+        Long remainingBindings = userDeviceRepository.selectCount(remainingBindingsQuery);
+
+        if (remainingBindings == null || remainingBindings == 0) {
+            deviceRepository.deleteById(deviceId);
+            log.info("设备 {} 已无任何绑定，删除设备表数据", deviceId);
+        } else {
+            log.info("设备 {} 仍有 {} 个用户绑定，不删除设备表数据", deviceId, remainingBindings);
+        }
     }
 
     /**
