@@ -52,17 +52,7 @@ public class CloudPlanService {
      */
     public List<CloudPlan> listActivePlans(String lang) {
         String normalizedLang = normalizeLanguage(lang);
-        List<CloudPlan> plans = queryActivePlans(null, normalizedLang, true);
-        if (!plans.isEmpty()) {
-            return plans;
-        }
-        if (!LANG_ZH.equals(normalizedLang)) {
-            plans = queryActivePlans(null, LANG_ZH, true);
-            if (!plans.isEmpty()) {
-                return plans;
-            }
-        }
-        return queryActivePlans(null, null, false);
+        return queryActivePlans(null, normalizedLang, true);
     }
 
     /**
@@ -80,17 +70,7 @@ public class CloudPlanService {
      */
     public List<CloudPlan> listActivePlansByType(String type, String lang) {
         String normalizedLang = normalizeLanguage(lang);
-        List<CloudPlan> plans = queryActivePlans(type, normalizedLang, true);
-        if (!plans.isEmpty()) {
-            return plans;
-        }
-        if (!LANG_ZH.equals(normalizedLang)) {
-            plans = queryActivePlans(type, LANG_ZH, true);
-            if (!plans.isEmpty()) {
-                return plans;
-            }
-        }
-        return queryActivePlans(type, null, false);
+        return queryActivePlans(type, normalizedLang, true);
     }
 
     /**
