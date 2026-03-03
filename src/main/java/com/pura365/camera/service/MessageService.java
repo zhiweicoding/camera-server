@@ -191,6 +191,18 @@ public class MessageService {
     public Long createMessageAndPush(Long userId, String deviceId, String type, 
                                       String title, String content, 
                                       String thumbnailUrl, String videoUrl) {
+        return createMessageAndPush(userId, deviceId, type, title, content, thumbnailUrl, videoUrl, false);
+    }
+
+    /**
+     * 创建消息并推送给用户
+     *
+     * @param ignoreDeviceOnlineCheck true=忽略设备在线状态也推送（用于离线通知等场景）
+     */
+    public Long createMessageAndPush(Long userId, String deviceId, String type,
+                                     String title, String content,
+                                     String thumbnailUrl, String videoUrl,
+                                     boolean ignoreDeviceOnlineCheck) {
         // 创建消息记录
         AppMessage message = new AppMessage();
         message.setUserId(userId);
@@ -205,11 +217,15 @@ public class MessageService {
         
         appMessageRepository.insert(message);
         
-        // 检查设备是否在线，离线则跳过推送
-        if (!isDeviceOnline(deviceId)) {
+        boolean deviceOnline = isDeviceOnline(deviceId);
+        if (!ignoreDeviceOnlineCheck && !deviceOnline) {
             org.slf4j.LoggerFactory.getLogger(MessageService.class)
                 .info("设备 {} 不在线，跳过推送", deviceId);
             return message.getId();
+        }
+        if (ignoreDeviceOnlineCheck && !deviceOnline) {
+            org.slf4j.LoggerFactory.getLogger(MessageService.class)
+                    .info("设备 {} 不在线，ignoreDeviceOnlineCheck=true，继续推送", deviceId);
         }
         
         // 触发极光推送
@@ -250,6 +266,9 @@ public class MessageService {
             if (success) {
                 org.slf4j.LoggerFactory.getLogger(MessageService.class)
                     .info("已向用户 {} 推送消息: {}", userId, title);
+            } else {
+                org.slf4j.LoggerFactory.getLogger(MessageService.class)
+                    .warn("向用户 {} 推送消息返回false: title={}, deviceId={}", userId, title, deviceId);
             }
         } catch (Exception e) {
             org.slf4j.LoggerFactory.getLogger(MessageService.class)

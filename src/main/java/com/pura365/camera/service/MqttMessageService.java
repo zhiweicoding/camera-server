@@ -73,6 +73,9 @@ public class MqttMessageService {
     
     @Autowired
     private UserDeviceRepository userDeviceRepository;
+
+    @Autowired
+    private MessageService messageService;
     
     // 缓存 WebRTC Offer：sid -> WebRtcMessage（最近一次）
     private final Map<String, WebRtcMessage> webrtcOfferCache = new ConcurrentHashMap<>();
@@ -725,13 +728,27 @@ public class MqttMessageService {
     public void markDeviceOffline(String deviceId) {
         try {
             Device device = deviceRepository.selectById(deviceId);
-            if (device != null && device.getStatus() == DeviceOnlineStatus.ONLINE) {
+            if (device == null) {
+                log.warn("markDeviceOffline skipped, device not found: {}", deviceId);
+                return;
+            }
+            if (device.getStatus() == DeviceOnlineStatus.ONLINE) {
                 device.setStatus(DeviceOnlineStatus.OFFLINE);
                 device.setUpdatedAt(LocalDateTime.now());
                 deviceRepository.updateById(device);
                 log.info("已标记设备 {} 为离线", deviceId);
                 
                 // 发送离线推送通知
+                sendOfflineNotification(device);
+            } else {
+                LocalDateTime now = LocalDateTime.now();
+                if (device.getUpdatedAt() != null && device.getUpdatedAt().isAfter(now.minusMinutes(30))) {
+                    log.info("Skip offline notification for device {} due cooldown", deviceId);
+                    return;
+                }
+                device.setUpdatedAt(now);
+                deviceRepository.updateById(device);
+                log.info("Device {} already offline, send offline notification after cooldown window", deviceId);
                 sendOfflineNotification(device);
             }
         } catch (Exception e) {
@@ -756,22 +773,37 @@ public class MqttMessageService {
 
             List<Long> userIds = userDevices.stream()
                     .map(UserDevice::getUserId)
+                    .distinct()
                     .collect(Collectors.toList());
 
             String deviceName = device.getName() != null ? device.getName() : device.getId();
             String title = "设备离线通知";
             String content = "您的设备 " + deviceName + " 已离线，请检查设备网络连接";
 
-            Map<String, String> extras = new HashMap<>();
-            extras.put("type", "device_offline");
-            extras.put("deviceId", device.getId());
-            extras.put("time", String.valueOf(System.currentTimeMillis()));
+            int dispatchCount = 0;
+            for (Long userId : userIds) {
+                try {
+                    messageService.createMessageAndPush(
+                            userId,
+                            device.getId(),
+                            "event",
+                            title,
+                            content,
+                            null,
+                            null,
+                            true
+                    );
+                    dispatchCount++;
+                } catch (Exception ex) {
+                    log.error("设备 {} 离线通知发送异常，userId={}", device.getId(), userId, ex);
+                }
+            }
 
-            boolean success = jPushService.pushToUsers(userIds, title, content, extras);
-            if (success) {
-                log.info("设备 {} 离线通知推送成功，通知用户: {}", device.getId(), userIds);
+            if (dispatchCount > 0) {
+                log.info("设备 {} 离线通知已通过消息中心链路发送，完成用户: {}/{}, 用户列表: {}",
+                        device.getId(), dispatchCount, userIds.size(), userIds);
             } else {
-                log.warn("设备 {} 离线通知推送失败", device.getId());
+                log.warn("设备 {} 离线通知发送失败，用户列表: {}", device.getId(), userIds);
             }
         } catch (Exception e) {
             log.error("发送设备 {} 离线通知失败", device.getId(), e);

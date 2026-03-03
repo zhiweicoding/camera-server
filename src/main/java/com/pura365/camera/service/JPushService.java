@@ -60,6 +60,7 @@ public class JPushService {
             logger.warn("用户 {} 没有注册可用推送token", userId);
             return false;
         }
+        logger.info("JPush token snapshot userId={} tokens={}", userId, summarizeTokens(tokens));
 
         List<String> registrationIds = extractRegistrationIds(tokens);
         if (registrationIds.isEmpty()) {
@@ -89,6 +90,7 @@ public class JPushService {
             logger.warn("用户列表 {} 没有可用推送token", userIds);
             return false;
         }
+        logger.info("JPush token snapshot userIds={} tokens={}", userIds, summarizeTokens(tokens));
 
         List<String> registrationIds = extractRegistrationIds(tokens);
         if (registrationIds.isEmpty()) {
@@ -234,5 +236,27 @@ public class JPushService {
             return value;
         }
         return value.substring(0, 4) + "..." + value.substring(value.length() - 4);
+    }
+
+    private String summarizeTokens(List<UserPushToken> tokens) {
+        if (tokens == null || tokens.isEmpty()) {
+            return "[]";
+        }
+        return tokens.stream()
+                .map(this::formatTokenForLog)
+                .collect(Collectors.joining("; ", "[", "]"));
+    }
+
+    private String formatTokenForLog(UserPushToken token) {
+        String tokenId = token.getId() == null ? "null" : token.getId().toString();
+        String userId = token.getUserId() == null ? "null" : token.getUserId().toString();
+        String deviceType = StringUtils.hasText(token.getDeviceType()) ? token.getDeviceType().trim() : "unknown";
+        String appVersion = StringUtils.hasText(token.getAppVersion()) ? token.getAppVersion().trim() : "unknown";
+
+        return "id=" + tokenId
+                + ",userId=" + userId
+                + ",deviceType=" + deviceType
+                + ",appVersion=" + appVersion
+                + ",registrationId=" + maskRegistrationId(token.getRegistrationId());
     }
 }

@@ -286,8 +286,8 @@ public class CameraService {
         for (UserDevice userDevice : userDevices) {
             Long userId = userDevice.getUserId();
             try {
-                messageService.createMessageAndPush(userId, deviceId, messageType, 
-                        title, content, thumbnailUrl, videoUrl);
+                messageService.createMessageAndPush(userId, deviceId, messageType,
+                        title, content, thumbnailUrl, videoUrl, true);
                 successCount++;
             } catch (Exception e) {
                 log.error("[handleMessage] 推送失败 - 设备={}, 用户={}", deviceId, userId, e);
