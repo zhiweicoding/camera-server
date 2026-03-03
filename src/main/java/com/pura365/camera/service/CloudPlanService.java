@@ -30,6 +30,9 @@ public class CloudPlanService {
     private static final String PRODUCT_TYPE_CLOUD_STORAGE = "cloud_storage";
     private static final String LANG_ZH = "zh";
     private static final String LANG_EN = "en";
+    private static final int MAX_DEVICE_MODEL_LENGTH = 255;
+    private static final String DEVICE_MODEL_SEPARATOR = ",";
+    private static final String DEVICE_MODEL_SPLIT_REGEX = "[,\\s，]+";
 
     @Autowired
     private CloudPlanRepository planRepository;
@@ -155,8 +158,10 @@ public class CloudPlanService {
         if (plan.getPrice() == null) {
             throw new RuntimeException("套餐价格不能为空");
         }
+        String normalizedDeviceModel = normalizeDeviceModel(plan.getDeviceModel());
+        plan.setDeviceModel(normalizedDeviceModel);
         validateType(plan.getType());
-        validateTypeModelAndTraffic(plan.getType(), plan.getDeviceModel(), plan.getTrafficGb());
+        validateTypeModelAndTraffic(plan.getType(), normalizedDeviceModel, plan.getTrafficGb());
         validatePeriod(plan.getPeriod(), plan.getPeriodNum());
         validateNumericFields(plan);
         // 检查planId是否重复
@@ -202,7 +207,12 @@ public class CloudPlanService {
             }
         }
         String effectiveType = plan.getType() != null ? plan.getType() : existing.getType();
-        String effectiveDeviceModel = plan.getDeviceModel() != null ? plan.getDeviceModel() : existing.getDeviceModel();
+        String effectiveDeviceModel = normalizeDeviceModel(
+                plan.getDeviceModel() != null ? plan.getDeviceModel() : existing.getDeviceModel()
+        );
+        if (plan.getDeviceModel() != null) {
+            plan.setDeviceModel(effectiveDeviceModel);
+        }
         Integer effectiveTrafficGb = plan.getTrafficGb() != null ? plan.getTrafficGb() : existing.getTrafficGb();
 
         validateType(effectiveType);
@@ -293,11 +303,17 @@ public class CloudPlanService {
     }
 
     private void validateTypeModelAndTraffic(String type, String deviceModel, Integer trafficGb) {
-        if (deviceModel == null || deviceModel.trim().isEmpty()) {
+        List<String> modelCodes = parseModelCodes(deviceModel);
+        if (modelCodes.isEmpty()) {
             throw new RuntimeException("机型不能为空");
         }
+        String normalizedDeviceModel = String.join(DEVICE_MODEL_SEPARATOR, modelCodes);
+        if (normalizedDeviceModel.length() > MAX_DEVICE_MODEL_LENGTH) {
+            throw new RuntimeException("deviceModel length cannot exceed " + MAX_DEVICE_MODEL_LENGTH);
+        }
         if (isTrafficType(type)) {
-            if (!is4GModel(deviceModel)) {
+            boolean hasNon4G = modelCodes.stream().anyMatch(code -> !is4GModelCode(code));
+            if (hasNon4G) {
                 throw new RuntimeException("4G流量套餐仅支持4G机型（C开头）");
             }
             if (trafficGb == null || trafficGb <= 0) {
@@ -310,8 +326,31 @@ public class CloudPlanService {
         return type != null && "traffic".equalsIgnoreCase(type.trim());
     }
 
-    private boolean is4GModel(String deviceModel) {
-        return deviceModel != null && deviceModel.trim().toUpperCase().startsWith("C");
+    private boolean is4GModelCode(String modelCode) {
+        return modelCode != null && modelCode.trim().toUpperCase(Locale.ROOT).startsWith("C");
+    }
+
+    private String normalizeDeviceModel(String deviceModel) {
+        List<String> modelCodes = parseModelCodes(deviceModel);
+        return String.join(DEVICE_MODEL_SEPARATOR, modelCodes);
+    }
+
+    private List<String> parseModelCodes(String deviceModel) {
+        if (deviceModel == null || deviceModel.trim().isEmpty()) {
+            return Collections.emptyList();
+        }
+        LinkedHashSet<String> modelCodes = new LinkedHashSet<>();
+        String[] rawCodes = deviceModel.split(DEVICE_MODEL_SPLIT_REGEX);
+        for (String rawCode : rawCodes) {
+            if (rawCode == null) {
+                continue;
+            }
+            String normalized = rawCode.trim().toUpperCase(Locale.ROOT);
+            if (!normalized.isEmpty()) {
+                modelCodes.add(normalized);
+            }
+        }
+        return new ArrayList<>(modelCodes);
     }
 
     private void validatePeriod(String period, Integer periodNum) {
