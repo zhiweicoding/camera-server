@@ -130,17 +130,7 @@ public class CloudController {
 
     private List<CloudPlan> loadLocalizedPlans(String lang) {
         String normalizedLang = normalizeLanguage(lang);
-        List<CloudPlan> plans = queryEnabledPlansByLanguage(normalizedLang, true);
-        if (!plans.isEmpty()) {
-            return plans;
-        }
-        if (!LANG_ZH.equals(normalizedLang)) {
-            plans = queryEnabledPlansByLanguage(LANG_ZH, true);
-            if (!plans.isEmpty()) {
-                return plans;
-            }
-        }
-        return queryEnabledPlansByLanguage(null, false);
+        return queryEnabledPlansByLanguage(normalizedLang, true);
     }
 
     private List<CloudPlan> queryEnabledPlansByLanguage(String lang, boolean filterByLang) {
