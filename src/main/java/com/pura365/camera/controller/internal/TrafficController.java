@@ -9,6 +9,7 @@ import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.repository.DeviceTrafficSimRepository;
 import com.pura365.camera.repository.UserDeviceRepository;
 import com.pura365.camera.service.LinksFieldTrafficService;
+import com.pura365.camera.service.TrafficPreviewPolicyService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
@@ -42,6 +43,9 @@ public class TrafficController {
 
     @Autowired
     private LinksFieldTrafficService linksFieldTrafficService;
+
+    @Autowired
+    private TrafficPreviewPolicyService trafficPreviewPolicyService;
 
     @Operation(summary = "查询设备4G实时剩余流量")
     @GetMapping("/devices/{id}/remaining-data")
@@ -90,7 +94,21 @@ public class TrafficController {
         }
     }
 
-    @Operation(summary = "设置设备SIM ID", description = "写入设备与SIM卡映射，供4G流量查询使用")
+    @Operation(summary = "查询设备预览流量策略")
+    @GetMapping("/devices/{id}/preview-policy")
+    public ApiResponse<Map<String, Object>> getPreviewPolicy(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @PathVariable("id") String deviceId) {
+
+        TrafficPreviewPolicyService.PolicyEvaluation evaluation =
+                trafficPreviewPolicyService.evaluate(currentUserId, deviceId);
+        if (!evaluation.isOk()) {
+            return ApiResponse.error(evaluation.getHttpStatus(), evaluation.getErrorMessage());
+        }
+        return ApiResponse.success(evaluation.getPolicy());
+    }
+
+    @Operation(summary = "设置设备SIM ID")
     @PutMapping("/devices/{id}/sim-id")
     public ApiResponse<Map<String, Object>> upsertDeviceSimId(
             @RequestAttribute("currentUserId") Long currentUserId,

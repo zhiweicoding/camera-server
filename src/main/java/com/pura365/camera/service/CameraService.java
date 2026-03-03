@@ -28,6 +28,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.Date;
@@ -258,11 +259,22 @@ public class CameraService {
      * 用于接收事件信息或AI结果，入库并推送给绑定该设备的所有用户
      */
     public void handleMessage(SendMsgRequest request) {
-        String deviceId = request.getTopic();
+        String deviceId = resolveMessageDeviceId(request);
+        if (!StringUtils.hasText(deviceId)) {
+            log.warn("[handleMessage] Unable to resolve deviceId from send_msg payload, id={}, topic={}",
+                    request.getId(), request.getTopic());
+            return;
+        }
+
         String title = request.getTitle();
         String content = request.getMsg();
         String thumbnailUrl = request.getPicurl();
         String videoUrl = request.getVideourl();
+
+        if (StringUtils.hasText(request.getId()) && !deviceId.equals(request.getId().trim())) {
+            log.info("[handleMessage] id/topic resolved mismatch, id={}, topic={}, resolvedDeviceId={}",
+                    request.getId(), request.getTopic(), deviceId);
+        }
         
         // 内容翻译：英文转中文
         content = translateContent(content);
@@ -312,6 +324,34 @@ public class CameraService {
         return content;
     }
     
+    /**
+     * 解析 send_msg 消息中的设备ID
+     * 优先使用 id 字段（设备标准字段），兼容从 topic 提取
+     */
+    private String resolveMessageDeviceId(SendMsgRequest request) {
+        if (request == null) {
+            return null;
+        }
+
+        if (StringUtils.hasText(request.getId())) {
+            return request.getId().trim();
+        }
+
+        if (!StringUtils.hasText(request.getTopic())) {
+            return null;
+        }
+
+        String topic = request.getTopic().trim();
+        // 兼容 MQTT topic 格式: camera/pura365/{deviceId}/device
+        String[] parts = topic.split("/");
+        if (parts.length >= 3 && "camera".equalsIgnoreCase(parts[0]) && "pura365".equalsIgnoreCase(parts[1])) {
+            return parts[2];
+        }
+
+        // 兼容旧协议: topic 直接携带 deviceId
+        return topic;
+    }
+
     /**
      * 验证时间戳是否有效
      * @deprecated 使用 TimeValidator.isValid() 替代

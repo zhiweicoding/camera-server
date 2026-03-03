@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.*;
 import com.pura365.camera.enums.PaymentOrderStatus;
 import com.pura365.camera.repository.*;
+import com.pura365.camera.util.PaymentFeeRuleUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,6 +17,7 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.zip.ZipEntry;
@@ -47,6 +49,57 @@ public class BillingService {
 
     @Autowired
     private CloudPlanRepository cloudPlanRepository;
+
+    private BigDecimal safeAmount(BigDecimal value) {
+        return value != null ? value : BigDecimal.ZERO;
+    }
+
+    private BigDecimal calculateEffectiveFeeAmount(PaymentOrder order) {
+        if (order == null) {
+            return BigDecimal.ZERO;
+        }
+
+        if (PaymentFeeRuleUtil.supportsMethod(order.getPaymentMethod())) {
+            return PaymentFeeRuleUtil.calculateFee(order.getAmount(), order.getPaymentMethod());
+        }
+
+        return safeAmount(order.getFeeAmount()).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal calculateEffectiveProfitAmount(PaymentOrder order, BigDecimal effectiveFeeAmount) {
+        if (order == null) {
+            return BigDecimal.ZERO;
+        }
+
+        BigDecimal safeEffectiveFee = safeAmount(effectiveFeeAmount);
+        BigDecimal snapshotProfit = order.getProfitAmount();
+        BigDecimal snapshotFee = safeAmount(order.getFeeAmount());
+
+        if (snapshotProfit != null) {
+            BigDecimal adjusted = snapshotProfit.subtract(safeEffectiveFee.subtract(snapshotFee));
+            return adjusted.compareTo(BigDecimal.ZERO) > 0
+                    ? adjusted.setScale(2, RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO;
+        }
+
+        BigDecimal fallback = safeAmount(order.getAmount())
+                .subtract(safeEffectiveFee)
+                .subtract(safeAmount(order.getPlanCost()));
+        return fallback.compareTo(BigDecimal.ZERO) > 0
+                ? fallback.setScale(2, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+    }
+
+    private void normalizeFinancialFieldsForDisplay(PaymentOrder order) {
+        if (order == null || PaymentOrderStatus.PAID != order.getStatus()) {
+            return;
+        }
+
+        BigDecimal effectiveFee = calculateEffectiveFeeAmount(order);
+        BigDecimal effectiveProfit = calculateEffectiveProfitAmount(order, effectiveFee);
+        order.setFeeAmount(effectiveFee);
+        order.setProfitAmount(effectiveProfit);
+    }
 
     private BigDecimal calculateRemainingProfit(BigDecimal totalProfitAmount,
                                                 BigDecimal totalInstallerAmount,
@@ -151,7 +204,9 @@ public class BillingService {
 
             totalAmount = totalAmount.add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO);
             totalCost = totalCost.add(order.getPlanCost() != null ? order.getPlanCost() : BigDecimal.ZERO);
-            totalProfitAmount = totalProfitAmount.add(order.getProfitAmount() != null ? order.getProfitAmount() : BigDecimal.ZERO);
+            BigDecimal effectiveFeeAmount = calculateEffectiveFeeAmount(order);
+            BigDecimal effectiveProfitAmount = calculateEffectiveProfitAmount(order, effectiveFeeAmount);
+            totalProfitAmount = totalProfitAmount.add(effectiveProfitAmount);
             totalInstallerAmount = totalInstallerAmount.add(insAmt);
             totalDealerAmount = totalDealerAmount.add(order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO);
             if (order.getDeviceId() != null) {
@@ -303,7 +358,9 @@ public class BillingService {
 
             totalAmount = totalAmount.add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO);
             totalCost = totalCost.add(order.getPlanCost() != null ? order.getPlanCost() : BigDecimal.ZERO);
-            totalProfitAmount = totalProfitAmount.add(order.getProfitAmount() != null ? order.getProfitAmount() : BigDecimal.ZERO);
+            BigDecimal effectiveFeeAmount = calculateEffectiveFeeAmount(order);
+            BigDecimal effectiveProfitAmount = calculateEffectiveProfitAmount(order, effectiveFeeAmount);
+            totalProfitAmount = totalProfitAmount.add(effectiveProfitAmount);
             totalInstallerAmount = totalInstallerAmount.add(order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO);
             totalDealerAmount = totalDealerAmount.add(dAmt);
             if (order.getDeviceId() != null) {
@@ -480,6 +537,9 @@ public class BillingService {
         int offset = (page - 1) * size;
         qw.last("LIMIT " + offset + ", " + size);
         List<PaymentOrder> list = orderRepository.selectList(qw);
+        for (PaymentOrder order : list) {
+            normalizeFinancialFieldsForDisplay(order);
+        }
 
         // 查询总数
         QueryWrapper<PaymentOrder> countQw = new QueryWrapper<>();
@@ -613,6 +673,9 @@ public class BillingService {
         qw.lambda().orderByDesc(PaymentOrder::getPaidAt);
 
         List<PaymentOrder> orders = orderRepository.selectList(qw);
+        for (PaymentOrder order : orders) {
+            normalizeFinancialFieldsForDisplay(order);
+        }
         log.info("查询到充值明细订单数: {}", orders.size());
 
         Map<String, Object> result = new HashMap<>();

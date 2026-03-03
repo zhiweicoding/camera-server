@@ -5,6 +5,7 @@ import com.pura365.camera.domain.*;
 import com.pura365.camera.enums.CommissionFeeType;
 import com.pura365.camera.enums.CommissionProfitMode;
 import com.pura365.camera.repository.*;
+import com.pura365.camera.util.PaymentFeeRuleUtil;
 import lombok.Data;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -116,6 +117,10 @@ public class CommissionCalculateService {
      * @return 分润计算结果
      */
     public CommissionResult calculateCommission(String deviceId, BigDecimal payAmount, String planId) {
+        return calculateCommission(deviceId, payAmount, planId, null);
+    }
+
+    public CommissionResult calculateCommission(String deviceId, BigDecimal payAmount, String planId, String paymentMethod) {
         CommissionResult result = new CommissionResult();
         result.setPayAmount(payAmount);
 
@@ -138,7 +143,7 @@ public class CommissionCalculateService {
         }
 
         // 3. 计算手续费
-        BigDecimal feeAmount = calculateFeeAmount(payAmount, planCommission);
+        BigDecimal feeAmount = calculateFeeAmount(payAmount, planCommission, paymentMethod);
         result.setFeeAmount(feeAmount);
 
         // 4. 获取套餐成本（优先分润配置，其次回退套餐表）
@@ -338,8 +343,16 @@ public class CommissionCalculateService {
     /**
      * 计算手续费
      */
-    private BigDecimal calculateFeeAmount(BigDecimal payAmount, PlanCommission commission) {
-        if (payAmount == null || commission == null) {
+    private BigDecimal calculateFeeAmount(BigDecimal payAmount, PlanCommission commission, String paymentMethod) {
+        if (payAmount == null) {
+            return BigDecimal.ZERO;
+        }
+
+        if (PaymentFeeRuleUtil.supportsMethod(paymentMethod)) {
+            return PaymentFeeRuleUtil.calculateFee(payAmount, paymentMethod);
+        }
+
+        if (commission == null) {
             return BigDecimal.ZERO;
         }
 
@@ -437,7 +450,12 @@ public class CommissionCalculateService {
         }
         
         // 计算分润
-        CommissionResult result = calculateCommission(deviceId, order.getAmount(), order.getProductId());
+        CommissionResult result = calculateCommission(
+                deviceId,
+                order.getAmount(),
+                order.getProductId(),
+                order.getPaymentMethod()
+        );
         
         // ========== 财务信息 ==========
         order.setFeeAmount(result.getFeeAmount());

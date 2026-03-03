@@ -233,15 +233,17 @@ public class DeviceShareService {
             Map<String, Object> item = new HashMap<>();
             item.put("user_id", ud.getUserId());
             item.put("permission", ud.getPermission() != null ? ud.getPermission().getCode() : null);
-            item.put("created_at", ud.getCreatedAt());
+            item.put("shared_at", formatDateToIso8601(ud.getCreatedAt()));
 
             // 获取用户信息
             User user = userRepository.selectById(ud.getUserId());
             if (user != null) {
+                item.put("username", user.getUsername());
                 item.put("nickname", user.getNickname());
                 item.put("phone", maskPhone(user.getPhone()));
                 item.put("avatar", user.getAvatar());
             }
+
 
             result.add(item);
         }

@@ -26,6 +26,10 @@ public class MessageService {
 
     private static final DateTimeFormatter ISO_FORMATTER = 
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC);
+    private static final String TYPE_DEVICE_STATUS = "device_status";
+    private static final Set<String> STATUS_NOTIFICATION_TITLES = Collections.unmodifiableSet(
+            new HashSet<>(Arrays.asList("设备离线通知", "设备上线通知"))
+    );
 
     private final AppMessageRepository appMessageRepository;
     private final DeviceRepository deviceRepository;
@@ -91,9 +95,11 @@ public class MessageService {
      * 获取未读消息数量
      */
     public int getUnreadCount(Long userId) {
-        LambdaQueryWrapper<AppMessage> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(AppMessage::getUserId, userId)
-               .eq(AppMessage::getIsRead, 0);
+        QueryWrapper<AppMessage> wrapper = new QueryWrapper<>();
+        wrapper.lambda()
+                .eq(AppMessage::getUserId, userId)
+                .eq(AppMessage::getIsRead, 0);
+        excludeStatusNotifications(wrapper);
         return appMessageRepository.selectCount(wrapper).intValue();
     }
 
@@ -108,15 +114,28 @@ public class MessageService {
         if (StringUtils.hasText(deviceId)) {
             lambda.eq(AppMessage::getDeviceId, deviceId);
         }
-        if (StringUtils.hasText(type)) {
-            lambda.eq(AppMessage::getType, type);
+        String normalizedType = StringUtils.hasText(type) ? type.trim() : null;
+        if (StringUtils.hasText(normalizedType)) {
+            lambda.eq(AppMessage::getType, normalizedType);
         }
         if (StringUtils.hasText(date)) {
             qw.apply("DATE(created_at) = {0}", date);
         }
+        if (!isDeviceStatusType(normalizedType)) {
+            excludeStatusNotifications(qw);
+        }
         qw.orderByDesc("created_at");
 
         return qw;
+    }
+
+    private boolean isDeviceStatusType(String type) {
+        return StringUtils.hasText(type) && TYPE_DEVICE_STATUS.equalsIgnoreCase(type.trim());
+    }
+
+    private void excludeStatusNotifications(QueryWrapper<AppMessage> queryWrapper) {
+        queryWrapper.and(w -> w.isNull("type").or().ne("type", TYPE_DEVICE_STATUS));
+        queryWrapper.and(w -> w.isNull("title").or().notIn("title", STATUS_NOTIFICATION_TITLES));
     }
 
     private AppMessage getMessageByIdAndUser(Long messageId, Long userId) {

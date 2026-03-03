@@ -786,7 +786,7 @@ public class MqttMessageService {
                     messageService.createMessageAndPush(
                             userId,
                             device.getId(),
-                            "event",
+                            "device_status",
                             title,
                             content,
                             null,
