@@ -774,7 +774,14 @@ public class BillingService {
         // 根据当前用户角色确定过滤条件
         String effectiveInstallerCode = installerCode;
         Long effectiveDealerId = dealerId;
-        boolean needOrCondition = false; // 是否需要OR条件（既是装机商又是经销商）
+        boolean needOrCondition = false; // dual-role OR scope
+        PaymentOrderStatus effectiveStatus = PaymentOrderStatus.PAID;
+        if (status != null && !status.trim().isEmpty()) {
+            PaymentOrderStatus statusEnum = PaymentOrderStatus.fromCode(status);
+            if (statusEnum != null) {
+                effectiveStatus = statusEnum;
+            }
+        }
         
         if (currentUserId != null) {
             User currentUser = userRepository.selectById(currentUserId);
@@ -829,19 +836,14 @@ public class BillingService {
         if (deviceId != null && !deviceId.trim().isEmpty()) {
             qw.lambda().like(PaymentOrder::getDeviceId, deviceId);
         }
-        if (status != null && !status.trim().isEmpty()) {
-            PaymentOrderStatus statusEnum = PaymentOrderStatus.fromCode(status);
-            if (statusEnum != null) {
-                qw.lambda().eq(PaymentOrder::getStatus, statusEnum);
-            }
-        }
+        qw.lambda().eq(PaymentOrder::getStatus, effectiveStatus);
         if (startDate != null) {
             qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
         }
         if (endDate != null) {
             qw.lambda().le(PaymentOrder::getPaidAt, endDate);
         }
-        qw.lambda().orderByDesc(PaymentOrder::getCreatedAt);
+        qw.lambda().orderByDesc(PaymentOrder::getPaidAt);
 
         // 分页查询
         int offset = (page - 1) * size;
@@ -873,12 +875,7 @@ public class BillingService {
         if (deviceId != null && !deviceId.trim().isEmpty()) {
             countQw.lambda().like(PaymentOrder::getDeviceId, deviceId);
         }
-        if (status != null && !status.trim().isEmpty()) {
-            PaymentOrderStatus statusEnum = PaymentOrderStatus.fromCode(status);
-            if (statusEnum != null) {
-                countQw.lambda().eq(PaymentOrder::getStatus, statusEnum);
-            }
-        }
+        countQw.lambda().eq(PaymentOrder::getStatus, effectiveStatus);
         if (startDate != null) {
             countQw.lambda().ge(PaymentOrder::getPaidAt, startDate);
         }

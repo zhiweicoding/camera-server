@@ -96,6 +96,10 @@ public class CameraController {
             }
 
             GetInfoResponse response = cameraService.getDeviceInfo(info);
+            if (response == null) {
+                log.warn("/get_info 未返回设备配置，deviceId={}", info.getId());
+                return ResponseEntity.badRequest().body("Device validation failed");
+            }
 
             log.info("=== /get_info 响应 === {}", response);
             return ResponseEntity.ok(response);

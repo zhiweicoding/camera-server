@@ -42,6 +42,9 @@ public class DeviceProductionService {
     private UserRepository userRepository;
 
     @Autowired
+    private UserDeviceRepository userDeviceRepository;
+
+    @Autowired
     private SysDictService sysDictService;
 
     @Autowired
@@ -317,6 +320,8 @@ public class DeviceProductionService {
             }
         }
 
+        ensureDeviceNotBound(device.getDeviceId());
+
         String oldDeviceId = device.getDeviceId();
         String oldVendorCode = device.getVendorCode();
         boolean vendorChanged = !vendorCode.equals(oldVendorCode);
@@ -423,6 +428,7 @@ public class DeviceProductionService {
 
         List<Map<String, Object>> results = new ArrayList<>();
         List<String> noPermissionDevices = new ArrayList<>(); // 无权限的设备列表
+        List<String> boundDevices = new ArrayList<>();
         int successCount = 0;
         int failCount = 0;
 
@@ -461,6 +467,11 @@ public class DeviceProductionService {
                         noPermissionDevices.add(deviceId);
                         throw new RuntimeException("设备不在您的设备管理列表中，无权限分配");
                     }
+                }
+
+                if (isDeviceBound(device.getDeviceId())) {
+                    boundDevices.add(deviceId);
+                    throw new RuntimeException("设备已绑定用户，禁止分配经销商");
                 }
 
                 String oldDeviceId = device.getDeviceId();
@@ -523,7 +534,28 @@ public class DeviceProductionService {
         response.put("failCount", failCount);
         response.put("noPermissionDevices", noPermissionDevices); // 无权限的设备ID列表
         response.put("noPermissionCount", noPermissionDevices.size()); // 无权限设备数量
+        response.put("boundDevices", boundDevices);
+        response.put("boundCount", boundDevices.size());
         return response;
+    }
+
+    /**
+     * Reject dealer assignment for devices already bound to user accounts.
+     */
+    private void ensureDeviceNotBound(String deviceId) {
+        if (isDeviceBound(deviceId)) {
+            throw new RuntimeException("设备已绑定用户，禁止分配经销商");
+        }
+    }
+
+    private boolean isDeviceBound(String deviceId) {
+        if (deviceId == null || deviceId.trim().isEmpty()) {
+            return false;
+        }
+        QueryWrapper<UserDevice> queryWrapper = new QueryWrapper<>();
+        queryWrapper.lambda().eq(UserDevice::getDeviceId, deviceId.trim());
+        Long count = userDeviceRepository.selectCount(queryWrapper);
+        return count != null && count > 0;
     }
 
     /**

@@ -6,6 +6,7 @@ import com.pura365.camera.domain.CloudSubscription;
 import com.pura365.camera.domain.CloudVideo;
 import com.pura365.camera.domain.Device;
 import com.pura365.camera.domain.DeviceShare;
+import com.pura365.camera.domain.ManufacturedDevice;
 import com.pura365.camera.enums.DeviceOnlineStatus;
 import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.domain.UserDevice;
@@ -80,11 +81,19 @@ public class CameraService {
      */
     public GetInfoResponse getDeviceInfo(GetInfoRequest info) {
         log.info("设备请求配置信息 - ID: {}, MAC: {}, Region: {}", info.getId(), info.getMac(), info.getRegion());
-        
-        // 校验设备ID是否是本系统生产的
-        if (!isManufacturedDevice(info.getId())) {
-            log.warn("设备ID校验失败，非本系统生产的设备 - ID: {}", info.getId());
+
+        // 校验设备ID：优先命中生产设备；兼容经销商分配后中间位变化的历史设备ID。
+        ManufacturedDevice manufacturedDevice = findManufacturedDeviceByCompatibleId(info.getId());
+        boolean existsInDeviceTable = deviceRepository.selectById(info.getId()) != null;
+        if (manufacturedDevice == null && !existsInDeviceTable) {
+            log.warn("设备ID校验失败，既不在生产设备表也不在在线设备表 - ID: {}", info.getId());
             return null;
+        }
+        if (manufacturedDevice == null && existsInDeviceTable) {
+            log.warn("设备ID未命中生产设备表，但命中在线设备表，按兼容路径放行 - ID: {}", info.getId());
+        } else if (manufacturedDevice != null && !info.getId().equals(manufacturedDevice.getDeviceId())) {
+            log.warn("设备ID命中兼容映射 - reportedId={}, manufacturedDeviceId={}",
+                    info.getId(), manufacturedDevice.getDeviceId());
         }
         
         // 查找或创建设备记录
@@ -492,20 +501,46 @@ public class CameraService {
     }
     
     /**
-     * 校验设备ID是否是本系统生产的
-     * 通过查询 manufactured_device 表确认
+     * 查找生产设备记录：
+     * 1. 先按完整 device_id 精确匹配；
+     * 2. 若未命中，尝试兼容匹配（前5位 + 后9位一致，中间2位允许变化）。
      */
-    private boolean isManufacturedDevice(String deviceId) {
+    private ManufacturedDevice findManufacturedDeviceByCompatibleId(String deviceId) {
         if (deviceId == null || deviceId.trim().isEmpty()) {
-            return false;
+            return null;
         }
+        String trimmedDeviceId = deviceId.trim();
         try {
-            QueryWrapper<com.pura365.camera.domain.ManufacturedDevice> qw = new QueryWrapper<>();
-            qw.lambda().eq(com.pura365.camera.domain.ManufacturedDevice::getDeviceId, deviceId);
-            return manufacturedDeviceRepository.selectCount(qw) > 0;
+            QueryWrapper<ManufacturedDevice> exactQw = new QueryWrapper<>();
+            exactQw.lambda().eq(ManufacturedDevice::getDeviceId, trimmedDeviceId);
+            ManufacturedDevice exact = manufacturedDeviceRepository.selectOne(exactQw);
+            if (exact != null) {
+                return exact;
+            }
+
+            // 仅对标准16位设备ID执行兼容匹配，避免放大误判范围
+            if (trimmedDeviceId.length() != 16) {
+                return null;
+            }
+
+            String prefix = trimmedDeviceId.substring(0, 5);
+            String suffix = trimmedDeviceId.substring(7);
+            QueryWrapper<ManufacturedDevice> compatQw = new QueryWrapper<>();
+            compatQw.apply("substring(device_id, 1, 5) = {0}", prefix)
+                    .apply("substring(device_id, 8) = {0}", suffix)
+                    .last("LIMIT 2");
+            List<ManufacturedDevice> candidates = manufacturedDeviceRepository.selectList(compatQw);
+            if (candidates == null || candidates.isEmpty()) {
+                return null;
+            }
+            if (candidates.size() > 1) {
+                log.warn("设备ID兼容匹配出现多条记录，按首条处理 - reportedId={}, matchedCount={}",
+                        trimmedDeviceId, candidates.size());
+            }
+            return candidates.get(0);
         } catch (Exception e) {
-            log.error("校验设备ID失败 - deviceId: {}", deviceId, e);
-            return false;
+            log.error("兼容校验设备ID失败 - deviceId: {}", trimmedDeviceId, e);
+            return null;
         }
     }
     
