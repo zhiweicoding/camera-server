@@ -5,6 +5,7 @@ import com.pura365.camera.domain.DeviceDealer;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 
@@ -33,4 +34,23 @@ public interface DeviceDealerRepository extends BaseMapper<DeviceDealer> {
      */
     @Select("SELECT * FROM device_dealer WHERE device_id = #{deviceId} AND dealer_id = #{dealerId}")
     DeviceDealer getByDeviceAndDealer(@Param("deviceId") String deviceId, @Param("dealerId") Long dealerId);
+
+    /**
+     * 根据经销商代码查询其关联链路中的所有设备ID（去重）
+     *
+     * @param dealerCode 经销商代码
+     * @return 设备ID列表
+     */
+    @Select("SELECT DISTINCT device_id FROM device_dealer WHERE dealer_code = #{dealerCode}")
+    List<String> listDeviceIdsByDealerCode(@Param("dealerCode") String dealerCode);
+
+    /**
+     * 设备ID重写后，同步更新分销链路记录里的 device_id
+     *
+     * @param oldDeviceId 旧设备ID
+     * @param newDeviceId 新设备ID
+     * @return 更新行数
+     */
+    @Update("UPDATE device_dealer SET device_id = #{newDeviceId}, updated_at = NOW() WHERE device_id = #{oldDeviceId}")
+    int updateDeviceId(@Param("oldDeviceId") String oldDeviceId, @Param("newDeviceId") String newDeviceId);
 }

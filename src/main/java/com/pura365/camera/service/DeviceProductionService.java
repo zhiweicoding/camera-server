@@ -336,6 +336,8 @@ public class DeviceProductionService {
             }
 
             // 更新设备信息
+            // Keep dealer chain aligned when device ID changes.
+            syncDeviceDealerDeviceId(oldDeviceId, newDeviceId);
             device.setDeviceId(newDeviceId);
             device.setVendorCode(vendorCode);
             device.setUpdatedAt(new Date());
@@ -461,13 +463,14 @@ public class DeviceProductionService {
                     }
                 }
 
+                String oldDeviceId = device.getDeviceId();
                 String oldVendorCode = device.getVendorCode();
                 boolean vendorChanged = !dealerCode.equals(oldVendorCode);
-                String newDeviceId = deviceId;
+                String newDeviceId = oldDeviceId;
 
                 // 如果经销商代码变化，更新设备ID
                 if (vendorChanged) {
-                    newDeviceId = deviceId.substring(0, 5) + dealerCode + deviceId.substring(7);
+                    newDeviceId = oldDeviceId.substring(0, 5) + dealerCode + oldDeviceId.substring(7);
 
                     // 检查新设备ID是否已存在
                     QueryWrapper<ManufacturedDevice> checkQw = new QueryWrapper<>();
@@ -477,6 +480,8 @@ public class DeviceProductionService {
                         throw new RuntimeException("新设备ID已存在: " + newDeviceId);
                     }
 
+                    // Keep dealer chain aligned when device ID changes.
+                    syncDeviceDealerDeviceId(oldDeviceId, newDeviceId);
                     device.setDeviceId(newDeviceId);
                     device.setVendorCode(dealerCode);
                 }
@@ -580,6 +585,58 @@ public class DeviceProductionService {
         deviceDealerRepository.insert(deviceDealer);
         log.info("插入 device_dealer 记录: deviceId={}, dealerId={}, level={}, parentDealerId={}, rate={}", 
                 deviceId, dealer.getId(), newLevel, parentDealerId, commissionRate);
+    }
+
+    private void syncDeviceDealerDeviceId(String oldDeviceId, String newDeviceId) {
+        if (oldDeviceId == null || newDeviceId == null || oldDeviceId.equals(newDeviceId)) {
+            return;
+        }
+        try {
+            int affected = deviceDealerRepository.updateDeviceId(oldDeviceId, newDeviceId);
+            if (affected > 0) {
+                log.info("同步 device_dealer 设备ID: oldDeviceId={}, newDeviceId={}, affected={}",
+                        oldDeviceId, newDeviceId, affected);
+            }
+        } catch (Exception e) {
+            // device_dealer 表可能不存在或数据尚未迁移，不阻断主流程
+            log.warn("同步 device_dealer 设备ID失败: oldDeviceId={}, newDeviceId={}, error={}",
+                    oldDeviceId, newDeviceId, e.getMessage());
+        }
+    }
+
+    private Set<String> listDealerManagedDeviceIds(String dealerCode) {
+        if (dealerCode == null || dealerCode.trim().isEmpty()) {
+            return Collections.emptySet();
+        }
+        try {
+            List<String> deviceIds = deviceDealerRepository.listDeviceIdsByDealerCode(dealerCode);
+            if (deviceIds == null || deviceIds.isEmpty()) {
+                return Collections.emptySet();
+            }
+            Set<String> result = new HashSet<>();
+            for (String id : deviceIds) {
+                if (id != null && !id.trim().isEmpty()) {
+                    result.add(id);
+                }
+            }
+            return result;
+        } catch (Exception e) {
+            // device_dealer 表可能不存在或数据尚未迁移，回退到仅 vendor_code 过滤
+            log.warn("查询经销商管理设备链路失败: dealerCode={}, error={}", dealerCode, e.getMessage());
+            return Collections.emptySet();
+        }
+    }
+
+    private void applyDealerFilter(QueryWrapper<ManufacturedDevice> qw, String dealerCode, Set<String> dealerManagedDeviceIds) {
+        if (dealerCode == null || dealerCode.trim().isEmpty()) {
+            return;
+        }
+        if (dealerManagedDeviceIds == null || dealerManagedDeviceIds.isEmpty()) {
+            qw.lambda().eq(ManufacturedDevice::getVendorCode, dealerCode);
+            return;
+        }
+        qw.lambda().and(w -> w.eq(ManufacturedDevice::getVendorCode, dealerCode)
+                .or().in(ManufacturedDevice::getDeviceId, dealerManagedDeviceIds));
     }
 
     // ==================== 生产批次管理 ====================
@@ -911,6 +968,8 @@ public class DeviceProductionService {
         // 根据当前用户角色确定过滤条件
         String effectiveInstallerCode = installerCode;
         String effectiveDealerCode = dealerCode;
+        boolean dealerPermissionByChain = false;
+        Set<String> dealerManagedDeviceIds = Collections.emptySet();
         
         if (currentUserId != null) {
             User currentUser = userRepository.selectById(currentUserId);
@@ -935,6 +994,7 @@ public class DeviceProductionService {
                         Dealer dealer = dealerRepository.selectById(currentUser.getDealerId());
                         if (dealer != null && dealer.getDealerCode() != null) {
                             effectiveDealerCode = dealer.getDealerCode();
+                            dealerPermissionByChain = true;
                             log.info("经销商用户查询设备列表, userId={}, dealerCode={}", currentUserId, effectiveDealerCode);
                         }
                     }
@@ -942,6 +1002,10 @@ public class DeviceProductionService {
             }
         }
         
+        if (dealerPermissionByChain && effectiveDealerCode != null && !effectiveDealerCode.trim().isEmpty()) {
+            dealerManagedDeviceIds = listDealerManagedDeviceIds(effectiveDealerCode);
+        }
+
         QueryWrapper<ManufacturedDevice> qw = new QueryWrapper<>();
         if (deviceId != null && !deviceId.trim().isEmpty()) {
             qw.lambda().like(ManufacturedDevice::getDeviceId, deviceId);
@@ -986,9 +1050,11 @@ public class DeviceProductionService {
             qw.lambda().eq(ManufacturedDevice::getAssemblerCode, effectiveInstallerCode);
         }
         // 经销商代码过滤（数据库字段vendor_code）- 使用有效值（可能被权限过滤覆盖）
-        if (effectiveDealerCode != null && !effectiveDealerCode.trim().isEmpty()) {
-            qw.lambda().eq(ManufacturedDevice::getVendorCode, effectiveDealerCode);
-        }
+        applyDealerFilter(
+                qw,
+                effectiveDealerCode,
+                dealerPermissionByChain ? dealerManagedDeviceIds : Collections.emptySet()
+        );
         qw.lambda().orderByDesc(ManufacturedDevice::getCreatedAt);
 
         // 分页查询
@@ -1030,9 +1096,11 @@ public class DeviceProductionService {
             countQw.lambda().eq(ManufacturedDevice::getAssemblerCode, effectiveInstallerCode);
         }
         // 经销商代码过滤 - 使用有效值（可能被权限过滤覆盖）
-        if (effectiveDealerCode != null && !effectiveDealerCode.trim().isEmpty()) {
-            countQw.lambda().eq(ManufacturedDevice::getVendorCode, effectiveDealerCode);
-        }
+        applyDealerFilter(
+                countQw,
+                effectiveDealerCode,
+                dealerPermissionByChain ? dealerManagedDeviceIds : Collections.emptySet()
+        );
         long total = deviceRepository.selectCount(countQw);
 
         // 获取装机商和经销商的分佣比例

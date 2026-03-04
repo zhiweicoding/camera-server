@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -31,6 +32,7 @@ import java.util.zip.ZipOutputStream;
 public class BillingService {
 
     private static final Logger log = LoggerFactory.getLogger(BillingService.class);
+    private static final String DEFAULT_CURRENCY = "CNY";
 
     @Autowired
     private PaymentOrderRepository orderRepository;
@@ -117,6 +119,196 @@ public class BillingService {
         return remainingProfit;
     }
 
+    private String normalizeCurrency(String currency) {
+        if (currency == null || currency.trim().isEmpty()) {
+            return DEFAULT_CURRENCY;
+        }
+        return currency.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private void addCurrencyAmount(Map<String, BigDecimal> currencyMap, String currency, BigDecimal amount) {
+        String normalizedCurrency = normalizeCurrency(currency);
+        currencyMap.merge(normalizedCurrency, safeAmount(amount), BigDecimal::add);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, BigDecimal> getOrCreateCurrencyMap(Map<String, Object> target, String key) {
+        Object existed = target.get(key);
+        if (existed instanceof Map<?, ?>) {
+            return (Map<String, BigDecimal>) existed;
+        }
+        Map<String, BigDecimal> currencyMap = new HashMap<>();
+        target.put(key, currencyMap);
+        return currencyMap;
+    }
+
+    private List<String> sortCurrencies(Set<String> currencySet) {
+        List<String> sorted = new ArrayList<>();
+        if (currencySet.contains("CNY")) {
+            sorted.add("CNY");
+        }
+        if (currencySet.contains("USD")) {
+            sorted.add("USD");
+        }
+
+        List<String> others = new ArrayList<>();
+        for (String currency : currencySet) {
+            if (!"CNY".equals(currency) && !"USD".equals(currency)) {
+                others.add(currency);
+            }
+        }
+        Collections.sort(others);
+        sorted.addAll(others);
+        return sorted;
+    }
+
+    private BigDecimal getCurrencyAmount(Map<String, BigDecimal> currencyMap, String currency) {
+        if (currencyMap == null) {
+            return BigDecimal.ZERO;
+        }
+        return currencyMap.getOrDefault(currency, BigDecimal.ZERO);
+    }
+
+    private Map<String, BigDecimal> toOrderedCurrencyAmountMap(Map<String, BigDecimal> source) {
+        if (source == null || source.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        LinkedHashMap<String, BigDecimal> ordered = new LinkedHashMap<>();
+        for (String currency : sortCurrencies(source.keySet())) {
+            ordered.put(currency, source.get(currency));
+        }
+        return ordered;
+    }
+
+    private List<Map<String, Object>> buildCurrencySummaryStats(Map<String, BigDecimal> totalRevenueByCurrency,
+                                                                Map<String, BigDecimal> totalCostByCurrency,
+                                                                Map<String, BigDecimal> totalProfitAmountByCurrency,
+                                                                Map<String, BigDecimal> totalInstallerAmountByCurrency,
+                                                                Map<String, BigDecimal> totalDealerAmountByCurrency,
+                                                                Map<String, BigDecimal> totalSettledAmountByCurrency,
+                                                                Map<String, BigDecimal> totalUnsettledAmountByCurrency,
+                                                                String dimension) {
+        Set<String> currencies = new HashSet<>();
+        if (totalRevenueByCurrency != null) {
+            currencies.addAll(totalRevenueByCurrency.keySet());
+        }
+        if (totalCostByCurrency != null) {
+            currencies.addAll(totalCostByCurrency.keySet());
+        }
+        if (totalProfitAmountByCurrency != null) {
+            currencies.addAll(totalProfitAmountByCurrency.keySet());
+        }
+        if (totalInstallerAmountByCurrency != null) {
+            currencies.addAll(totalInstallerAmountByCurrency.keySet());
+        }
+        if (totalDealerAmountByCurrency != null) {
+            currencies.addAll(totalDealerAmountByCurrency.keySet());
+        }
+        if (totalSettledAmountByCurrency != null) {
+            currencies.addAll(totalSettledAmountByCurrency.keySet());
+        }
+        if (totalUnsettledAmountByCurrency != null) {
+            currencies.addAll(totalUnsettledAmountByCurrency.keySet());
+        }
+
+        List<Map<String, Object>> stats = new ArrayList<>();
+        for (String currency : sortCurrencies(currencies)) {
+            BigDecimal totalProfit = getCurrencyAmount(totalProfitAmountByCurrency, currency);
+            BigDecimal totalInstaller = getCurrencyAmount(totalInstallerAmountByCurrency, currency);
+            BigDecimal totalDealer = getCurrencyAmount(totalDealerAmountByCurrency, currency);
+            BigDecimal totalRemaining = calculateRemainingProfit(totalProfit, totalInstaller, totalDealer, dimension + "-" + currency);
+
+            Map<String, Object> stat = new HashMap<>();
+            stat.put("currency", currency);
+            stat.put("totalRevenue", getCurrencyAmount(totalRevenueByCurrency, currency));
+            stat.put("totalCost", getCurrencyAmount(totalCostByCurrency, currency));
+            stat.put("totalProfitAmount", totalProfit);
+            stat.put("totalInstallerAmount", totalInstaller);
+            stat.put("totalDealerAmount", totalDealer);
+            stat.put("totalRemainingProfit", totalRemaining);
+            stat.put("totalSettledAmount", getCurrencyAmount(totalSettledAmountByCurrency, currency));
+            stat.put("totalUnsettledAmount", getCurrencyAmount(totalUnsettledAmountByCurrency, currency));
+            stats.add(stat);
+        }
+        return stats;
+    }
+
+    private static class BillingDataScope {
+        private String installerCode;
+        private Long dealerId;
+        private boolean useInstallerDealerOr;
+        private boolean showInstallerInfo = true;
+        private boolean showDealerInfo = true;
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.trim().isEmpty();
+    }
+
+    private BillingDataScope resolveBillingDataScope(Long currentUserId, String installerCode, Long dealerId) {
+        BillingDataScope scope = new BillingDataScope();
+        scope.installerCode = installerCode;
+        scope.dealerId = dealerId;
+
+        if (currentUserId == null) {
+            return scope;
+        }
+
+        User currentUser = userRepository.selectById(currentUserId);
+        if (currentUser == null) {
+            return scope;
+        }
+
+        boolean isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
+        if (isAdmin) {
+            return scope;
+        }
+
+        boolean isInstaller = currentUser.getIsInstaller() != null
+                && currentUser.getIsInstaller() == 1
+                && currentUser.getInstallerId() != null;
+        boolean isDealer = currentUser.getIsDealer() != null
+                && currentUser.getIsDealer() == 1
+                && currentUser.getDealerId() != null;
+
+        scope.showInstallerInfo = isInstaller;
+        scope.showDealerInfo = isDealer;
+
+        if (isInstaller) {
+            scope.installerCode = null;
+            Installer installer = installerRepository.selectById(currentUser.getInstallerId());
+            if (installer != null && hasText(installer.getInstallerCode())) {
+                scope.installerCode = installer.getInstallerCode();
+            }
+        }
+        if (isDealer) {
+            scope.dealerId = currentUser.getDealerId();
+        }
+
+        scope.useInstallerDealerOr = isInstaller && isDealer && hasText(scope.installerCode) && scope.dealerId != null;
+        return scope;
+    }
+
+    private void applyInstallerDealerScope(QueryWrapper<PaymentOrder> qw, BillingDataScope scope) {
+        if (scope.useInstallerDealerOr) {
+            final String installerCode = scope.installerCode;
+            final Long dealerId = scope.dealerId;
+            qw.and(wrapper -> wrapper
+                    .eq("installer_code", installerCode)
+                    .or()
+                    .eq("dealer_id", dealerId)
+            );
+            return;
+        }
+
+        if (hasText(scope.installerCode)) {
+            qw.lambda().eq(PaymentOrder::getInstallerCode, scope.installerCode);
+        }
+        if (scope.dealerId != null) {
+            qw.lambda().eq(PaymentOrder::getDealerId, scope.dealerId);
+        }
+    }
+
 
     /**
      * 获取装机商账单汇总统计
@@ -166,6 +358,13 @@ public class BillingService {
         BigDecimal totalDealerAmount = BigDecimal.ZERO;
         BigDecimal totalSettledInstallerAmount = BigDecimal.ZERO;
         BigDecimal totalUnsettledInstallerAmount = BigDecimal.ZERO;
+        Map<String, BigDecimal> totalAmountByCurrency = new HashMap<>();
+        Map<String, BigDecimal> totalCostByCurrency = new HashMap<>();
+        Map<String, BigDecimal> totalProfitAmountByCurrency = new HashMap<>();
+        Map<String, BigDecimal> totalInstallerAmountByCurrency = new HashMap<>();
+        Map<String, BigDecimal> totalDealerAmountByCurrency = new HashMap<>();
+        Map<String, BigDecimal> totalSettledInstallerAmountByCurrency = new HashMap<>();
+        Map<String, BigDecimal> totalUnsettledInstallerAmountByCurrency = new HashMap<>();
         Set<String> deviceIds = new HashSet<>();
         int totalOrders = 0;
 
@@ -185,30 +384,49 @@ public class BillingService {
                 s.put("installerAmount", BigDecimal.ZERO);
                 s.put("settledAmount", BigDecimal.ZERO);
                 s.put("unsettledAmount", BigDecimal.ZERO);
+                s.put("totalAmountByCurrency", new HashMap<String, BigDecimal>());
+                s.put("installerAmountByCurrency", new HashMap<String, BigDecimal>());
+                s.put("settledAmountByCurrency", new HashMap<String, BigDecimal>());
+                s.put("unsettledAmountByCurrency", new HashMap<String, BigDecimal>());
                 return s;
             });
 
+            String currency = normalizeCurrency(order.getCurrency());
+            BigDecimal orderAmount = safeAmount(order.getAmount());
             BigDecimal insAmt = order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO;
+            BigDecimal dealerAmt = order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO;
+            BigDecimal planCost = safeAmount(order.getPlanCost());
             boolean isSettled = order.getIsSettled() != null && order.getIsSettled() == 1;
 
             stat.put("orderCount", (Integer) stat.get("orderCount") + 1);
-            stat.put("totalAmount", ((BigDecimal) stat.get("totalAmount")).add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO));
+            stat.put("totalAmount", ((BigDecimal) stat.get("totalAmount")).add(orderAmount));
             stat.put("installerAmount", ((BigDecimal) stat.get("installerAmount")).add(insAmt));
+            addCurrencyAmount(getOrCreateCurrencyMap(stat, "totalAmountByCurrency"), currency, orderAmount);
+            addCurrencyAmount(getOrCreateCurrencyMap(stat, "installerAmountByCurrency"), currency, insAmt);
             if (isSettled) {
                 stat.put("settledAmount", ((BigDecimal) stat.get("settledAmount")).add(insAmt));
+                addCurrencyAmount(getOrCreateCurrencyMap(stat, "settledAmountByCurrency"), currency, insAmt);
                 totalSettledInstallerAmount = totalSettledInstallerAmount.add(insAmt);
+                addCurrencyAmount(totalSettledInstallerAmountByCurrency, currency, insAmt);
             } else {
                 stat.put("unsettledAmount", ((BigDecimal) stat.get("unsettledAmount")).add(insAmt));
+                addCurrencyAmount(getOrCreateCurrencyMap(stat, "unsettledAmountByCurrency"), currency, insAmt);
                 totalUnsettledInstallerAmount = totalUnsettledInstallerAmount.add(insAmt);
+                addCurrencyAmount(totalUnsettledInstallerAmountByCurrency, currency, insAmt);
             }
 
-            totalAmount = totalAmount.add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO);
-            totalCost = totalCost.add(order.getPlanCost() != null ? order.getPlanCost() : BigDecimal.ZERO);
+            totalAmount = totalAmount.add(orderAmount);
+            totalCost = totalCost.add(planCost);
             BigDecimal effectiveFeeAmount = calculateEffectiveFeeAmount(order);
             BigDecimal effectiveProfitAmount = calculateEffectiveProfitAmount(order, effectiveFeeAmount);
             totalProfitAmount = totalProfitAmount.add(effectiveProfitAmount);
             totalInstallerAmount = totalInstallerAmount.add(insAmt);
-            totalDealerAmount = totalDealerAmount.add(order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO);
+            totalDealerAmount = totalDealerAmount.add(dealerAmt);
+            addCurrencyAmount(totalAmountByCurrency, currency, orderAmount);
+            addCurrencyAmount(totalCostByCurrency, currency, planCost);
+            addCurrencyAmount(totalProfitAmountByCurrency, currency, effectiveProfitAmount);
+            addCurrencyAmount(totalInstallerAmountByCurrency, currency, insAmt);
+            addCurrencyAmount(totalDealerAmountByCurrency, currency, dealerAmt);
             if (order.getDeviceId() != null) {
                 deviceIds.add(order.getDeviceId());
             }
@@ -244,8 +462,32 @@ public class BillingService {
         }
 
         // 计算剩余利润 = 可分润金额 - 装机商分润 - 经销商分润
+        for (Map<String, Object> stat : installerList) {
+            stat.put("totalAmountByCurrency", toOrderedCurrencyAmountMap(getOrCreateCurrencyMap(stat, "totalAmountByCurrency")));
+            stat.put("installerAmountByCurrency", toOrderedCurrencyAmountMap(getOrCreateCurrencyMap(stat, "installerAmountByCurrency")));
+            stat.put("settledAmountByCurrency", toOrderedCurrencyAmountMap(getOrCreateCurrencyMap(stat, "settledAmountByCurrency")));
+            stat.put("unsettledAmountByCurrency", toOrderedCurrencyAmountMap(getOrCreateCurrencyMap(stat, "unsettledAmountByCurrency")));
+        }
+
         BigDecimal totalRemainingProfit = calculateRemainingProfit(
                 totalProfitAmount, totalInstallerAmount, totalDealerAmount, "installer");
+
+        List<Map<String, Object>> currencyStats = buildCurrencySummaryStats(
+                totalAmountByCurrency,
+                totalCostByCurrency,
+                totalProfitAmountByCurrency,
+                totalInstallerAmountByCurrency,
+                totalDealerAmountByCurrency,
+                totalSettledInstallerAmountByCurrency,
+                totalUnsettledInstallerAmountByCurrency,
+                "installer");
+
+        Map<String, BigDecimal> totalRemainingProfitByCurrency = new HashMap<>();
+        for (Map<String, Object> currencyStat : currencyStats) {
+            String currency = (String) currencyStat.get("currency");
+            BigDecimal remaining = (BigDecimal) currencyStat.get("totalRemainingProfit");
+            totalRemainingProfitByCurrency.put(currency, remaining);
+        }
 
         Map<String, Object> result = new HashMap<>();
         result.put("list", installerList);
@@ -260,6 +502,16 @@ public class BillingService {
         result.put("totalRemainingProfit", totalRemainingProfit);
         result.put("totalSettledInstallerAmount", totalSettledInstallerAmount);
         result.put("totalUnsettledInstallerAmount", totalUnsettledInstallerAmount);
+        result.put("currencyStats", currencyStats);
+        result.put("totalRevenueByCurrency", toOrderedCurrencyAmountMap(totalAmountByCurrency));
+        result.put("totalAmountByCurrency", toOrderedCurrencyAmountMap(totalAmountByCurrency));
+        result.put("totalCostByCurrency", toOrderedCurrencyAmountMap(totalCostByCurrency));
+        result.put("totalProfitAmountByCurrency", toOrderedCurrencyAmountMap(totalProfitAmountByCurrency));
+        result.put("totalInstallerAmountByCurrency", toOrderedCurrencyAmountMap(totalInstallerAmountByCurrency));
+        result.put("totalDealerAmountByCurrency", toOrderedCurrencyAmountMap(totalDealerAmountByCurrency));
+        result.put("totalRemainingProfitByCurrency", toOrderedCurrencyAmountMap(totalRemainingProfitByCurrency));
+        result.put("totalSettledAmountByCurrency", toOrderedCurrencyAmountMap(totalSettledInstallerAmountByCurrency));
+        result.put("totalUnsettledAmountByCurrency", toOrderedCurrencyAmountMap(totalUnsettledInstallerAmountByCurrency));
         return result;
     }
 
@@ -318,6 +570,13 @@ public class BillingService {
         BigDecimal totalDealerAmount = BigDecimal.ZERO;
         BigDecimal totalSettledDealerAmount = BigDecimal.ZERO;
         BigDecimal totalUnsettledDealerAmount = BigDecimal.ZERO;
+        Map<String, BigDecimal> totalAmountByCurrency = new HashMap<>();
+        Map<String, BigDecimal> totalCostByCurrency = new HashMap<>();
+        Map<String, BigDecimal> totalProfitAmountByCurrency = new HashMap<>();
+        Map<String, BigDecimal> totalInstallerAmountByCurrency = new HashMap<>();
+        Map<String, BigDecimal> totalDealerAmountByCurrency = new HashMap<>();
+        Map<String, BigDecimal> totalSettledDealerAmountByCurrency = new HashMap<>();
+        Map<String, BigDecimal> totalUnsettledDealerAmountByCurrency = new HashMap<>();
         Set<String> deviceIds = new HashSet<>();
         int totalOrders = 0;
 
@@ -339,30 +598,49 @@ public class BillingService {
                 s.put("dealerAmount", BigDecimal.ZERO);
                 s.put("settledAmount", BigDecimal.ZERO);
                 s.put("unsettledAmount", BigDecimal.ZERO);
+                s.put("totalAmountByCurrency", new HashMap<String, BigDecimal>());
+                s.put("dealerAmountByCurrency", new HashMap<String, BigDecimal>());
+                s.put("settledAmountByCurrency", new HashMap<String, BigDecimal>());
+                s.put("unsettledAmountByCurrency", new HashMap<String, BigDecimal>());
                 return s;
             });
 
+            String currency = normalizeCurrency(order.getCurrency());
+            BigDecimal orderAmount = safeAmount(order.getAmount());
             BigDecimal dAmt = order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO;
+            BigDecimal installerAmt = order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO;
+            BigDecimal planCost = safeAmount(order.getPlanCost());
             boolean isSettled = order.getIsSettled() != null && order.getIsSettled() == 1;
 
             stat.put("orderCount", (Integer) stat.get("orderCount") + 1);
-            stat.put("totalAmount", ((BigDecimal) stat.get("totalAmount")).add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO));
+            stat.put("totalAmount", ((BigDecimal) stat.get("totalAmount")).add(orderAmount));
             stat.put("dealerAmount", ((BigDecimal) stat.get("dealerAmount")).add(dAmt));
+            addCurrencyAmount(getOrCreateCurrencyMap(stat, "totalAmountByCurrency"), currency, orderAmount);
+            addCurrencyAmount(getOrCreateCurrencyMap(stat, "dealerAmountByCurrency"), currency, dAmt);
             if (isSettled) {
                 stat.put("settledAmount", ((BigDecimal) stat.get("settledAmount")).add(dAmt));
+                addCurrencyAmount(getOrCreateCurrencyMap(stat, "settledAmountByCurrency"), currency, dAmt);
                 totalSettledDealerAmount = totalSettledDealerAmount.add(dAmt);
+                addCurrencyAmount(totalSettledDealerAmountByCurrency, currency, dAmt);
             } else {
                 stat.put("unsettledAmount", ((BigDecimal) stat.get("unsettledAmount")).add(dAmt));
+                addCurrencyAmount(getOrCreateCurrencyMap(stat, "unsettledAmountByCurrency"), currency, dAmt);
                 totalUnsettledDealerAmount = totalUnsettledDealerAmount.add(dAmt);
+                addCurrencyAmount(totalUnsettledDealerAmountByCurrency, currency, dAmt);
             }
 
-            totalAmount = totalAmount.add(order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO);
-            totalCost = totalCost.add(order.getPlanCost() != null ? order.getPlanCost() : BigDecimal.ZERO);
+            totalAmount = totalAmount.add(orderAmount);
+            totalCost = totalCost.add(planCost);
             BigDecimal effectiveFeeAmount = calculateEffectiveFeeAmount(order);
             BigDecimal effectiveProfitAmount = calculateEffectiveProfitAmount(order, effectiveFeeAmount);
             totalProfitAmount = totalProfitAmount.add(effectiveProfitAmount);
-            totalInstallerAmount = totalInstallerAmount.add(order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO);
+            totalInstallerAmount = totalInstallerAmount.add(installerAmt);
             totalDealerAmount = totalDealerAmount.add(dAmt);
+            addCurrencyAmount(totalAmountByCurrency, currency, orderAmount);
+            addCurrencyAmount(totalCostByCurrency, currency, planCost);
+            addCurrencyAmount(totalProfitAmountByCurrency, currency, effectiveProfitAmount);
+            addCurrencyAmount(totalInstallerAmountByCurrency, currency, installerAmt);
+            addCurrencyAmount(totalDealerAmountByCurrency, currency, dAmt);
             if (order.getDeviceId() != null) {
                 deviceIds.add(order.getDeviceId());
             }
@@ -382,8 +660,32 @@ public class BillingService {
             }
         }
 
+        for (Map<String, Object> stat : dealerList) {
+            stat.put("totalAmountByCurrency", toOrderedCurrencyAmountMap(getOrCreateCurrencyMap(stat, "totalAmountByCurrency")));
+            stat.put("dealerAmountByCurrency", toOrderedCurrencyAmountMap(getOrCreateCurrencyMap(stat, "dealerAmountByCurrency")));
+            stat.put("settledAmountByCurrency", toOrderedCurrencyAmountMap(getOrCreateCurrencyMap(stat, "settledAmountByCurrency")));
+            stat.put("unsettledAmountByCurrency", toOrderedCurrencyAmountMap(getOrCreateCurrencyMap(stat, "unsettledAmountByCurrency")));
+        }
+
         BigDecimal totalRemainingProfit = calculateRemainingProfit(
                 totalProfitAmount, totalInstallerAmount, totalDealerAmount, "dealer");
+
+        List<Map<String, Object>> currencyStats = buildCurrencySummaryStats(
+                totalAmountByCurrency,
+                totalCostByCurrency,
+                totalProfitAmountByCurrency,
+                totalInstallerAmountByCurrency,
+                totalDealerAmountByCurrency,
+                totalSettledDealerAmountByCurrency,
+                totalUnsettledDealerAmountByCurrency,
+                "dealer");
+
+        Map<String, BigDecimal> totalRemainingProfitByCurrency = new HashMap<>();
+        for (Map<String, Object> currencyStat : currencyStats) {
+            String currency = (String) currencyStat.get("currency");
+            BigDecimal remaining = (BigDecimal) currencyStat.get("totalRemainingProfit");
+            totalRemainingProfitByCurrency.put(currency, remaining);
+        }
 
         Map<String, Object> result = new HashMap<>();
         result.put("list", dealerList);
@@ -398,6 +700,16 @@ public class BillingService {
         result.put("totalRemainingProfit", totalRemainingProfit);
         result.put("totalSettledDealerAmount", totalSettledDealerAmount);
         result.put("totalUnsettledDealerAmount", totalUnsettledDealerAmount);
+        result.put("currencyStats", currencyStats);
+        result.put("totalRevenueByCurrency", toOrderedCurrencyAmountMap(totalAmountByCurrency));
+        result.put("totalAmountByCurrency", toOrderedCurrencyAmountMap(totalAmountByCurrency));
+        result.put("totalCostByCurrency", toOrderedCurrencyAmountMap(totalCostByCurrency));
+        result.put("totalProfitAmountByCurrency", toOrderedCurrencyAmountMap(totalProfitAmountByCurrency));
+        result.put("totalInstallerAmountByCurrency", toOrderedCurrencyAmountMap(totalInstallerAmountByCurrency));
+        result.put("totalDealerAmountByCurrency", toOrderedCurrencyAmountMap(totalDealerAmountByCurrency));
+        result.put("totalRemainingProfitByCurrency", toOrderedCurrencyAmountMap(totalRemainingProfitByCurrency));
+        result.put("totalSettledAmountByCurrency", toOrderedCurrencyAmountMap(totalSettledDealerAmountByCurrency));
+        result.put("totalUnsettledAmountByCurrency", toOrderedCurrencyAmountMap(totalUnsettledDealerAmountByCurrency));
         return result;
     }
 
@@ -408,15 +720,12 @@ public class BillingService {
      * @param startDate 开始日期
      * @param endDate 结束日期
      */
-    public List<Map<String, Object>> getOrderDetails(String installerCode, Long dealerId, Date startDate, Date endDate) {
+    public List<Map<String, Object>> getOrderDetails(Long currentUserId, String installerCode, Long dealerId, Date startDate, Date endDate) {
+        BillingDataScope scope = resolveBillingDataScope(currentUserId, installerCode, dealerId);
+
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
-        if (installerCode != null && !installerCode.trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
-        }
-        if (dealerId != null) {
-            qw.lambda().eq(PaymentOrder::getDealerId, dealerId);
-        }
+        applyInstallerDealerScope(qw, scope);
         if (startDate != null) {
             qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
         }
@@ -436,6 +745,7 @@ public class BillingService {
             row.put("installerCode", order.getInstallerCode());
             row.put("dealerId", order.getDealerId());
             row.put("dealerCode", order.getDealerCode());
+            row.put("dealerName", getDealerName(order.getDealerId()));
             row.put("productType", order.getProductType());
             row.put("productId", order.getProductId());
             row.put("amount", order.getAmount());
@@ -616,6 +926,17 @@ public class BillingService {
             "手续费", "套餐成本", "可分利润", "装机商分润", "经销商分润", "已结算"
     };
 
+    private static final int BILLING_COL_INSTALLER_CODE = 3;
+    private static final int BILLING_COL_INSTALLER_NAME = 4;
+    private static final int BILLING_COL_DEALER_ID = 5;
+    private static final int BILLING_COL_DEALER_NAME = 6;
+    private static final int BILLING_COL_AMOUNT = 9;
+    private static final int BILLING_COL_FEE = 13;
+    private static final int BILLING_COL_PLAN_COST = 14;
+    private static final int BILLING_COL_PROFIT = 15;
+    private static final int BILLING_COL_INSTALLER_AMOUNT = 16;
+    private static final int BILLING_COL_DEALER_AMOUNT = 17;
+
     private static final int EXCEL_BATCH_SIZE = 10000;
 
     /**
@@ -625,42 +946,15 @@ public class BillingService {
      * @return Map包含 "isZip" (boolean) 和 "data" (byte[])
      */
     public Map<String, Object> exportBillingDetailExcel(Long currentUserId, String installerCode, Long dealerId, String deviceId, Date startDate, Date endDate) throws IOException {
-        // 根据当前用户角色确定过滤条件
-        String effectiveInstallerCode = installerCode;
-        Long effectiveDealerId = dealerId;
-        
-        if (currentUserId != null) {
-            User currentUser = userRepository.selectById(currentUserId);
-            if (currentUser != null) {
-                boolean isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
-                if (!isAdmin) {
-                    // 装机商只能导出自己关联的数据
-                    if (currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null) {
-                        Installer installer = installerRepository.selectById(currentUser.getInstallerId());
-                        if (installer != null) {
-                            effectiveInstallerCode = installer.getInstallerCode();
-                        }
-                    }
-                    // 经销商只能导出自己关联的数据
-                    if (currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null) {
-                        effectiveDealerId = currentUser.getDealerId();
-                    }
-                }
-            }
-        }
+        BillingDataScope scope = resolveBillingDataScope(currentUserId, installerCode, dealerId);
         
         log.info("开始导出充值明细Excel: currentUserId={}, installerCode={}, dealerId={}, deviceId={}, startDate={}, endDate={}", 
-                currentUserId, effectiveInstallerCode, effectiveDealerId, deviceId, startDate, endDate);
+                currentUserId, scope.installerCode, scope.dealerId, deviceId, startDate, endDate);
 
         // 查询所有符合条件的订单
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
-        if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
-        }
-        if (effectiveDealerId != null) {
-            qw.lambda().eq(PaymentOrder::getDealerId, effectiveDealerId);
-        }
+        applyInstallerDealerScope(qw, scope);
         if (deviceId != null && !deviceId.trim().isEmpty()) {
             qw.lambda().like(PaymentOrder::getDeviceId, deviceId);
         }
@@ -682,13 +976,13 @@ public class BillingService {
 
         if (orders.size() <= EXCEL_BATCH_SIZE) {
             // 单个Excel文件
-            byte[] excelData = createBillingDetailExcel(orders, null);
+            byte[] excelData = createBillingDetailExcel(orders, null, scope.showInstallerInfo, scope.showDealerInfo);
             result.put("isZip", false);
             result.put("data", excelData);
             log.info("导出单个Excel文件完成");
         } else {
             // 分片打包成zip
-            byte[] zipData = createBillingDetailZip(orders);
+            byte[] zipData = createBillingDetailZip(orders, scope.showInstallerInfo, scope.showDealerInfo);
             result.put("isZip", true);
             result.put("data", zipData);
             log.info("导出Zip文件完成，包含 {} 个Excel文件", (orders.size() + EXCEL_BATCH_SIZE - 1) / EXCEL_BATCH_SIZE);
@@ -808,6 +1102,118 @@ public class BillingService {
         }
     }
 
+    private byte[] createBillingDetailExcel(List<PaymentOrder> orders, String sheetName,
+                                            boolean showInstallerInfo,
+                                            boolean showDealerInfo) throws IOException {
+        byte[] excelData = createBillingDetailExcel(orders, sheetName);
+        if (showInstallerInfo && showDealerInfo) {
+            return excelData;
+        }
+        return trimBillingDetailColumns(excelData, showInstallerInfo, showDealerInfo);
+    }
+
+    private byte[] trimBillingDetailColumns(byte[] sourceExcel,
+                                            boolean showInstallerInfo,
+                                            boolean showDealerInfo) throws IOException {
+        List<Integer> hiddenColumns = new ArrayList<>();
+        if (!showInstallerInfo) {
+            hiddenColumns.add(BILLING_COL_INSTALLER_CODE);
+            hiddenColumns.add(BILLING_COL_INSTALLER_NAME);
+            hiddenColumns.add(BILLING_COL_INSTALLER_AMOUNT);
+        }
+        if (!showDealerInfo) {
+            hiddenColumns.add(BILLING_COL_DEALER_ID);
+            hiddenColumns.add(BILLING_COL_DEALER_NAME);
+            hiddenColumns.add(BILLING_COL_DEALER_AMOUNT);
+        }
+
+        if (hiddenColumns.isEmpty()) {
+            return sourceExcel;
+        }
+        hiddenColumns.sort(Collections.reverseOrder());
+
+        try (Workbook workbook = new XSSFWorkbook(new ByteArrayInputStream(sourceExcel));
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            Sheet sheet = workbook.getNumberOfSheets() > 0 ? workbook.getSheetAt(0) : null;
+            if (sheet != null) {
+                for (int rowIndex = sheet.getFirstRowNum(); rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                    Row row = sheet.getRow(rowIndex);
+                    if (row == null) {
+                        continue;
+                    }
+                    removeColumnsFromRow(row, hiddenColumns);
+                }
+            }
+            workbook.write(out);
+            return out.toByteArray();
+        }
+    }
+
+    private void removeColumnsFromRow(Row row, List<Integer> columnIndexesDesc) {
+        int lastCellNum = row.getLastCellNum();
+        if (lastCellNum <= 0) {
+            return;
+        }
+        for (Integer columnIndex : columnIndexesDesc) {
+            if (columnIndex == null || columnIndex < 0 || columnIndex >= lastCellNum) {
+                continue;
+            }
+            shiftRowCellsLeft(row, columnIndex, lastCellNum);
+            lastCellNum--;
+        }
+    }
+
+    private void shiftRowCellsLeft(Row row, int fromColumn, int lastCellNum) {
+        for (int col = fromColumn; col < lastCellNum - 1; col++) {
+            Cell nextCell = row.getCell(col + 1);
+            Cell targetCell = row.getCell(col);
+
+            if (nextCell == null) {
+                if (targetCell != null) {
+                    row.removeCell(targetCell);
+                }
+                continue;
+            }
+
+            if (targetCell == null) {
+                targetCell = row.createCell(col);
+            }
+            copyCell(nextCell, targetCell);
+        }
+
+        Cell lastCell = row.getCell(lastCellNum - 1);
+        if (lastCell != null) {
+            row.removeCell(lastCell);
+        }
+    }
+
+    private void copyCell(Cell source, Cell target) {
+        target.setCellStyle(source.getCellStyle());
+        switch (source.getCellType()) {
+            case STRING:
+                target.setCellValue(source.getStringCellValue());
+                break;
+            case NUMERIC:
+                target.setCellValue(source.getNumericCellValue());
+                break;
+            case BOOLEAN:
+                target.setCellValue(source.getBooleanCellValue());
+                break;
+            case FORMULA:
+                target.setCellFormula(source.getCellFormula());
+                break;
+            case ERROR:
+                target.setCellErrorValue(source.getErrorCellValue());
+                break;
+            case BLANK:
+                target.setCellValue("");
+                break;
+            default:
+                target.setCellValue("");
+                break;
+        }
+    }
+
     /**
      * 创建充值明细Zip（包含多个Excel文件）
      */
@@ -822,6 +1228,29 @@ public class BillingService {
 
                 String fileName = String.format("充值明细_%d-%d.xlsx", fromIndex + 1, toIndex);
                 byte[] excelData = createBillingDetailExcel(batch, "充值明细");
+
+                ZipEntry entry = new ZipEntry(fileName);
+                zos.putNextEntry(entry);
+                zos.write(excelData);
+                zos.closeEntry();
+            }
+        }
+        return zipOut.toByteArray();
+    }
+
+    private byte[] createBillingDetailZip(List<PaymentOrder> orders,
+                                          boolean showInstallerInfo,
+                                          boolean showDealerInfo) throws IOException {
+        ByteArrayOutputStream zipOut = new ByteArrayOutputStream();
+        try (ZipOutputStream zos = new ZipOutputStream(zipOut)) {
+            int totalFiles = (orders.size() + EXCEL_BATCH_SIZE - 1) / EXCEL_BATCH_SIZE;
+            for (int i = 0; i < totalFiles; i++) {
+                int fromIndex = i * EXCEL_BATCH_SIZE;
+                int toIndex = Math.min(fromIndex + EXCEL_BATCH_SIZE, orders.size());
+                List<PaymentOrder> batch = orders.subList(fromIndex, toIndex);
+
+                String fileName = String.format("充值明细_%d-%d.xlsx", fromIndex + 1, toIndex);
+                byte[] excelData = createBillingDetailExcel(batch, "充值明细", showInstallerInfo, showDealerInfo);
 
                 ZipEntry entry = new ZipEntry(fileName);
                 zos.putNextEntry(entry);

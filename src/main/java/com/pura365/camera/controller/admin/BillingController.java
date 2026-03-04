@@ -91,11 +91,12 @@ public class BillingController {
     @Operation(summary = "订单明细", description = "获取订单明细列表，用于导出")
     @GetMapping("/order-details")
     public ApiResponse<List<Map<String, Object>>> getOrderDetails(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
             @RequestParam(required = false) String installerCode,
             @RequestParam(required = false) Long dealerId,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate) {
-        return ApiResponse.success(billingService.getOrderDetails(installerCode, dealerId, startDate, endDate));
+        return ApiResponse.success(billingService.getOrderDetails(currentUserId, installerCode, dealerId, startDate, endDate));
     }
 
     /**
