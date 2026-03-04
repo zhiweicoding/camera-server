@@ -19,6 +19,8 @@ import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.repository.UserPushTokenRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -31,7 +33,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * 极光推送服务
+ * Push service. Keeps legacy class name for compatibility.
  */
 @Service
 public class JPushService {
@@ -42,25 +44,28 @@ public class JPushService {
     private final JPushClient jPushClient;
     private final JPushConfig jPushConfig;
     private final UserPushTokenRepository userPushTokenRepository;
+    private final FirebasePushService firebasePushService;
+    private final String pushProvider;
 
-    public JPushService(JPushClient jPushClient,
+    public JPushService(@Autowired(required = false) JPushClient jPushClient,
                         JPushConfig jPushConfig,
-                        UserPushTokenRepository userPushTokenRepository) {
+                        UserPushTokenRepository userPushTokenRepository,
+                        FirebasePushService firebasePushService,
+                        @Value("${push.provider:jpush}") String pushProvider) {
         this.jPushClient = jPushClient;
         this.jPushConfig = jPushConfig;
         this.userPushTokenRepository = userPushTokenRepository;
+        this.firebasePushService = firebasePushService;
+        this.pushProvider = pushProvider;
     }
 
-    /**
-     * 推送消息给单个用户
-     */
     public boolean pushToUser(Long userId, String title, String content, Map<String, String> extras) {
         List<UserPushToken> tokens = getUserPushTokens(userId);
         if (tokens.isEmpty()) {
             logger.warn("用户 {} 没有注册可用推送token", userId);
             return false;
         }
-        logger.info("JPush token snapshot userId={} tokens={}", userId, summarizeTokens(tokens));
+        logger.info("Push token snapshot userId={} tokens={}", userId, summarizeTokens(tokens));
 
         List<String> registrationIds = extractRegistrationIds(tokens);
         if (registrationIds.isEmpty()) {
@@ -68,14 +73,10 @@ public class JPushService {
             return false;
         }
 
-        logger.info("极光推送开始 userId={}, tokenCount={}, apnsProduction={}",
-                userId, registrationIds.size(), jPushConfig.getApnsProduction());
-        return pushToRegistrationIds(registrationIds, title, content, extras);
+        return pushByProvider(registrationIds, title, content, extras,
+                "userId=" + userId + ", tokenCount=" + registrationIds.size());
     }
 
-    /**
-     * 推送消息给多个用户
-     */
     public boolean pushToUsers(List<Long> userIds, String title, String content, Map<String, String> extras) {
         if (userIds == null || userIds.isEmpty()) {
             return false;
@@ -90,7 +91,7 @@ public class JPushService {
             logger.warn("用户列表 {} 没有可用推送token", userIds);
             return false;
         }
-        logger.info("JPush token snapshot userIds={} tokens={}", userIds, summarizeTokens(tokens));
+        logger.info("Push token snapshot userIds={} tokens={}", userIds, summarizeTokens(tokens));
 
         List<String> registrationIds = extractRegistrationIds(tokens);
         if (registrationIds.isEmpty()) {
@@ -98,16 +99,34 @@ public class JPushService {
             return false;
         }
 
-        logger.info("极光推送开始 userCount={}, tokenCount={}, apnsProduction={}",
-                userIds.size(), registrationIds.size(), jPushConfig.getApnsProduction());
+        return pushByProvider(registrationIds, title, content, extras,
+                "userCount=" + userIds.size() + ", tokenCount=" + registrationIds.size());
+    }
+
+    private boolean pushByProvider(List<String> registrationIds,
+                                   String title,
+                                   String content,
+                                   Map<String, String> extras,
+                                   String context) {
+        if (isFirebaseProvider()) {
+            logger.info("Firebase push start {}, provider={}", context, pushProvider);
+            return firebasePushService.pushToTokens(registrationIds, title, content, extras);
+        }
+
+        logger.info("JPush push start {}, provider={}, apnsProduction={}",
+                context, pushProvider, jPushConfig.getApnsProduction());
         return pushToRegistrationIds(registrationIds, title, content, extras);
     }
 
-    /**
-     * 推送消息到指定Registration ID列表
-     */
-    private boolean pushToRegistrationIds(List<String> registrationIds, String title, String content, Map<String, String> extras) {
+    private boolean pushToRegistrationIds(List<String> registrationIds,
+                                          String title,
+                                          String content,
+                                          Map<String, String> extras) {
         if (registrationIds == null || registrationIds.isEmpty()) {
+            return false;
+        }
+        if (jPushClient == null) {
+            logger.error("JPush client is not initialized while provider={}.", pushProvider);
             return false;
         }
 
@@ -117,15 +136,14 @@ public class JPushService {
             try {
                 PushPayload payload = buildPushPayload(batch, title, content, extras);
                 PushResult result = jPushClient.sendPush(payload);
-                logger.info("极光推送成功 msgId={}, sendNo={}, targetCount={}",
+                logger.info("JPush success msgId={}, sendNo={}, targetCount={}",
                         result.msg_id, result.sendno, batch.size());
                 anySuccess = true;
             } catch (APIConnectionException e) {
-                logger.error("极光推送连接异常 targetCount={}", batch.size(), e);
+                logger.error("JPush connection failed targetCount={}", batch.size(), e);
             } catch (APIRequestException e) {
-                logger.error("极光推送请求异常 status={}, errorCode={}, errorMessage={}, targetCount={}, sampleRegistrationId={}",
+                logger.error("JPush request failed status={}, errorCode={}, errorMessage={}, targetCount={}, sampleRegistrationId={}",
                         e.getStatus(), e.getErrorCode(), e.getErrorMessage(), batch.size(), maskRegistrationId(batch.get(0)), e);
-                // 防止单个无效registrationId拖垮整批推送，失败时回退到单条发送
                 if (batch.size() > 1) {
                     anySuccess = pushOneByOne(batch, title, content, extras) || anySuccess;
                 }
@@ -135,32 +153,32 @@ public class JPushService {
         return anySuccess;
     }
 
-    /**
-     * 批量失败时，逐条发送定位无效token并尽可能送达
-     */
-    private boolean pushOneByOne(List<String> registrationIds, String title, String content, Map<String, String> extras) {
+    private boolean pushOneByOne(List<String> registrationIds,
+                                 String title,
+                                 String content,
+                                 Map<String, String> extras) {
         boolean anySuccess = false;
         for (String registrationId : registrationIds) {
             try {
                 PushPayload payload = buildPushPayload(Collections.singletonList(registrationId), title, content, extras);
                 PushResult result = jPushClient.sendPush(payload);
-                logger.info("极光单条推送成功 msgId={}, sendNo={}, registrationId={}",
+                logger.info("JPush single success msgId={}, sendNo={}, registrationId={}",
                         result.msg_id, result.sendno, maskRegistrationId(registrationId));
                 anySuccess = true;
             } catch (APIConnectionException e) {
-                logger.error("极光单条推送连接异常 registrationId={}", maskRegistrationId(registrationId), e);
+                logger.error("JPush single connection failed registrationId={}", maskRegistrationId(registrationId), e);
             } catch (APIRequestException e) {
-                logger.error("极光单条推送失败 status={}, errorCode={}, errorMessage={}, registrationId={}",
+                logger.error("JPush single request failed status={}, errorCode={}, errorMessage={}, registrationId={}",
                         e.getStatus(), e.getErrorCode(), e.getErrorMessage(), maskRegistrationId(registrationId), e);
             }
         }
         return anySuccess;
     }
 
-    /**
-     * 构建推送载荷
-     */
-    private PushPayload buildPushPayload(List<String> registrationIds, String title, String content, Map<String, String> extras) {
+    private PushPayload buildPushPayload(List<String> registrationIds,
+                                         String title,
+                                         String content,
+                                         Map<String, String> extras) {
         if (extras == null) {
             extras = new HashMap<>();
         }
@@ -192,9 +210,6 @@ public class JPushService {
                 .build();
     }
 
-    /**
-     * 获取用户的推送token列表
-     */
     private List<UserPushToken> getUserPushTokens(Long userId) {
         LambdaQueryWrapper<UserPushToken> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(UserPushToken::getUserId, userId)
@@ -225,6 +240,14 @@ public class JPushService {
             result.add(deduped.subList(i, end));
         }
         return result;
+    }
+
+    private boolean isFirebaseProvider() {
+        if (!StringUtils.hasText(pushProvider)) {
+            return false;
+        }
+        String provider = pushProvider.trim().toLowerCase();
+        return "firebase".equals(provider) || "fcm".equals(provider);
     }
 
     private String maskRegistrationId(String registrationId) {

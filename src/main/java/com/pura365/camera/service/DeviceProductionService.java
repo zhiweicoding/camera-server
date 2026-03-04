@@ -671,6 +671,50 @@ public class DeviceProductionService {
                 .or().in(ManufacturedDevice::getDeviceId, dealerManagedDeviceIds));
     }
 
+    private void applyRoleDeviceFilter(
+            QueryWrapper<ManufacturedDevice> qw,
+            String installerCode,
+            String dealerCode,
+            Set<String> dealerManagedDeviceIds,
+            boolean useRoleOrScope
+    ) {
+        String installer = installerCode == null ? null : installerCode.trim();
+        String dealer = dealerCode == null ? null : dealerCode.trim();
+        boolean hasInstaller = installer != null && !installer.isEmpty();
+        boolean hasDealer = dealer != null && !dealer.isEmpty();
+
+        if (!useRoleOrScope) {
+            if (hasInstaller) {
+                qw.lambda().eq(ManufacturedDevice::getAssemblerCode, installer);
+            }
+            if (hasDealer) {
+                applyDealerFilter(qw, dealer, dealerManagedDeviceIds);
+            }
+            return;
+        }
+
+        if (!hasInstaller && !hasDealer) {
+            return;
+        }
+        if (!hasInstaller) {
+            applyDealerFilter(qw, dealer, dealerManagedDeviceIds);
+            return;
+        }
+        if (!hasDealer) {
+            qw.lambda().eq(ManufacturedDevice::getAssemblerCode, installer);
+            return;
+        }
+
+        if (dealerManagedDeviceIds == null || dealerManagedDeviceIds.isEmpty()) {
+            qw.lambda().and(w -> w.eq(ManufacturedDevice::getAssemblerCode, installer)
+                    .or().eq(ManufacturedDevice::getVendorCode, dealer));
+            return;
+        }
+        qw.lambda().and(w -> w.eq(ManufacturedDevice::getAssemblerCode, installer)
+                .or().eq(ManufacturedDevice::getVendorCode, dealer)
+                .or().in(ManufacturedDevice::getDeviceId, dealerManagedDeviceIds));
+    }
+
     // ==================== 生产批次管理 ====================
 
     /**
@@ -1000,6 +1044,8 @@ public class DeviceProductionService {
         // 根据当前用户角色确定过滤条件
         String effectiveInstallerCode = installerCode;
         String effectiveDealerCode = dealerCode;
+        boolean hasInstallerRoleScope = false;
+        boolean hasDealerRoleScope = false;
         boolean dealerPermissionByChain = false;
         Set<String> dealerManagedDeviceIds = Collections.emptySet();
         
@@ -1016,6 +1062,7 @@ public class DeviceProductionService {
                         Installer installer = installerRepository.selectById(currentUser.getInstallerId());
                         if (installer != null && installer.getInstallerCode() != null) {
                             effectiveInstallerCode = installer.getInstallerCode();
+                            hasInstallerRoleScope = true;
                             log.info("装机商用户查询设备列表, userId={}, installerCode={}", currentUserId, effectiveInstallerCode);
                         }
                     }
@@ -1026,6 +1073,7 @@ public class DeviceProductionService {
                         Dealer dealer = dealerRepository.selectById(currentUser.getDealerId());
                         if (dealer != null && dealer.getDealerCode() != null) {
                             effectiveDealerCode = dealer.getDealerCode();
+                            hasDealerRoleScope = true;
                             dealerPermissionByChain = true;
                             log.info("经销商用户查询设备列表, userId={}, dealerCode={}", currentUserId, effectiveDealerCode);
                         }
@@ -1078,14 +1126,15 @@ public class DeviceProductionService {
             }
         }
         // 装机商代码过滤（assemblerCode字段）- 使用有效值（可能被权限过滤覆盖）
-        if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
-            qw.lambda().eq(ManufacturedDevice::getAssemblerCode, effectiveInstallerCode);
-        }
+        Set<String> effectiveDealerScopeIds = dealerPermissionByChain ? dealerManagedDeviceIds : Collections.emptySet();
+        boolean useRoleOrScope = hasInstallerRoleScope && hasDealerRoleScope;
         // 经销商代码过滤（数据库字段vendor_code）- 使用有效值（可能被权限过滤覆盖）
-        applyDealerFilter(
+        applyRoleDeviceFilter(
                 qw,
+                effectiveInstallerCode,
                 effectiveDealerCode,
-                dealerPermissionByChain ? dealerManagedDeviceIds : Collections.emptySet()
+                effectiveDealerScopeIds,
+                useRoleOrScope
         );
         qw.lambda().orderByDesc(ManufacturedDevice::getCreatedAt);
 
@@ -1124,15 +1173,14 @@ public class DeviceProductionService {
             }
         }
         // 装机商代码过滤 - 使用有效值（可能被权限过滤覆盖）
-        if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
-            countQw.lambda().eq(ManufacturedDevice::getAssemblerCode, effectiveInstallerCode);
-        }
-        // 经销商代码过滤 - 使用有效值（可能被权限过滤覆盖）
-        applyDealerFilter(
+        applyRoleDeviceFilter(
                 countQw,
+                effectiveInstallerCode,
                 effectiveDealerCode,
-                dealerPermissionByChain ? dealerManagedDeviceIds : Collections.emptySet()
+                effectiveDealerScopeIds,
+                useRoleOrScope
         );
+        // 经销商代码过滤 - 使用有效值（可能被权限过滤覆盖）
         long total = deviceRepository.selectCount(countQw);
 
         // 获取装机商和经销商的分佣比例
