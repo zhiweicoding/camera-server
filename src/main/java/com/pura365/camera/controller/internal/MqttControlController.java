@@ -9,18 +9,14 @@ import com.pura365.camera.dto.BulbConfigResponse;
 import com.pura365.camera.model.ApiResponse;
 import com.pura365.camera.model.mqtt.MqttBulbConfigMessage;
 import com.pura365.camera.repository.DeviceRepository;
-import com.pura365.camera.service.AuthService;
 import com.pura365.camera.service.MqttMessageService;
-import com.pura365.camera.service.TrafficPreviewPolicyService;
 import com.pura365.camera.util.TimeValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
-import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
-import javax.servlet.http.HttpServletRequest;
 import javax.validation.Valid;
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -36,7 +32,7 @@ import java.util.Map;
 public class MqttControlController {
 
     private static final Logger log = LoggerFactory.getLogger(MqttControlController.class);
-    
+
     // 等待设备响应超时时间（毫秒）
     private static final long DEVICE_RESPONSE_TIMEOUT = 5000;
 
@@ -45,12 +41,6 @@ public class MqttControlController {
 
     @Autowired
     private DeviceRepository deviceRepository;
-
-    @Autowired
-    private AuthService authService;
-
-    @Autowired
-    private TrafficPreviewPolicyService trafficPreviewPolicyService;
 
     /**
      * 请求设备信息（CODE 11）
@@ -239,39 +229,9 @@ public class MqttControlController {
     public ResponseEntity<Map<String, Object>> requestWebRtcOffer(
             @PathVariable String deviceId,
             @RequestParam String sid, // Peer ID
-            @RequestParam String rtcServer, // 格式: server,user,pass
-            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
-            @RequestHeader(value = "Authorization", required = false) String authorization,
-            HttpServletRequest request) {
+            @RequestParam String rtcServer) { // 格式: server,user,pass
 
-        log.info("请求设备 {} 的WebRTC Offer - SID: {}", deviceId, sid);
-
-        Long resolvedUserId = resolveCurrentUserId(currentUserId, authorization, request);
-        if (resolvedUserId == null) {
-            Map<String, Object> result = new HashMap<>();
-            result.put("success", false);
-            result.put("message", "未登录或登录已过期");
-            return ResponseEntity.status(401).body(result);
-        }
-
-        TrafficPreviewPolicyService.PolicyEvaluation evaluation =
-                trafficPreviewPolicyService.evaluate(resolvedUserId, deviceId);
-        if (!evaluation.isOk()) {
-            Map<String, Object> result = new HashMap<>();
-            result.put("success", false);
-            result.put("message", evaluation.getErrorMessage());
-            return ResponseEntity.status(evaluation.getHttpStatus()).body(result);
-        }
-
-        Map<String, Object> policy = evaluation.getPolicy();
-        if (policy != null && Boolean.FALSE.equals(policy.get("can_preview"))) {
-            Map<String, Object> result = new HashMap<>();
-            result.put("success", false);
-            result.put("message", stringValue(policy.get("reason_message"), "当前设备不可预览"));
-            result.put("reason_code", policy.get("reason_code"));
-            result.put("policy", policy);
-            return ResponseEntity.status(403).body(result);
-        }
+        log.info("请求设备 {} 的 WebRTC Offer - SID: {}", deviceId, sid);
 
         try {
             mqttMessageService.requestWebRtcOffer(deviceId, sid, rtcServer);
@@ -279,7 +239,6 @@ public class MqttControlController {
             Map<String, Object> result = new HashMap<>();
             result.put("success", true);
             result.put("message", "已请求 WebRTC Offer");
-            result.put("policy", policy);
             return ResponseEntity.ok(result);
 
         } catch (Exception e) {
@@ -388,7 +347,7 @@ public class MqttControlController {
             @PathVariable String deviceId,
             @Valid @RequestBody BulbConfigRequest request) {
 
-        log.info("设置设备 {} 灯泡参数: detect={}, brightness={}", 
+        log.info("设置设备 {} 灯泡参数: detect={}, brightness={}",
                 deviceId, request.getDetect(), request.getBrightness());
 
         // 检查设备是否存在
@@ -429,7 +388,7 @@ public class MqttControlController {
                 // 超时，但乐观更新数据库
                 updateDeviceBulbConfig(device, request);
                 log.warn("设备 {} 响应超时，已乐观更新数据库", deviceId);
-                
+
                 BulbConfigResponse result = buildResponseFromRequest(request);
                 return ApiResponse.success(result);
             }
@@ -437,7 +396,7 @@ public class MqttControlController {
             if (response.getStatus() != null && response.getStatus() == 1) {
                 // 配置成功，更新数据库
                 updateDeviceBulbConfig(device, request);
-                
+
                 BulbConfigResponse result = buildResponseFromRequest(request);
                 return ApiResponse.success(result);
             } else {
@@ -558,54 +517,16 @@ public class MqttControlController {
         return response;
     }
 
-    private Long resolveCurrentUserId(Long currentUserId, String authorization, HttpServletRequest request) {
-        if (currentUserId != null) {
-            return currentUserId;
-        }
-        if (request != null) {
-            Object attrUserId = request.getAttribute("currentUserId");
-            if (attrUserId instanceof Number) {
-                return ((Number) attrUserId).longValue();
-            }
-            if (attrUserId instanceof String && StringUtils.hasText((String) attrUserId)) {
-                try {
-                    return Long.valueOf((String) attrUserId);
-                } catch (NumberFormatException ignored) {
-                }
-            }
-        }
-        if (!StringUtils.hasText(authorization)) {
-            return null;
-        }
-        String bearerPrefix = "Bearer ";
-        if (!authorization.startsWith(bearerPrefix)) {
-            return null;
-        }
-        String token = authorization.substring(bearerPrefix.length()).trim();
-        if (!StringUtils.hasText(token)) {
-            return null;
-        }
-        return authService.parseUserIdFromAccessToken(token);
-    }
-
-    private String stringValue(Object value, String defaultValue) {
-        if (value == null) {
-            return defaultValue;
-        }
-        String text = String.valueOf(value).trim();
-        return StringUtils.hasText(text) ? text : defaultValue;
-    }
-
     /**
      * 注册设备 SSID（用于测试）
      */
-    @Operation(summary = "注册设备 SSID", description = "在服务端登记设备SSID（测试用途）")
+    @Operation(summary = "注册设备 SSID", description = "在服务器侧记录设备 SSID（测试用途）")
     @PostMapping("/device/{deviceId}/register-ssid")
     public ResponseEntity<Map<String, Object>> registerSsid(
             @PathVariable String deviceId,
             @RequestParam String ssid) {
 
-        log.info("注册设备 {} 的SSID", deviceId);
+        log.info("注册设备 {} 的 SSID", deviceId);
 
         mqttMessageService.registerDeviceSsid(deviceId, ssid);
 

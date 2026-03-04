@@ -286,12 +286,20 @@ public class CameraController {
             }
 
             SendMsgRequest msgRequest = parseSendMsgRequestFromToken(token);
-            log.info("[send_msg] 设备={}, 主题={}, 标题={}, 内容={}", 
-                    msgRequest.getId(), msgRequest.getTopic(), msgRequest.getTitle(), msgRequest.getMsg());
+            boolean validExp = TimeValidator.isValid(msgRequest.getExp());
+            log.info("[send_msg][diagnostic] id={}, topic={}, title={}, msg={}, exp={}, expValid={}, picurl={}, videourl={}",
+                    msgRequest.getId(),
+                    msgRequest.getTopic(),
+                    msgRequest.getTitle(),
+                    msgRequest.getMsg(),
+                    msgRequest.getExp(),
+                    validExp,
+                    msgRequest.getPicurl(),
+                    msgRequest.getVideourl());
 
             // 验证时间戳
-            if (!TimeValidator.isValid(msgRequest.getExp())) {
-                log.warn("[send_msg] 时间戳过期，忽略 - 设备={}", msgRequest.getId());
+            if (!validExp) {
+                log.warn("[send_msg] 时间戳过期，忽略 - 设备={}, exp={}", msgRequest.getId(), msgRequest.getExp());
                 return ResponseEntity.ok().build();
             }
 

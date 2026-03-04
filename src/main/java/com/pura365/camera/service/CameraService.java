@@ -32,6 +32,7 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.Date;
+import java.util.Locale;
 
 @Service
 public class CameraService {
@@ -279,9 +280,24 @@ public class CameraService {
         // 内容翻译：英文转中文
         content = translateContent(content);
         title = translateContent(title);
-        
-        // 消息类型
-        String messageType = "event";
+
+        // 兼容设备端字段差异，避免推送标题/内容为空导致推送失败
+        if (!StringUtils.hasText(title)) {
+            title = "设备消息通知";
+        }
+        if (!StringUtils.hasText(content)) {
+            content = "设备检测到新的事件";
+        }
+
+        // 消息类型（尽量标准化为 motion/alert/event）
+        String messageType = resolveMessageType(title, content, request.getTopic());
+        log.info("[handleMessage][diagnostic] deviceId={}, messageType={}, title={}, content={}, hasThumbnail={}, hasVideoUrl={}",
+                deviceId,
+                messageType,
+                title,
+                content,
+                StringUtils.hasText(thumbnailUrl),
+                StringUtils.hasText(videoUrl));
         
         // 查找该设备绑定的所有用户
         LambdaQueryWrapper<UserDevice> wrapper = new LambdaQueryWrapper<>();
@@ -324,6 +340,26 @@ public class CameraService {
         return content;
     }
     
+    /**
+     * 推断消息类型
+     */
+    private String resolveMessageType(String title, String content, String topic) {
+        String merged = (StringUtils.hasText(title) ? title : "") + " "
+                + (StringUtils.hasText(content) ? content : "") + " "
+                + (StringUtils.hasText(topic) ? topic : "");
+        String normalized = merged.toLowerCase(Locale.ROOT);
+
+        if (normalized.contains("motion") || normalized.contains("移动") || normalized.contains("人体")
+                || normalized.contains("person") || normalized.contains("pir")) {
+            return "motion";
+        }
+        if (normalized.contains("alarm") || normalized.contains("alert") || normalized.contains("告警")
+                || normalized.contains("报警") || normalized.contains("异常")) {
+            return "alert";
+        }
+        return "event";
+    }
+
     /**
      * 解析 send_msg 消息中的设备ID
      * 优先使用 id 字段（设备标准字段），兼容从 topic 提取
