@@ -313,7 +313,8 @@ public class DeviceProductionService {
         }
 
         String allowedDealerCode = resolveAssignableDealerCode(currentUserId);
-        if (!allowedDealerCode.equals(device.getVendorCode())) {
+        String currentDealerCode = resolveCurrentDealerCode(device);
+        if (currentDealerCode == null || !allowedDealerCode.equals(currentDealerCode)) {
             throw new RuntimeException("设备不属于当前经销商，无权限分配");
         }
 
@@ -331,9 +332,9 @@ public class DeviceProductionService {
         ensureDeviceNotBound(device.getDeviceId());
 
         String oldDeviceId = device.getDeviceId();
-        String oldVendorCode = device.getVendorCode();
+        String oldVendorCode = resolveInitialDealerCode(device);
         BigDecimal previousDealerRate = device.getDealerCommissionRate();
-        boolean vendorChanged = !vendorCode.equals(oldVendorCode);
+        boolean vendorChanged = !vendorCode.equals(currentDealerCode);
 
         // 经销商代码变化时，仅更新归属，不修改设备ID
         if (vendorChanged) {
@@ -342,7 +343,9 @@ public class DeviceProductionService {
         }
 
         // 更新设备信息（机身码保持不变）
-        device.setVendorCode(vendorCode);
+        if (oldVendorCode != null) {
+            device.setVendorCode(oldVendorCode);
+        }
         device.setCurrentDealerId(targetDealer != null ? targetDealer.getId() : null);
         device.setUpdatedAt(new Date());
         deviceRepository.updateById(device);
@@ -363,7 +366,8 @@ public class DeviceProductionService {
         Map<String, Object> result = new HashMap<>();
         result.put("deviceId", oldDeviceId);
         result.put("newDeviceId", oldDeviceId);
-        result.put("vendorCode", vendorCode);
+        result.put("vendorCode", oldVendorCode);
+        result.put("currentDealerCode", vendorCode);
         result.put("changed", vendorChanged);
         result.put("message", vendorChanged ? "分配成功" : "经销商未变化");
         return result;
@@ -380,6 +384,45 @@ public class DeviceProductionService {
      * @param commissionRate 佣金比例
      * @return 处理结果
      */
+    public Map<String, Object> checkScanAssignDealer(Long currentUserId, String deviceId, String vendorCode) {
+        if (deviceId == null || deviceId.length() != 16) {
+            throw new RuntimeException("deviceId must be 16 chars");
+        }
+        if (vendorCode == null || vendorCode.length() != 2) {
+            throw new RuntimeException("vendorCode must be 2 chars");
+        }
+
+        ManufacturedDevice device = getDevice(deviceId);
+        if (device == null) {
+            throw new RuntimeException("device not found: " + deviceId);
+        }
+
+        String allowedDealerCode = resolveAssignableDealerCode(currentUserId);
+        String currentDealerCode = resolveCurrentDealerCode(device);
+        if (currentDealerCode == null || !allowedDealerCode.equals(currentDealerCode)) {
+            throw new RuntimeException("device is not owned by current dealer");
+        }
+
+        ensureDeviceNotBound(device.getDeviceId());
+
+        if (!"00".equals(vendorCode)) {
+            QueryWrapper<Dealer> dq = new QueryWrapper<>();
+            dq.lambda().eq(Dealer::getDealerCode, vendorCode).eq(Dealer::getStatus, EnableStatus.ENABLED);
+            if (dealerRepository.selectOne(dq) == null) {
+                throw new RuntimeException("dealer not found or disabled: " + vendorCode);
+            }
+        }
+
+        String initialDealerCode = resolveInitialDealerCode(device);
+        Map<String, Object> result = new HashMap<>();
+        result.put("deviceId", deviceId);
+        result.put("vendorCode", initialDealerCode);
+        result.put("currentDealerCode", currentDealerCode);
+        result.put("targetDealerCode", vendorCode);
+        result.put("canAssign", true);
+        return result;
+    }
+
     @Transactional
     public Map<String, Object> batchAssignDealer(Long currentUserId, List<String> deviceIds, String dealerCode, BigDecimal commissionRate) {
         // 校验经销商代码
@@ -426,7 +469,8 @@ public class DeviceProductionService {
                 }
 
                 // 权限校验：仅允许当前设备归属经销商分配给其他经销商
-                if (!finalAllowedDealerCode.equals(device.getVendorCode())) {
+                String currentDealerCode = resolveCurrentDealerCode(device);
+                if (currentDealerCode == null || !finalAllowedDealerCode.equals(currentDealerCode)) {
                     noPermissionDevices.add(deviceId);
                     throw new RuntimeException("设备不属于当前经销商，无权限分配");
                 }
@@ -437,9 +481,9 @@ public class DeviceProductionService {
                 }
 
                 String oldDeviceId = device.getDeviceId();
-                String oldVendorCode = device.getVendorCode();
+                String oldVendorCode = resolveInitialDealerCode(device);
                 BigDecimal previousDealerRate = device.getDealerCommissionRate();
-                boolean vendorChanged = !dealerCode.equals(oldVendorCode);
+                boolean vendorChanged = !dealerCode.equals(currentDealerCode);
                 String newDeviceId = oldDeviceId;
 
                 // 如果经销商代码变化，仅更新归属，不修改设备ID
@@ -447,21 +491,17 @@ public class DeviceProductionService {
                     // 补齐历史设备的初始链路节点，避免后续只出现下级节点导致链路断层
                     ensureCurrentDealerInChain(oldDeviceId, device, oldVendorCode, previousDealerRate);
                 }
-                device.setVendorCode(dealerCode);
+                if (oldVendorCode != null) {
+                    device.setVendorCode(oldVendorCode);
+                }
 
                 BigDecimal effectiveDealerRate = commissionRate != null ? commissionRate : previousDealerRate;
 
                 // 更新经销商ID和佣金比例
                 if (dealer != null) {
                     device.setCurrentDealerId(dealer.getId());
-                    if (effectiveDealerRate != null) {
-                        device.setDealerCommissionRate(effectiveDealerRate);
-                    }
                 } else {
                     device.setCurrentDealerId(null);
-                    if (commissionRate != null) {
-                        device.setDealerCommissionRate(commissionRate);
-                    }
                 }
                 device.setUpdatedAt(new Date());
                 deviceRepository.updateById(device);
@@ -530,6 +570,36 @@ public class DeviceProductionService {
             throw new RuntimeException("当前账号未绑定有效经销商");
         }
         return dealerCode;
+    }
+
+    private String resolveInitialDealerCode(ManufacturedDevice device) {
+        if (device == null) {
+            return null;
+        }
+
+        String deviceId = device.getDeviceId();
+        if (deviceId != null && deviceId.length() >= 7) {
+            String codeFromDeviceId = normalizeCode(deviceId.substring(5, 7), false);
+            if (codeFromDeviceId != null) {
+                return codeFromDeviceId;
+            }
+        }
+        return normalizeCode(device.getVendorCode(), false);
+    }
+
+    private String resolveCurrentDealerCode(ManufacturedDevice device) {
+        if (device == null) {
+            return null;
+        }
+
+        if (device.getCurrentDealerId() != null) {
+            Dealer currentDealer = dealerRepository.selectById(device.getCurrentDealerId());
+            String currentDealerCode = currentDealer != null ? normalizeCode(currentDealer.getDealerCode(), false) : null;
+            if (currentDealerCode != null) {
+                return currentDealerCode;
+            }
+        }
+        return resolveInitialDealerCode(device);
     }
 
     private void ensureCurrentDealerInChain(String deviceId, ManufacturedDevice device, String dealerCode, BigDecimal commissionRate) {
@@ -1080,17 +1150,6 @@ public class DeviceProductionService {
             device.setDealerCommissionRate(batch.getDealerCommissionRate());
             device.setEnableAd(batch.getEnableAd());
             deviceRepository.insert(device);
-
-            // 生产时若已指定经销商，补齐初始分销链路，保证后续链路权限和展示一致
-            if (currentDealer != null && vendorCode != null && !"00".equals(vendorCode)) {
-                BigDecimal initialDealerRate = batch.getDealerCommissionRate() != null ? batch.getDealerCommissionRate() : BigDecimal.ZERO;
-                try {
-                    writeDeviceDealerRecord(deviceId, device, currentDealer, initialDealerRate);
-                } catch (Exception e) {
-                    log.warn("创建初始 device_dealer 记录失败: deviceId={}, dealerCode={}, error={}",
-                            deviceId, vendorCode, e.getMessage());
-                }
-            }
         }
     }
 
@@ -1299,7 +1358,13 @@ public class DeviceProductionService {
         if (scope == null) {
             return true;
         }
-        return scope.admin || scope.installerRoleScope;
+        if (scope.admin) {
+            return true;
+        }
+        if (scope.dealerRoleScope) {
+            return false;
+        }
+        return scope.installerRoleScope;
     }
 
     private boolean canViewDealerCommission(DeviceDataScope scope, ManufacturedDevice device, List<DeviceDealer> dealerChain) {
@@ -1316,12 +1381,7 @@ public class DeviceProductionService {
         if (dealerChain != null && !dealerChain.isEmpty()) {
             for (DeviceDealer node : dealerChain) {
                 if (scope.userDealerId.equals(node.getDealerId())) {
-                    Integer level = node.getLevel();
-                    if (level != null) {
-                        return level == 1;
-                    }
-                    DeviceDealer firstNode = dealerChain.get(0);
-                    return scope.userDealerId.equals(firstNode.getDealerId());
+                    return true;
                 }
             }
             return false;
@@ -1425,7 +1485,8 @@ public class DeviceProductionService {
             map.put("deviceForm", d.getDeviceForm());
             map.put("specialReq", d.getSpecialReq());
             map.put("assemblerCode", d.getAssemblerCode());
-            map.put("vendorCode", d.getVendorCode());
+            String initialDealerCode = resolveInitialDealerCode(d);
+            map.put("vendorCode", initialDealerCode != null ? initialDealerCode : d.getVendorCode());
             map.put("installerId", d.getInstallerId());
             map.put("serialNo", d.getSerialNo());
             map.put("macAddress", d.getMacAddress());
@@ -1449,11 +1510,11 @@ public class DeviceProductionService {
 
             // 添加经销商信息（优先根据 currentDealerId 查找）
             Dealer dealer = null;
-            if (d.getCurrentDealerId() != null) {
-                dealer = dealerByIdMap.get(d.getCurrentDealerId());
+            if (initialDealerCode != null) {
+                dealer = dealerByCodeMap.get(initialDealerCode);
             }
-            if (dealer == null && d.getVendorCode() != null) {
-                dealer = dealerByCodeMap.get(d.getVendorCode());
+            if (dealer == null && d.getCurrentDealerId() != null) {
+                dealer = dealerByIdMap.get(d.getCurrentDealerId());
             }
             if (dealer != null) {
                 map.put("dealerName", dealer.getName());
@@ -1509,6 +1570,16 @@ public class DeviceProductionService {
                 if (currentDealer.getDealerId() != null) {
                     Dealer dlr = dealerRepository.selectById(currentDealer.getDealerId());
                     map.put("currentVendorName", dlr != null ? dlr.getName() : null);
+                }
+            }
+
+            // 鍏煎鏃犻摼璺褰曠殑鏁版嵁锛氬洖閫€鍒?current_dealer_id
+            if (map.get("currentVendorId") == null && d.getCurrentDealerId() != null) {
+                Dealer currentDealer = dealerByIdMap.get(d.getCurrentDealerId());
+                if (currentDealer != null) {
+                    map.put("currentVendorId", currentDealer.getId());
+                    map.put("currentVendorCode", currentDealer.getDealerCode());
+                    map.put("currentVendorName", currentDealer.getName());
                 }
             }
 

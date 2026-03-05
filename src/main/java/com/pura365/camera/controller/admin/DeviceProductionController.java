@@ -430,6 +430,26 @@ public class DeviceProductionController {
         }
     }
 
+    @PostMapping("/devices/check-scan-assign-dealer")
+    public ApiResponse<Map<String, Object>> checkScanAssignDealer(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
+            @RequestBody Map<String, String> body) {
+        try {
+            String deviceId = body.get("deviceId");
+            String vendorCode = body.get("vendorCode");
+            if (deviceId == null || deviceId.trim().isEmpty()) {
+                return ApiResponse.error(400, "设备ID不能为空");
+            }
+            if (vendorCode == null || vendorCode.length() != 2) {
+                return ApiResponse.error(400, "经销商代码必须是2位");
+            }
+            Map<String, Object> result = productionService.checkScanAssignDealer(currentUserId, deviceId.trim(), vendorCode);
+            return ApiResponse.success(result);
+        } catch (RuntimeException e) {
+            return ApiResponse.error(400, e.getMessage());
+        }
+    }
+
     /**
      * 扫码分配经销商（单个，兼容旧接口）
      * 根据设备ID和经销商代码，更新设备的经销商关联（不修改设备ID）
