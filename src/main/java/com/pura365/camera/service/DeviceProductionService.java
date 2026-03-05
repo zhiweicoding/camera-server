@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
@@ -287,14 +288,14 @@ public class DeviceProductionService {
 
     /**
      * 扫码分配经销商
-     * 更新设备的经销商关联，同时修改设备ID的第6-7位
+     * 更新设备的经销商关联，不修改设备ID
      *
      * @param deviceId   原设备ID（16位）
      * @param vendorCode 新的经销商代码（2位）
      * @return 包含新设备ID等信息的Map
      */
     @Transactional
-    public Map<String, Object> scanAssignDealer(String deviceId, String vendorCode) {
+    public Map<String, Object> scanAssignDealer(Long currentUserId, String deviceId, String vendorCode) {
         // 校验设备ID长度
         if (deviceId == null || deviceId.length() != 16) {
             throw new RuntimeException("设备ID必须是16位");
@@ -311,11 +312,18 @@ public class DeviceProductionService {
             throw new RuntimeException("设备不存在: " + deviceId);
         }
 
+        String allowedDealerCode = resolveAssignableDealerCode(currentUserId);
+        if (!allowedDealerCode.equals(device.getVendorCode())) {
+            throw new RuntimeException("设备不属于当前经销商，无权限分配");
+        }
+
         // 如果vendorCode不是"00"，校验经销商是否存在且启用
+        Dealer targetDealer = null;
         if (!"00".equals(vendorCode)) {
             QueryWrapper<Dealer> dq = new QueryWrapper<>();
             dq.lambda().eq(Dealer::getDealerCode, vendorCode).eq(Dealer::getStatus, EnableStatus.ENABLED);
-            if (dealerRepository.selectCount(dq) == 0) {
+            targetDealer = dealerRepository.selectOne(dq);
+            if (targetDealer == null) {
                 throw new RuntimeException("经销商不存在或未启用: " + vendorCode);
             }
         }
@@ -324,49 +332,40 @@ public class DeviceProductionService {
 
         String oldDeviceId = device.getDeviceId();
         String oldVendorCode = device.getVendorCode();
+        BigDecimal previousDealerRate = device.getDealerCommissionRate();
         boolean vendorChanged = !vendorCode.equals(oldVendorCode);
-        String newDeviceId = oldDeviceId;
 
-        // 如果经销商代码变化，需要更新设备ID
+        // 经销商代码变化时，仅更新归属，不修改设备ID
         if (vendorChanged) {
-            // 构建新的设备ID：第1-5位 + 新的第6-7位(vendorCode) + 第8-16位
-            newDeviceId = oldDeviceId.substring(0, 5) + vendorCode + oldDeviceId.substring(7);
-
-            // 检查新设备ID是否已存在（排除自身）
-            QueryWrapper<ManufacturedDevice> checkQw = new QueryWrapper<>();
-            checkQw.lambda().eq(ManufacturedDevice::getDeviceId, newDeviceId)
-                    .ne(ManufacturedDevice::getId, device.getId());
-            if (deviceRepository.selectCount(checkQw) > 0) {
-                throw new RuntimeException("新设备ID已存在: " + newDeviceId);
-            }
-
-            // 更新设备信息
-            // Keep dealer chain aligned when device ID changes.
-            syncDeviceDealerDeviceId(oldDeviceId, newDeviceId);
-            device.setDeviceId(newDeviceId);
-            device.setVendorCode(vendorCode);
-            device.setUpdatedAt(new Date());
-            deviceRepository.updateById(device);
-
-            log.info("扫码分配经销商成功: oldDeviceId={}, newDeviceId={}, vendorCode={}",
-                    oldDeviceId, newDeviceId, vendorCode);
-
-            Map<String, Object> result = new HashMap<>();
-            result.put("deviceId", oldDeviceId);
-            result.put("newDeviceId", newDeviceId);
-            result.put("vendorCode", vendorCode);
-            result.put("changed", true);
-            result.put("message", "分配成功");
-            return result;
+            // 补齐历史设备的初始链路节点，避免链路只有下级节点
+            ensureCurrentDealerInChain(oldDeviceId, device, oldVendorCode, previousDealerRate);
         }
 
-        // 经销商未变化
+        // 更新设备信息（机身码保持不变）
+        device.setVendorCode(vendorCode);
+        device.setCurrentDealerId(targetDealer != null ? targetDealer.getId() : null);
+        device.setUpdatedAt(new Date());
+        deviceRepository.updateById(device);
+
+        if (vendorChanged && targetDealer != null) {
+            BigDecimal chainRate = previousDealerRate != null ? previousDealerRate : BigDecimal.ZERO;
+            try {
+                writeDeviceDealerRecord(oldDeviceId, device, targetDealer, chainRate);
+            } catch (Exception e) {
+                log.warn("扫码分配补写 device_dealer 失败: deviceId={}, dealerCode={}, error={}",
+                        oldDeviceId, vendorCode, e.getMessage());
+            }
+        }
+
+        log.info("扫码分配经销商成功: deviceId={}, vendorCode={}, changed={}",
+                oldDeviceId, vendorCode, vendorChanged);
+
         Map<String, Object> result = new HashMap<>();
         result.put("deviceId", oldDeviceId);
         result.put("newDeviceId", oldDeviceId);
         result.put("vendorCode", vendorCode);
-        result.put("changed", false);
-        result.put("message", "经销商未变化");
+        result.put("changed", vendorChanged);
+        result.put("message", vendorChanged ? "分配成功" : "经销商未变化");
         return result;
     }
 
@@ -382,38 +381,14 @@ public class DeviceProductionService {
      * @return 处理结果
      */
     @Transactional
-    public Map<String, Object> batchAssignDealer(Long currentUserId, List<String> deviceIds, String dealerCode, java.math.BigDecimal commissionRate) {
+    public Map<String, Object> batchAssignDealer(Long currentUserId, List<String> deviceIds, String dealerCode, BigDecimal commissionRate) {
         // 校验经销商代码
         if (dealerCode == null || dealerCode.length() != 2) {
             throw new RuntimeException("经销商代码必须是2位");
         }
 
-        // 获取当前用户信息，用于权限校验
-        String allowedInstallerCode = null;
-        String allowedDealerCode = null;
-        boolean isAdmin = false;
-        if (currentUserId != null) {
-            User currentUser = userRepository.selectById(currentUserId);
-            if (currentUser != null) {
-                isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
-                if (!isAdmin) {
-                    // 装机商只能分配自己关联的设备
-                    if (currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null) {
-                        Installer installer = installerRepository.selectById(currentUser.getInstallerId());
-                        if (installer != null) {
-                            allowedInstallerCode = installer.getInstallerCode();
-                        }
-                    }
-                    // 经销商只能分配自己关联的设备
-                    if (currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null) {
-                        Dealer userDealer = dealerRepository.selectById(currentUser.getDealerId());
-                        if (userDealer != null) {
-                            allowedDealerCode = userDealer.getDealerCode();
-                        }
-                    }
-                }
-            }
-        }
+        // 仅经销商（含同时具备装机商+经销商身份）可分配经销商
+        String allowedDealerCode = resolveAssignableDealerCode(currentUserId);
 
         // 查找经销商（非"00"时）
         Dealer dealer = null;
@@ -433,9 +408,7 @@ public class DeviceProductionService {
         int failCount = 0;
 
         // 用于权限校验的最终变量
-        final String finalAllowedInstallerCode = allowedInstallerCode;
         final String finalAllowedDealerCode = allowedDealerCode;
-        final boolean finalIsAdmin = isAdmin;
 
         for (String deviceId : deviceIds) {
             Map<String, Object> item = new HashMap<>();
@@ -452,21 +425,10 @@ public class DeviceProductionService {
                     throw new RuntimeException("设备不存在");
                 }
 
-                // 权限校验：非管理员只能分配自己设备管理列表中的设备
-                if (!finalIsAdmin && currentUserId != null) {
-                    boolean hasPermission = false;
-                    // 装机商权限校验
-                    if (finalAllowedInstallerCode != null && finalAllowedInstallerCode.equals(device.getAssemblerCode())) {
-                        hasPermission = true;
-                    }
-                    // 经销商权限校验
-                    if (finalAllowedDealerCode != null && finalAllowedDealerCode.equals(device.getVendorCode())) {
-                        hasPermission = true;
-                    }
-                    if (!hasPermission) {
-                        noPermissionDevices.add(deviceId);
-                        throw new RuntimeException("设备不在您的设备管理列表中，无权限分配");
-                    }
+                // 权限校验：仅允许当前设备归属经销商分配给其他经销商
+                if (!finalAllowedDealerCode.equals(device.getVendorCode())) {
+                    noPermissionDevices.add(deviceId);
+                    throw new RuntimeException("设备不属于当前经销商，无权限分配");
                 }
 
                 if (isDeviceBound(device.getDeviceId())) {
@@ -476,37 +438,39 @@ public class DeviceProductionService {
 
                 String oldDeviceId = device.getDeviceId();
                 String oldVendorCode = device.getVendorCode();
+                BigDecimal previousDealerRate = device.getDealerCommissionRate();
                 boolean vendorChanged = !dealerCode.equals(oldVendorCode);
                 String newDeviceId = oldDeviceId;
 
-                // 如果经销商代码变化，更新设备ID
+                // 如果经销商代码变化，仅更新归属，不修改设备ID
                 if (vendorChanged) {
-                    newDeviceId = oldDeviceId.substring(0, 5) + dealerCode + oldDeviceId.substring(7);
-
-                    // 检查新设备ID是否已存在
-                    QueryWrapper<ManufacturedDevice> checkQw = new QueryWrapper<>();
-                    checkQw.lambda().eq(ManufacturedDevice::getDeviceId, newDeviceId)
-                            .ne(ManufacturedDevice::getId, device.getId());
-                    if (deviceRepository.selectCount(checkQw) > 0) {
-                        throw new RuntimeException("新设备ID已存在: " + newDeviceId);
-                    }
-
-                    // Keep dealer chain aligned when device ID changes.
-                    syncDeviceDealerDeviceId(oldDeviceId, newDeviceId);
-                    device.setDeviceId(newDeviceId);
-                    device.setVendorCode(dealerCode);
+                    // 补齐历史设备的初始链路节点，避免后续只出现下级节点导致链路断层
+                    ensureCurrentDealerInChain(oldDeviceId, device, oldVendorCode, previousDealerRate);
                 }
+                device.setVendorCode(dealerCode);
+
+                BigDecimal effectiveDealerRate = commissionRate != null ? commissionRate : previousDealerRate;
 
                 // 更新经销商ID和佣金比例
-                device.setCurrentDealerId(dealer != null ? dealer.getId() : null);
-                device.setDealerCommissionRate(commissionRate);
+                if (dealer != null) {
+                    device.setCurrentDealerId(dealer.getId());
+                    if (effectiveDealerRate != null) {
+                        device.setDealerCommissionRate(effectiveDealerRate);
+                    }
+                } else {
+                    device.setCurrentDealerId(null);
+                    if (commissionRate != null) {
+                        device.setDealerCommissionRate(commissionRate);
+                    }
+                }
                 device.setUpdatedAt(new Date());
                 deviceRepository.updateById(device);
 
                 // 写入 device_dealer 表记录分销链路
-                if (dealer != null && commissionRate != null) {
+                if (dealer != null) {
+                    BigDecimal chainRate = effectiveDealerRate != null ? effectiveDealerRate : BigDecimal.ZERO;
                     try {
-                        writeDeviceDealerRecord(newDeviceId, device, dealer, commissionRate);
+                        writeDeviceDealerRecord(oldDeviceId, device, dealer, chainRate);
                     } catch (Exception e) {
                         log.warn("写入 device_dealer 失败: {}", e.getMessage());
                     }
@@ -548,6 +512,52 @@ public class DeviceProductionService {
         }
     }
 
+    private String resolveAssignableDealerCode(Long currentUserId) {
+        if (currentUserId == null) {
+            throw new RuntimeException("仅经销商账号可分配经销商");
+        }
+        User currentUser = userRepository.selectById(currentUserId);
+        if (currentUser == null) {
+            throw new RuntimeException("当前用户不存在");
+        }
+        if (currentUser.getIsDealer() == null || currentUser.getIsDealer() != 1 || currentUser.getDealerId() == null) {
+            throw new RuntimeException("仅经销商账号可分配经销商");
+        }
+
+        Dealer userDealer = dealerRepository.selectById(currentUser.getDealerId());
+        String dealerCode = userDealer != null ? userDealer.getDealerCode() : null;
+        if (dealerCode == null || dealerCode.trim().isEmpty()) {
+            throw new RuntimeException("当前账号未绑定有效经销商");
+        }
+        return dealerCode;
+    }
+
+    private void ensureCurrentDealerInChain(String deviceId, ManufacturedDevice device, String dealerCode, BigDecimal commissionRate) {
+        if (deviceId == null || dealerCode == null || dealerCode.trim().isEmpty() || "00".equals(dealerCode)) {
+            return;
+        }
+        try {
+            List<DeviceDealer> existingChain = deviceDealerRepository.getDealerChainByDeviceId(deviceId);
+            if (existingChain != null && !existingChain.isEmpty()) {
+                return;
+            }
+
+            QueryWrapper<Dealer> dealerQw = new QueryWrapper<>();
+            dealerQw.lambda().eq(Dealer::getDealerCode, dealerCode);
+            Dealer dealer = dealerRepository.selectOne(dealerQw);
+            if (dealer == null) {
+                return;
+            }
+
+            BigDecimal seedRate = commissionRate != null ? commissionRate : BigDecimal.ZERO;
+            writeDeviceDealerRecord(deviceId, device, dealer, seedRate);
+        } catch (Exception e) {
+            // 历史数据兼容：失败不阻断主流程
+            log.warn("补写初始 device_dealer 链路失败: deviceId={}, dealerCode={}, error={}",
+                    deviceId, dealerCode, e.getMessage());
+        }
+    }
+
     private boolean isDeviceBound(String deviceId) {
         if (deviceId == null || deviceId.trim().isEmpty()) {
             return false;
@@ -562,7 +572,7 @@ public class DeviceProductionService {
      * 写入设备经销商归属记录（分销链路）
      * 如果设备已有经销商记录，则新记录的 parentDealerId 指向前一个经销商
      */
-    private void writeDeviceDealerRecord(String deviceId, ManufacturedDevice device, Dealer dealer, java.math.BigDecimal commissionRate) {
+    private void writeDeviceDealerRecord(String deviceId, ManufacturedDevice device, Dealer dealer, BigDecimal commissionRate) {
         // 查询该设备当前的最高层级经销商记录
         List<DeviceDealer> existingChain = deviceDealerRepository.getDealerChainByDeviceId(deviceId);
         
@@ -634,6 +644,128 @@ public class DeviceProductionService {
             log.warn("同步 device_dealer 设备ID失败: oldDeviceId={}, newDeviceId={}, error={}",
                     oldDeviceId, newDeviceId, e.getMessage());
         }
+    }
+
+    private static class DeviceDataScope {
+        private final boolean admin;
+        private final boolean installerRoleScope;
+        private final boolean dealerRoleScope;
+        private final boolean dealerPermissionByChain;
+        private final String effectiveInstallerCode;
+        private final String effectiveDealerCode;
+        private final Long userDealerId;
+        private final Set<String> dealerManagedDeviceIds;
+
+        private DeviceDataScope(
+                boolean admin,
+                boolean installerRoleScope,
+                boolean dealerRoleScope,
+                boolean dealerPermissionByChain,
+                String effectiveInstallerCode,
+                String effectiveDealerCode,
+                Long userDealerId,
+                Set<String> dealerManagedDeviceIds
+        ) {
+            this.admin = admin;
+            this.installerRoleScope = installerRoleScope;
+            this.dealerRoleScope = dealerRoleScope;
+            this.dealerPermissionByChain = dealerPermissionByChain;
+            this.effectiveInstallerCode = effectiveInstallerCode;
+            this.effectiveDealerCode = effectiveDealerCode;
+            this.userDealerId = userDealerId;
+            this.dealerManagedDeviceIds = dealerManagedDeviceIds == null ? Collections.emptySet() : dealerManagedDeviceIds;
+        }
+
+        private boolean hasRoleScope() {
+            return admin || installerRoleScope || dealerRoleScope;
+        }
+    }
+
+    private DeviceDataScope resolveDeviceDataScope(Long currentUserId, String installerCode, String dealerCode) {
+        String effectiveInstallerCode = installerCode;
+        String effectiveDealerCode = dealerCode;
+        boolean hasInstallerRoleScope = false;
+        boolean hasDealerRoleScope = false;
+        boolean dealerPermissionByChain = false;
+        boolean isAdmin = false;
+        Long userDealerId = null;
+        Set<String> dealerManagedDeviceIds = Collections.emptySet();
+
+        if (currentUserId != null) {
+            User currentUser = userRepository.selectById(currentUserId);
+            if (currentUser != null) {
+                isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
+
+                if (!isAdmin) {
+                    if (currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null) {
+                        Installer installer = installerRepository.selectById(currentUser.getInstallerId());
+                        if (installer != null && installer.getInstallerCode() != null) {
+                            effectiveInstallerCode = installer.getInstallerCode();
+                            hasInstallerRoleScope = true;
+                            log.info("装机商用户查询设备数据范围, userId={}, installerCode={}", currentUserId, effectiveInstallerCode);
+                        }
+                    }
+
+                    if (currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null) {
+                        Dealer dealer = dealerRepository.selectById(currentUser.getDealerId());
+                        if (dealer != null && dealer.getDealerCode() != null) {
+                            effectiveDealerCode = dealer.getDealerCode();
+                            userDealerId = dealer.getId();
+                            hasDealerRoleScope = true;
+                            dealerPermissionByChain = true;
+                            log.info("经销商用户查询设备数据范围, userId={}, dealerCode={}", currentUserId, effectiveDealerCode);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (dealerPermissionByChain && effectiveDealerCode != null && !effectiveDealerCode.trim().isEmpty()) {
+            dealerManagedDeviceIds = listDealerManagedDeviceIds(effectiveDealerCode);
+        }
+
+        return new DeviceDataScope(
+                isAdmin,
+                hasInstallerRoleScope,
+                hasDealerRoleScope,
+                dealerPermissionByChain,
+                effectiveInstallerCode,
+                effectiveDealerCode,
+                userDealerId,
+                dealerManagedDeviceIds
+        );
+    }
+
+    private boolean canAccessDevice(ManufacturedDevice device, DeviceDataScope scope) {
+        if (device == null || scope == null) {
+            return false;
+        }
+        if (scope.admin) {
+            return true;
+        }
+        if (!scope.hasRoleScope()) {
+            return false;
+        }
+        if (scope.installerRoleScope && scope.effectiveInstallerCode != null
+                && scope.effectiveInstallerCode.equals(device.getAssemblerCode())) {
+            return true;
+        }
+        if (scope.dealerRoleScope && scope.effectiveDealerCode != null) {
+            if (scope.effectiveDealerCode.equals(device.getVendorCode())) {
+                return true;
+            }
+            return scope.dealerManagedDeviceIds.contains(device.getDeviceId());
+        }
+        return false;
+    }
+
+    private Map<String, Object> emptyPageResult(Integer page, Integer size) {
+        Map<String, Object> result = new HashMap<>();
+        result.put("list", new ArrayList<>());
+        result.put("total", 0);
+        result.put("page", page);
+        result.put("size", size);
+        return result;
     }
 
     private Set<String> listDealerManagedDeviceIds(String dealerCode) {
@@ -916,12 +1048,13 @@ public class DeviceProductionService {
         
         // 根据 vendorCode 查找经销商ID
         Long currentDealerId = null;
+        Dealer currentDealer = null;
         if (vendorCode != null) {
             QueryWrapper<Dealer> dq = new QueryWrapper<>();
             dq.lambda().eq(Dealer::getDealerCode, vendorCode);
-            Dealer dealer = dealerRepository.selectOne(dq);
-            if (dealer != null) {
-                currentDealerId = dealer.getId();
+            currentDealer = dealerRepository.selectOne(dq);
+            if (currentDealer != null) {
+                currentDealerId = currentDealer.getId();
             }
         }
         
@@ -947,6 +1080,17 @@ public class DeviceProductionService {
             device.setDealerCommissionRate(batch.getDealerCommissionRate());
             device.setEnableAd(batch.getEnableAd());
             deviceRepository.insert(device);
+
+            // 生产时若已指定经销商，补齐初始分销链路，保证后续链路权限和展示一致
+            if (currentDealer != null && vendorCode != null && !"00".equals(vendorCode)) {
+                BigDecimal initialDealerRate = batch.getDealerCommissionRate() != null ? batch.getDealerCommissionRate() : BigDecimal.ZERO;
+                try {
+                    writeDeviceDealerRecord(deviceId, device, currentDealer, initialDealerRate);
+                } catch (Exception e) {
+                    log.warn("创建初始 device_dealer 记录失败: deviceId={}, dealerCode={}, error={}",
+                            deviceId, vendorCode, e.getMessage());
+                }
+            }
         }
     }
 
@@ -1023,13 +1167,20 @@ public class DeviceProductionService {
      * @param deviceId 设备ID (16位)
      * @return 包含详情的Map，如果设备不存在返回null
      */
-    public Map<String, Object> getDeviceDetail(String deviceId) {
+    public Map<String, Object> getDeviceDetail(Long currentUserId, String deviceId) {
         ManufacturedDevice device = getDevice(deviceId);
         if (device == null) {
             return null;
         }
+
+        DeviceDataScope scope = resolveDeviceDataScope(currentUserId, null, null);
+        if (!canAccessDevice(device, scope)) {
+            log.warn("无权限查看设备详情, userId={}, deviceId={}", currentUserId, deviceId);
+            return null;
+        }
+
         // 复用 enrichDevicesWithCommission 方法获取完整信息
-        List<Map<String, Object>> enrichedList = enrichDevicesWithCommission(Collections.singletonList(device));
+        List<Map<String, Object>> enrichedList = enrichDevicesWithCommission(Collections.singletonList(device), scope);
         return enrichedList.isEmpty() ? null : enrichedList.get(0);
     }
 
@@ -1041,49 +1192,9 @@ public class DeviceProductionService {
      * - 经销商(isDealer=1)：只能查看自己关联的设备
      */
     public Map<String, Object> listDevices(Long currentUserId, Integer page, Integer size, String deviceId, String batchNo, String status, String installerCode, String dealerCode) {
-        // 根据当前用户角色确定过滤条件
-        String effectiveInstallerCode = installerCode;
-        String effectiveDealerCode = dealerCode;
-        boolean hasInstallerRoleScope = false;
-        boolean hasDealerRoleScope = false;
-        boolean dealerPermissionByChain = false;
-        Set<String> dealerManagedDeviceIds = Collections.emptySet();
-        
-        if (currentUserId != null) {
-            User currentUser = userRepository.selectById(currentUserId);
-            if (currentUser != null) {
-                // 管理员可以查看所有设备，不需要强制过滤
-                boolean isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
-                
-                if (!isAdmin) {
-                    // 装机商只能查看自己关联的设备
-                    if (currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null) {
-                        // 查询装机商的installerCode
-                        Installer installer = installerRepository.selectById(currentUser.getInstallerId());
-                        if (installer != null && installer.getInstallerCode() != null) {
-                            effectiveInstallerCode = installer.getInstallerCode();
-                            hasInstallerRoleScope = true;
-                            log.info("装机商用户查询设备列表, userId={}, installerCode={}", currentUserId, effectiveInstallerCode);
-                        }
-                    }
-                    
-                    // 经销商只能查看自己关联的设备
-                    if (currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null) {
-                        // 查询经销商的dealerCode
-                        Dealer dealer = dealerRepository.selectById(currentUser.getDealerId());
-                        if (dealer != null && dealer.getDealerCode() != null) {
-                            effectiveDealerCode = dealer.getDealerCode();
-                            hasDealerRoleScope = true;
-                            dealerPermissionByChain = true;
-                            log.info("经销商用户查询设备列表, userId={}, dealerCode={}", currentUserId, effectiveDealerCode);
-                        }
-                    }
-                }
-            }
-        }
-        
-        if (dealerPermissionByChain && effectiveDealerCode != null && !effectiveDealerCode.trim().isEmpty()) {
-            dealerManagedDeviceIds = listDealerManagedDeviceIds(effectiveDealerCode);
+        DeviceDataScope scope = resolveDeviceDataScope(currentUserId, installerCode, dealerCode);
+        if (!scope.hasRoleScope()) {
+            return emptyPageResult(page, size);
         }
 
         QueryWrapper<ManufacturedDevice> qw = new QueryWrapper<>();
@@ -1109,13 +1220,7 @@ public class DeviceProductionService {
                 if (batch != null) {
                     qw.lambda().eq(ManufacturedDevice::getBatchId, batch.getId());
                 } else {
-                    // 批次不存在，返回空列表
-                    Map<String, Object> result = new HashMap<>();
-                    result.put("list", new ArrayList<>());
-                    result.put("total", 0);
-                    result.put("page", page);
-                    result.put("size", size);
-                    return result;
+                    return emptyPageResult(page, size);
                 }
             }
         }
@@ -1125,14 +1230,12 @@ public class DeviceProductionService {
                 qw.lambda().eq(ManufacturedDevice::getStatus, statusEnum);
             }
         }
-        // 装机商代码过滤（assemblerCode字段）- 使用有效值（可能被权限过滤覆盖）
-        Set<String> effectiveDealerScopeIds = dealerPermissionByChain ? dealerManagedDeviceIds : Collections.emptySet();
-        boolean useRoleOrScope = hasInstallerRoleScope && hasDealerRoleScope;
-        // 经销商代码过滤（数据库字段vendor_code）- 使用有效值（可能被权限过滤覆盖）
+        Set<String> effectiveDealerScopeIds = scope.dealerPermissionByChain ? scope.dealerManagedDeviceIds : Collections.emptySet();
+        boolean useRoleOrScope = scope.installerRoleScope && scope.dealerRoleScope;
         applyRoleDeviceFilter(
                 qw,
-                effectiveInstallerCode,
-                effectiveDealerCode,
+                scope.effectiveInstallerCode,
+                scope.effectiveDealerCode,
                 effectiveDealerScopeIds,
                 useRoleOrScope
         );
@@ -1172,19 +1275,17 @@ public class DeviceProductionService {
                 countQw.lambda().eq(ManufacturedDevice::getStatus, statusEnum);
             }
         }
-        // 装机商代码过滤 - 使用有效值（可能被权限过滤覆盖）
         applyRoleDeviceFilter(
                 countQw,
-                effectiveInstallerCode,
-                effectiveDealerCode,
+                scope.effectiveInstallerCode,
+                scope.effectiveDealerCode,
                 effectiveDealerScopeIds,
                 useRoleOrScope
         );
-        // 经销商代码过滤 - 使用有效值（可能被权限过滤覆盖）
         long total = deviceRepository.selectCount(countQw);
 
         // 获取装机商和经销商的分佣比例
-        List<Map<String, Object>> deviceList = enrichDevicesWithCommission(devices);
+        List<Map<String, Object>> deviceList = enrichDevicesWithCommission(devices, scope);
 
         Map<String, Object> result = new HashMap<>();
         result.put("list", deviceList);
@@ -1194,10 +1295,46 @@ public class DeviceProductionService {
         return result;
     }
 
+    private boolean canViewInstallerCommission(DeviceDataScope scope) {
+        if (scope == null) {
+            return true;
+        }
+        return scope.admin || scope.installerRoleScope;
+    }
+
+    private boolean canViewDealerCommission(DeviceDataScope scope, ManufacturedDevice device, List<DeviceDealer> dealerChain) {
+        if (scope == null) {
+            return true;
+        }
+        if (scope.admin) {
+            return true;
+        }
+        if (!scope.dealerRoleScope || scope.userDealerId == null) {
+            return false;
+        }
+
+        if (dealerChain != null && !dealerChain.isEmpty()) {
+            for (DeviceDealer node : dealerChain) {
+                if (scope.userDealerId.equals(node.getDealerId())) {
+                    Integer level = node.getLevel();
+                    if (level != null) {
+                        return level == 1;
+                    }
+                    DeviceDealer firstNode = dealerChain.get(0);
+                    return scope.userDealerId.equals(firstNode.getDealerId());
+                }
+            }
+            return false;
+        }
+
+        // 兼容历史数据：device_dealer 未完整时，回退到 vendor_code 判断
+        return scope.effectiveDealerCode != null && scope.effectiveDealerCode.equals(device.getVendorCode());
+    }
+
     /**
      * 为设备列表添加装机商和经销商的分佣比例信息
      */
-    private List<Map<String, Object>> enrichDevicesWithCommission(List<ManufacturedDevice> devices) {
+    private List<Map<String, Object>> enrichDevicesWithCommission(List<ManufacturedDevice> devices, DeviceDataScope scope) {
         if (devices == null || devices.isEmpty()) {
             return new ArrayList<>();
         }
@@ -1273,6 +1410,8 @@ public class DeviceProductionService {
             }
         }
 
+        boolean showInstallerCommission = canViewInstallerCommission(scope);
+
         // 构建结果列表
         List<Map<String, Object>> resultList = new ArrayList<>();
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
@@ -1305,8 +1444,8 @@ public class DeviceProductionService {
             } else {
                 map.put("installerName", null);
             }
-            // 分佣比例从设备表读取
-            map.put("installerCommissionRate", d.getInstallerCommissionRate());
+            map.put("canViewInstallerCommission", showInstallerCommission);
+            map.put("installerCommissionRate", showInstallerCommission ? d.getInstallerCommissionRate() : null);
 
             // 添加经销商信息（优先根据 currentDealerId 查找）
             Dealer dealer = null;
@@ -1321,10 +1460,9 @@ public class DeviceProductionService {
             } else {
                 map.put("dealerName", null);
             }
-            // 分佣比例从设备表读取
-            map.put("dealerCommissionRate", d.getDealerCommissionRate());
 
             // 获取设备的分销链路（从 device_dealer 表）
+            List<DeviceDealer> dealerChain = null;
             map.put("currentVendorId", null);
             map.put("currentVendorCode", null);
             map.put("currentVendorName", null);
@@ -1333,40 +1471,45 @@ public class DeviceProductionService {
             map.put("vendorChain", null);
             map.put("vendorChainList", null);
             try {
-                List<DeviceDealer> dealerChain = deviceDealerRepository.getDealerChainByDeviceId(d.getDeviceId());
-                if (dealerChain != null && !dealerChain.isEmpty()) {
-                    // 当前持有经销商（最高层级）
-                    DeviceDealer currentDealer = dealerChain.get(dealerChain.size() - 1);
-                    map.put("currentVendorId", currentDealer.getDealerId());
-                    map.put("currentVendorCode", currentDealer.getDealerCode());
-                    map.put("currentVendorLevel", currentDealer.getLevel());
-                    map.put("currentVendorCommissionRate", currentDealer.getCommissionRate());
-
-                    // 构建分销链路字符串 (A → B → C)
-                    List<String> chainNames = new ArrayList<>();
-                    for (DeviceDealer dd : dealerChain) {
-                        // 使用 dealer 表获取经销商名称
-                        String name = "经销商" + dd.getDealerCode();
-                        if (dd.getDealerId() != null) {
-                            Dealer dlr = dealerRepository.selectById(dd.getDealerId());
-                            if (dlr != null) {
-                                name = dlr.getName();
-                            }
-                        }
-                        chainNames.add(name + "(" + dd.getCommissionRate() + "%)");
-                    }
-                    map.put("vendorChain", String.join(" → ", chainNames));
-                    map.put("vendorChainList", dealerChain);
-                    
-                    // 获取当前经销商名称
-                    if (currentDealer.getDealerId() != null) {
-                        Dealer dlr = dealerRepository.selectById(currentDealer.getDealerId());
-                        map.put("currentVendorName", dlr != null ? dlr.getName() : null);
-                    }
-                }
+                dealerChain = deviceDealerRepository.getDealerChainByDeviceId(d.getDeviceId());
             } catch (Exception e) {
                 // device_dealer 表不存在或查询失败，跳过分销链路查询
                 log.debug("查询设备分销链路失败: {}", e.getMessage());
+            }
+
+            boolean showDealerCommission = canViewDealerCommission(scope, d, dealerChain);
+            map.put("canViewDealerCommission", showDealerCommission);
+            map.put("dealerCommissionRate", showDealerCommission ? d.getDealerCommissionRate() : null);
+
+            if (dealerChain != null && !dealerChain.isEmpty()) {
+                // 当前持有经销商（最高层级）
+                DeviceDealer currentDealer = dealerChain.get(dealerChain.size() - 1);
+                map.put("currentVendorId", currentDealer.getDealerId());
+                map.put("currentVendorCode", currentDealer.getDealerCode());
+                map.put("currentVendorLevel", currentDealer.getLevel());
+                map.put("currentVendorCommissionRate", showDealerCommission ? currentDealer.getCommissionRate() : null);
+
+                // 构建分销链路字符串 (A → B → C)
+                List<String> chainNames = new ArrayList<>();
+                for (DeviceDealer dd : dealerChain) {
+                    // 使用 dealer 表获取经销商名称
+                    String name = "经销商" + dd.getDealerCode();
+                    if (dd.getDealerId() != null) {
+                        Dealer dlr = dealerRepository.selectById(dd.getDealerId());
+                        if (dlr != null) {
+                            name = dlr.getName();
+                        }
+                    }
+                    chainNames.add(showDealerCommission ? name + "(" + dd.getCommissionRate() + "%)" : name);
+                }
+                map.put("vendorChain", String.join(" → ", chainNames));
+                map.put("vendorChainList", showDealerCommission ? dealerChain : null);
+
+                // 获取当前经销商名称
+                if (currentDealer.getDealerId() != null) {
+                    Dealer dlr = dealerRepository.selectById(currentDealer.getDealerId());
+                    map.put("currentVendorName", dlr != null ? dlr.getName() : null);
+                }
             }
 
             resultList.add(map);
@@ -1492,7 +1635,12 @@ public class DeviceProductionService {
     /**
      * 获取所有设备列表（用于导出）
      */
-    public List<ManufacturedDevice> listAllDevices(String deviceId, String batchNo, String status) {
+    public List<ManufacturedDevice> listAllDevices(Long currentUserId, String deviceId, String batchNo, String status) {
+        DeviceDataScope scope = resolveDeviceDataScope(currentUserId, null, null);
+        if (!scope.hasRoleScope()) {
+            return new ArrayList<>();
+        }
+
         QueryWrapper<ManufacturedDevice> qw = new QueryWrapper<>();
         if (deviceId != null && !deviceId.trim().isEmpty()) {
             qw.lambda().like(ManufacturedDevice::getDeviceId, deviceId);
@@ -1513,6 +1661,17 @@ public class DeviceProductionService {
                 qw.lambda().eq(ManufacturedDevice::getStatus, statusEnum);
             }
         }
+
+        Set<String> effectiveDealerScopeIds = scope.dealerPermissionByChain ? scope.dealerManagedDeviceIds : Collections.emptySet();
+        boolean useRoleOrScope = scope.installerRoleScope && scope.dealerRoleScope;
+        applyRoleDeviceFilter(
+                qw,
+                scope.effectiveInstallerCode,
+                scope.effectiveDealerCode,
+                effectiveDealerScopeIds,
+                useRoleOrScope
+        );
+
         qw.lambda().orderByDesc(ManufacturedDevice::getCreatedAt);
         return deviceRepository.selectList(qw);
     }

@@ -182,8 +182,10 @@ public class DeviceProductionController {
      * 获取单个设备详情（包含分销链路等丰富信息）
      */
     @GetMapping("/devices/{deviceId}")
-    public ApiResponse<Map<String, Object>> getDevice(@PathVariable String deviceId) {
-        Map<String, Object> device = productionService.getDeviceDetail(deviceId);
+    public ApiResponse<Map<String, Object>> getDevice(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
+            @PathVariable String deviceId) {
+        Map<String, Object> device = productionService.getDeviceDetail(currentUserId, deviceId);
         if (device == null) {
             return ApiResponse.error(404, "设备不存在");
         }
@@ -254,11 +256,12 @@ public class DeviceProductionController {
      */
     @GetMapping("/devices/export")
     public ResponseEntity<byte[]> exportDevices(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
             @RequestParam(required = false) String deviceId,
             @RequestParam(required = false) String batchNo,
             @RequestParam(required = false) String status) {
         try {
-            List<ManufacturedDevice> devices = productionService.listAllDevices(deviceId, batchNo, status);
+            List<ManufacturedDevice> devices = productionService.listAllDevices(currentUserId, deviceId, batchNo, status);
             
             // 创建Excel工作簿
             Workbook workbook = new XSSFWorkbook();
@@ -429,11 +432,13 @@ public class DeviceProductionController {
 
     /**
      * 扫码分配经销商（单个，兼容旧接口）
-     * 根据设备ID和经销商代码，更新设备的经销商关联，同时修改设备ID的第6-7位
+     * 根据设备ID和经销商代码，更新设备的经销商关联（不修改设备ID）
      * 请求体：{ "deviceId": "A110000000000001", "vendorCode": "01" }
      */
     @PostMapping("/devices/scan-assign-dealer")
-    public ApiResponse<Map<String, Object>> scanAssignDealer(@RequestBody Map<String, String> body) {
+    public ApiResponse<Map<String, Object>> scanAssignDealer(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
+            @RequestBody Map<String, String> body) {
         try {
             String deviceId = body.get("deviceId");
             String vendorCode = body.get("vendorCode");
@@ -443,7 +448,7 @@ public class DeviceProductionController {
             if (vendorCode == null || vendorCode.length() != 2) {
                 return ApiResponse.error(400, "经销商代码必须是2位");
             }
-            Map<String, Object> result = productionService.scanAssignDealer(deviceId.trim(), vendorCode);
+            Map<String, Object> result = productionService.scanAssignDealer(currentUserId, deviceId.trim(), vendorCode);
             return ApiResponse.success(result);
         } catch (RuntimeException e) {
             return ApiResponse.error(400, e.getMessage());
