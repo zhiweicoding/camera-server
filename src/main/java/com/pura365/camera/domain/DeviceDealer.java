@@ -46,7 +46,12 @@ public class DeviceDealer {
     @TableField("parent_dealer_id")
     private Long parentDealerId;
 
-    /** 分润比例（基于上级利润的百分比） */
+    /**
+     * 分润比例（下级经销商从总经销商分润池中抽取的百分比）
+     * 注意：一级经销商（最上级）不需要设置此字段，其分润 = 总池子 × (100% - 所有下级的rate之和)
+     * 例如：总经销商分润池=30，C是下级经销商rate=10%
+     *      则 C实际所得=30×10%=3，B（上级）实际所得=30×(100%-10%)=27
+     */
     @TableField("commission_rate")
     private BigDecimal commissionRate;
 

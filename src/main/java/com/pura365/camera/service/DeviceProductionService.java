@@ -1354,17 +1354,20 @@ public class DeviceProductionService {
         return result;
     }
 
-    private boolean canViewInstallerCommission(DeviceDataScope scope) {
+    private boolean canViewInstallerCommission(DeviceDataScope scope, ManufacturedDevice device) {
         if (scope == null) {
             return true;
         }
         if (scope.admin) {
             return true;
         }
-        if (scope.dealerRoleScope) {
+        if (!scope.installerRoleScope) {
             return false;
         }
-        return scope.installerRoleScope;
+        if (device == null || scope.effectiveInstallerCode == null) {
+            return false;
+        }
+        return scope.effectiveInstallerCode.equals(device.getAssemblerCode());
     }
 
     private boolean canViewDealerCommission(DeviceDataScope scope, ManufacturedDevice device, List<DeviceDealer> dealerChain) {
@@ -1378,9 +1381,11 @@ public class DeviceProductionService {
             return false;
         }
 
+        // 修改：只要用户在分销链路中的任意位置，就可以查看分佣信息
+        // 但只能看到自己节点的具体分佣比例
         if (dealerChain != null && !dealerChain.isEmpty()) {
-            for (DeviceDealer node : dealerChain) {
-                if (scope.userDealerId.equals(node.getDealerId())) {
+            for (DeviceDealer dd : dealerChain) {
+                if (dd.getDealerId() != null && scope.userDealerId.equals(dd.getDealerId())) {
                     return true;
                 }
             }
@@ -1394,6 +1399,47 @@ public class DeviceProductionService {
     /**
      * 为设备列表添加装机商和经销商的分佣比例信息
      */
+    private boolean canViewDealerNodeCommission(DeviceDataScope scope, Long dealerId) {
+        if (scope == null) {
+            return true;
+        }
+        if (scope.admin) {
+            return true;
+        }
+        if (!scope.dealerRoleScope || scope.userDealerId == null || dealerId == null) {
+            return false;
+        }
+        return scope.userDealerId.equals(dealerId);
+    }
+
+    private List<DeviceDealer> buildVisibleDealerChain(DeviceDataScope scope, boolean showDealerCommission, List<DeviceDealer> dealerChain) {
+        if (!showDealerCommission || dealerChain == null || dealerChain.isEmpty()) {
+            return null;
+        }
+        if (scope == null || scope.admin) {
+            return dealerChain;
+        }
+
+        List<DeviceDealer> visibleChain = new ArrayList<>();
+        for (DeviceDealer node : dealerChain) {
+            DeviceDealer copy = new DeviceDealer();
+            copy.setId(node.getId());
+            copy.setDeviceId(node.getDeviceId());
+            copy.setInstallerId(node.getInstallerId());
+            copy.setInstallerCode(node.getInstallerCode());
+            copy.setDealerId(node.getDealerId());
+            copy.setDealerCode(node.getDealerCode());
+            copy.setParentDealerId(node.getParentDealerId());
+            copy.setLevel(node.getLevel());
+            copy.setTransferId(node.getTransferId());
+            copy.setCreatedAt(node.getCreatedAt());
+            copy.setUpdatedAt(node.getUpdatedAt());
+            copy.setCommissionRate(canViewDealerNodeCommission(scope, node.getDealerId()) ? node.getCommissionRate() : null);
+            visibleChain.add(copy);
+        }
+        return visibleChain;
+    }
+
     private List<Map<String, Object>> enrichDevicesWithCommission(List<ManufacturedDevice> devices, DeviceDataScope scope) {
         if (devices == null || devices.isEmpty()) {
             return new ArrayList<>();
@@ -1470,12 +1516,11 @@ public class DeviceProductionService {
             }
         }
 
-        boolean showInstallerCommission = canViewInstallerCommission(scope);
-
         // 构建结果列表
         List<Map<String, Object>> resultList = new ArrayList<>();
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
         for (ManufacturedDevice d : devices) {
+            boolean showInstallerCommission = canViewInstallerCommission(scope, d);
             Map<String, Object> map = new HashMap<>();
             map.put("id", d.getId());
             map.put("deviceId", d.getDeviceId());
@@ -1540,7 +1585,22 @@ public class DeviceProductionService {
 
             boolean showDealerCommission = canViewDealerCommission(scope, d, dealerChain);
             map.put("canViewDealerCommission", showDealerCommission);
-            map.put("dealerCommissionRate", showDealerCommission ? d.getDealerCommissionRate() : null);
+            BigDecimal visibleInitialDealerRate = null;
+            if (showDealerCommission) {
+                if (scope == null || scope.admin) {
+                    visibleInitialDealerRate = d.getDealerCommissionRate();
+                } else if (dealerChain != null && !dealerChain.isEmpty()) {
+                    DeviceDealer firstDealer = dealerChain.get(0);
+                    if (canViewDealerNodeCommission(scope, firstDealer.getDealerId())) {
+                        visibleInitialDealerRate = d.getDealerCommissionRate();
+                    }
+                } else {
+                    if (scope.effectiveDealerCode != null && scope.effectiveDealerCode.equals(initialDealerCode)) {
+                        visibleInitialDealerRate = d.getDealerCommissionRate();
+                    }
+                }
+            }
+            map.put("dealerCommissionRate", visibleInitialDealerRate);
 
             if (dealerChain != null && !dealerChain.isEmpty()) {
                 // 当前持有经销商（最高层级）
@@ -1548,7 +1608,11 @@ public class DeviceProductionService {
                 map.put("currentVendorId", currentDealer.getDealerId());
                 map.put("currentVendorCode", currentDealer.getDealerCode());
                 map.put("currentVendorLevel", currentDealer.getLevel());
-                map.put("currentVendorCommissionRate", showDealerCommission ? currentDealer.getCommissionRate() : null);
+                BigDecimal visibleCurrentDealerRate = null;
+                if (showDealerCommission && canViewDealerNodeCommission(scope, currentDealer.getDealerId())) {
+                    visibleCurrentDealerRate = currentDealer.getCommissionRate();
+                }
+                map.put("currentVendorCommissionRate", visibleCurrentDealerRate);
 
                 // 构建分销链路字符串 (A → B → C)
                 List<String> chainNames = new ArrayList<>();
@@ -1561,10 +1625,11 @@ public class DeviceProductionService {
                             name = dlr.getName();
                         }
                     }
-                    chainNames.add(showDealerCommission ? name + "(" + dd.getCommissionRate() + "%)" : name);
+                    boolean canShowNodeRate = showDealerCommission && canViewDealerNodeCommission(scope, dd.getDealerId());
+                    chainNames.add(canShowNodeRate ? name + "(" + dd.getCommissionRate() + "%)" : name);
                 }
                 map.put("vendorChain", String.join(" → ", chainNames));
-                map.put("vendorChainList", showDealerCommission ? dealerChain : null);
+                map.put("vendorChainList", buildVisibleDealerChain(scope, showDealerCommission, dealerChain));
 
                 // 获取当前经销商名称
                 if (currentDealer.getDealerId() != null) {

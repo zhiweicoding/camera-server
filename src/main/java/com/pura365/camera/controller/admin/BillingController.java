@@ -109,13 +109,14 @@ public class BillingController {
             @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
             @RequestParam(defaultValue = "1") Integer page,
             @RequestParam(defaultValue = "20") Integer size,
+            @RequestParam(required = false) String dimension,
             @RequestParam(required = false) String installerCode,
             @RequestParam(required = false) Long dealerId,
             @RequestParam(required = false) String deviceId,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate) {
-        return ApiResponse.success(billingService.listOrders(currentUserId, page, size, installerCode, dealerId, deviceId, status, startDate, endDate));
+        return ApiResponse.success(billingService.listOrders(currentUserId, page, size, dimension, installerCode, dealerId, deviceId, status, startDate, endDate));
     }
 
     /**
@@ -171,13 +172,14 @@ public class BillingController {
     @GetMapping("/export-detail")
     public ResponseEntity<byte[]> exportBillingDetail(
             @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
+            @RequestParam(required = false) String dimension,
             @RequestParam(required = false) String installerCode,
             @RequestParam(required = false) Long dealerId,
             @RequestParam(required = false) String deviceId,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate) {
         try {
-            Map<String, Object> result = billingService.exportBillingDetailExcel(currentUserId, installerCode, dealerId, deviceId, startDate, endDate);
+            Map<String, Object> result = billingService.exportBillingDetailExcel(currentUserId, dimension, installerCode, dealerId, deviceId, startDate, endDate);
             boolean isZip = (Boolean) result.get("isZip");
             byte[] data = (byte[]) result.get("data");
 

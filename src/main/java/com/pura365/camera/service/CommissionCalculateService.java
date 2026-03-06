@@ -211,7 +211,17 @@ public class CommissionCalculateService {
     /**
      * 计算多级经销商分润
      * 从 device_dealer 表获取分销链路，计算每一级的实际所得
-     * 
+     *
+     * 分润逻辑：
+     * - 设备创建时指定总经销商分润比例（例如30%），形成经销商分润池
+     * - commission_rate 表示下级经销商从总经销商分润池中抽取的比例
+     * - 上级经销商分润 = 总池子 × (100% - 所有下级的commission_rate之和)
+     *
+     * 例如：总利润=100，经销商分润比例=30%，经销商分润池=30
+     *      B是一级经销商，C是二级经销商(rate=10%)
+     *      C分润 = 30 × 10% = 3
+     *      B分润 = 30 × (100% - 10%) = 27
+     *
      * @param result 分润结果
      * @param deviceId 设备ID
      * @param dealerPoolAmount 经销商分润池总额
@@ -222,18 +232,31 @@ public class CommissionCalculateService {
             return;
         }
 
-        // 从最底层（一级）开始计算
-        // 一级经销商的池子 = dealerPoolAmount
-        // 二级经销商从一级的池子中抽取
-        // 三级经销商从二级的池子中抽取...
-        
-        BigDecimal currentPool = dealerPoolAmount;
         List<CommissionDetail> dealerDetails = new ArrayList<>();
-        
+
+        // 计算所有下级经销商的分润比例之和
+        BigDecimal totalSubRate = BigDecimal.ZERO;
+        for (int i = 0; i < dealerChain.size(); i++) {
+            DeviceDealer dd = dealerChain.get(i);
+
+            // 跳过一级经销商（最上级），一级经销商没有commission_rate
+            if (i == 0) {
+                continue;
+            }
+
+            BigDecimal rate = dd.getCommissionRate() != null ? dd.getCommissionRate() : BigDecimal.ZERO;
+            totalSubRate = totalSubRate.add(rate);
+        }
+
+        if (totalSubRate.compareTo(HUNDRED) > 0) {
+            log.warn("下级经销商分润比例之和超过100%: deviceId={}, totalSubRate={}", deviceId, totalSubRate);
+        }
+
+        // 计算每个经销商的分润
         for (int i = 0; i < dealerChain.size(); i++) {
             DeviceDealer dd = dealerChain.get(i);
             BigDecimal rate = dd.getCommissionRate() != null ? dd.getCommissionRate() : BigDecimal.ZERO;
-            
+
             // 获取经销商名称
             String dealerName = "经销商" + dd.getDealerCode();
             if (dd.getDealerId() != null) {
@@ -242,46 +265,37 @@ public class CommissionCalculateService {
                     dealerName = dealer.getName();
                 }
             }
-            
-            // 计算该经销商的分润金额
-            BigDecimal baseAmount;
+
             BigDecimal actualAmount;
-            
-            if (i == dealerChain.size() - 1) {
-                // 最后一个经销商（最底层），获得剩余的所有金额
-                baseAmount = currentPool;
-                actualAmount = currentPool;
+
+            if (i == 0) {
+                // 一级经销商（最上级）：分润 = 总池子 × (100% - 所有下级的rate之和)
+                BigDecimal topRate = HUNDRED.subtract(totalSubRate);
+                actualAmount = dealerPoolAmount.multiply(topRate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
+                rate = topRate; // 显示计算出的比例
             } else {
-                // 不是最底层，需要给下级留出一部分
-                // 下一级的分润比例
-                DeviceDealer nextDealer = dealerChain.get(i + 1);
-                BigDecimal nextRate = nextDealer.getCommissionRate() != null ? nextDealer.getCommissionRate() : BigDecimal.ZERO;
-                BigDecimal nextAmount = currentPool.multiply(nextRate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
-                
-                baseAmount = currentPool;
-                actualAmount = currentPool.subtract(nextAmount);
-                
-                // 下一级的池子变小
-                currentPool = nextAmount;
+                // 下级经销商：分润 = 总池子 × 该经销商的rate
+                actualAmount = dealerPoolAmount.multiply(rate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
             }
-            
+
             CommissionDetail detail = new CommissionDetail(
                 "DEALER",
                 dd.getDealerId(),
                 dd.getDealerCode(),
                 dealerName,
                 rate,
-                baseAmount,
-                actualAmount,
+                dealerPoolAmount,  // baseAmount 表示总池子
+                actualAmount,      // actualAmount 表示该经销商实际所得
                 dd.getLevel()
             );
             dealerDetails.add(detail);
         }
-        
+
         // 将经销商明细加入结果
         result.getDetails().addAll(dealerDetails);
-        
-        log.debug("多级经销商分润计算完成: deviceId={}, dealerCount={}", deviceId, dealerChain.size());
+
+        log.debug("多级经销商分润计算完成: deviceId={}, dealerCount={}, totalSubRate={}%",
+                deviceId, dealerChain.size(), totalSubRate);
     }
 
     /**

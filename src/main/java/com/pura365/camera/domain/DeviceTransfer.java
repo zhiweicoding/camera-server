@@ -42,7 +42,11 @@ public class DeviceTransfer {
     @TableField("to_vendor_code")
     private String toVendorCode;
 
-    /** 分润比例（基于上级利润的百分比） */
+    /**
+     * 分润比例（转入经销商从总经销商分润池中抽取的百分比）
+     * 例如：总经销商分润池=30，转入经销商rate=10%
+     *      则 转入经销商实际所得=30×10%=3，转出经销商实际所得=30×(100%-10%)=27
+     */
     @TableField("commission_rate")
     private BigDecimal commissionRate;
 

@@ -52,6 +52,9 @@ public class BillingService {
     @Autowired
     private CloudPlanRepository cloudPlanRepository;
 
+    @Autowired
+    private DeviceDealerRepository deviceDealerRepository;
+
     private BigDecimal safeAmount(BigDecimal value) {
         return value != null ? value : BigDecimal.ZERO;
     }
@@ -246,9 +249,31 @@ public class BillingService {
     }
 
     private BillingDataScope resolveBillingDataScope(Long currentUserId, String installerCode, Long dealerId) {
+        return resolveBillingDataScope(currentUserId, installerCode, dealerId, null);
+    }
+
+    private String normalizeDimension(String dimension) {
+        if (!hasText(dimension)) {
+            return null;
+        }
+        String normalized = dimension.trim().toLowerCase(Locale.ROOT);
+        if ("installer".equals(normalized) || "dealer".equals(normalized)) {
+            return normalized;
+        }
+        return null;
+    }
+
+    private BillingDataScope resolveBillingDataScope(Long currentUserId, String installerCode, Long dealerId, String dimension) {
         BillingDataScope scope = new BillingDataScope();
         scope.installerCode = installerCode;
         scope.dealerId = dealerId;
+        String normalizedDimension = normalizeDimension(dimension);
+
+        if ("installer".equals(normalizedDimension)) {
+            scope.showDealerInfo = false;
+        } else if ("dealer".equals(normalizedDimension)) {
+            scope.showInstallerInfo = false;
+        }
 
         if (currentUserId == null) {
             return scope;
@@ -285,8 +310,36 @@ public class BillingService {
             scope.dealerId = currentUser.getDealerId();
         }
 
+        if ("installer".equals(normalizedDimension) && isInstaller) {
+            scope.dealerId = null;
+            scope.showDealerInfo = false;
+        } else if ("dealer".equals(normalizedDimension) && isDealer) {
+            scope.installerCode = null;
+            scope.showInstallerInfo = false;
+        }
+
         scope.useInstallerDealerOr = isInstaller && isDealer && hasText(scope.installerCode) && scope.dealerId != null;
+        if ("installer".equals(normalizedDimension) || "dealer".equals(normalizedDimension)) {
+            scope.useInstallerDealerOr = false;
+        }
         return scope;
+    }
+
+    private void maskOrderCommissionFields(List<PaymentOrder> orders, boolean showInstallerInfo, boolean showDealerInfo) {
+        if (orders == null || orders.isEmpty()) {
+            return;
+        }
+        for (PaymentOrder order : orders) {
+            if (!showInstallerInfo) {
+                order.setInstallerRate(null);
+                order.setInstallerAmount(null);
+            }
+            if (!showDealerInfo) {
+                order.setCommissionRate(null);
+                order.setDealerRate(null);
+                order.setDealerAmount(null);
+            }
+        }
     }
 
     private void applyInstallerDealerScope(QueryWrapper<PaymentOrder> qw, BillingDataScope scope) {
@@ -523,7 +576,7 @@ public class BillingService {
         // 根据当前用户角色确定过滤条件
         String effectiveInstallerCode = installerCode;
         Long effectiveDealerId = dealerId;
-        
+
         if (currentUserId != null) {
             User currentUser = userRepository.selectById(currentUserId);
             if (currentUser != null) {
@@ -543,23 +596,66 @@ public class BillingService {
                 }
             }
         }
-        
-        QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
-        qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
-        if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
-            qw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
-        }
-        if (effectiveDealerId != null) {
-            qw.lambda().eq(PaymentOrder::getDealerId, effectiveDealerId);
-        }
-        if (startDate != null) {
-            qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
-        }
-        if (endDate != null) {
-            qw.lambda().le(PaymentOrder::getPaidAt, endDate);
-        }
 
-        List<PaymentOrder> orders = orderRepository.selectList(qw);
+        // 查询订单：如果指定了经销商，需要查询该经销商相关的所有设备
+        List<PaymentOrder> orders;
+        if (effectiveDealerId != null) {
+            // 查询该经销商在 device_dealer 表中关联的所有设备ID
+            List<String> dealerDeviceIds = new ArrayList<>();
+            try {
+                Dealer dealer = dealerRepository.selectById(effectiveDealerId);
+                if (dealer != null && dealer.getDealerCode() != null) {
+                    dealerDeviceIds = deviceDealerRepository.listDeviceIdsByDealerCode(dealer.getDealerCode());
+                }
+            } catch (Exception e) {
+                log.debug("查询经销商设备列表失败: {}", e.getMessage());
+            }
+
+            // 创建 final 副本供 lambda 使用
+            final Long finalEffectiveDealerId = effectiveDealerId;
+            final List<String> finalDealerDeviceIds = dealerDeviceIds;
+
+            QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
+            qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
+            if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
+                qw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
+            }
+
+            // 查询条件：dealer_id = effectiveDealerId OR device_id IN (dealerDeviceIds)
+            if (!finalDealerDeviceIds.isEmpty()) {
+                qw.and(wrapper -> wrapper
+                    .eq("dealer_id", finalEffectiveDealerId)
+                    .or()
+                    .in("device_id", finalDealerDeviceIds)
+                );
+            } else {
+                qw.lambda().eq(PaymentOrder::getDealerId, effectiveDealerId);
+            }
+
+            if (startDate != null) {
+                qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
+            }
+            if (endDate != null) {
+                qw.lambda().le(PaymentOrder::getPaidAt, endDate);
+            }
+
+            orders = orderRepository.selectList(qw);
+        } else {
+            // 没有指定经销商，按原逻辑查询
+            QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
+            qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
+            if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
+                qw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
+            }
+            if (startDate != null) {
+                qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
+            }
+            if (endDate != null) {
+                qw.lambda().le(PaymentOrder::getPaidAt, endDate);
+            }
+
+            orders = orderRepository.selectList(qw);
+        }
 
         // 按经销商分组统计
         Map<String, Map<String, Object>> dealerStats = new HashMap<>();
@@ -587,47 +683,192 @@ public class BillingService {
 
             final Long finalDid = did;
             final String finalICode = iCode;
-            Map<String, Object> stat = dealerStats.computeIfAbsent(key, k -> {
-                Map<String, Object> s = new HashMap<>();
-                s.put("dealerId", finalDid);
-                s.put("dealerCode", null);
-                s.put("dealerName", null);
-                s.put("installerCode", finalICode);
-                s.put("orderCount", 0);
-                s.put("totalAmount", BigDecimal.ZERO);
-                s.put("dealerAmount", BigDecimal.ZERO);
-                s.put("settledAmount", BigDecimal.ZERO);
-                s.put("unsettledAmount", BigDecimal.ZERO);
-                s.put("totalAmountByCurrency", new HashMap<String, BigDecimal>());
-                s.put("dealerAmountByCurrency", new HashMap<String, BigDecimal>());
-                s.put("settledAmountByCurrency", new HashMap<String, BigDecimal>());
-                s.put("unsettledAmountByCurrency", new HashMap<String, BigDecimal>());
-                return s;
-            });
+
+            // 如果指定了经销商过滤，只统计该经销商的数据
+            boolean shouldCountThisDealer = (effectiveDealerId == null || (did != null && did.equals(effectiveDealerId)));
+
+            if (shouldCountThisDealer) {
+                Map<String, Object> stat = dealerStats.computeIfAbsent(key, k -> {
+                    Map<String, Object> s = new HashMap<>();
+                    s.put("dealerId", finalDid);
+                    s.put("dealerCode", null);
+                    s.put("dealerName", null);
+                    s.put("installerCode", finalICode);
+                    s.put("orderCount", 0);
+                    s.put("totalAmount", BigDecimal.ZERO);
+                    s.put("dealerAmount", BigDecimal.ZERO);
+                    s.put("settledAmount", BigDecimal.ZERO);
+                    s.put("unsettledAmount", BigDecimal.ZERO);
+                    s.put("totalAmountByCurrency", new HashMap<String, BigDecimal>());
+                    s.put("dealerAmountByCurrency", new HashMap<String, BigDecimal>());
+                    s.put("settledAmountByCurrency", new HashMap<String, BigDecimal>());
+                    s.put("unsettledAmountByCurrency", new HashMap<String, BigDecimal>());
+                    return s;
+                });
+
+                String currency = normalizeCurrency(order.getCurrency());
+                BigDecimal orderAmount = safeAmount(order.getAmount());
+                BigDecimal dAmt = order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO;
+                BigDecimal installerAmt = order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO;
+                BigDecimal planCost = safeAmount(order.getPlanCost());
+                boolean isSettled = order.getIsSettled() != null && order.getIsSettled() == 1;
+
+                stat.put("orderCount", (Integer) stat.get("orderCount") + 1);
+                stat.put("totalAmount", ((BigDecimal) stat.get("totalAmount")).add(orderAmount));
+                stat.put("dealerAmount", ((BigDecimal) stat.get("dealerAmount")).add(dAmt));
+                addCurrencyAmount(getOrCreateCurrencyMap(stat, "totalAmountByCurrency"), currency, orderAmount);
+                addCurrencyAmount(getOrCreateCurrencyMap(stat, "dealerAmountByCurrency"), currency, dAmt);
+                if (isSettled) {
+                    stat.put("settledAmount", ((BigDecimal) stat.get("settledAmount")).add(dAmt));
+                    addCurrencyAmount(getOrCreateCurrencyMap(stat, "settledAmountByCurrency"), currency, dAmt);
+                    totalSettledDealerAmount = totalSettledDealerAmount.add(dAmt);
+                    addCurrencyAmount(totalSettledDealerAmountByCurrency, currency, dAmt);
+                } else {
+                    stat.put("unsettledAmount", ((BigDecimal) stat.get("unsettledAmount")).add(dAmt));
+                    addCurrencyAmount(getOrCreateCurrencyMap(stat, "unsettledAmountByCurrency"), currency, dAmt);
+                    totalUnsettledDealerAmount = totalUnsettledDealerAmount.add(dAmt);
+                    addCurrencyAmount(totalUnsettledDealerAmountByCurrency, currency, dAmt);
+                }
+            }
+
+            // ========== 处理多级经销商分润 ==========
+            // 查询该设备的经销商链路，为上级经销商也统计分润
+            if (order.getDeviceId() != null && order.getDealerAmount() != null && order.getDealerAmount().compareTo(BigDecimal.ZERO) > 0) {
+                try {
+                    List<DeviceDealer> dealerChain = deviceDealerRepository.getDealerChainByDeviceId(order.getDeviceId());
+                    if (dealerChain != null && dealerChain.size() > 1) {
+                        // 有多级经销商，需要计算每个经销商的分润
+                        // 逻辑：下级经销商的commission_rate表示从总池子中抽取的比例
+                        //      上级经销商分润 = 总池子 × (100% - 所有下级的rate之和)
+                        BigDecimal dealerPoolAmount = order.getDealerAmount();
+
+                        // 计算所有下级经销商的分润比例之和
+                        BigDecimal totalSubRate = BigDecimal.ZERO;
+                        for (int i = 1; i < dealerChain.size(); i++) {
+                            DeviceDealer dd = dealerChain.get(i);
+                            BigDecimal rate = dd.getCommissionRate() != null ? dd.getCommissionRate() : BigDecimal.ZERO;
+                            totalSubRate = totalSubRate.add(rate);
+                        }
+
+                        for (int i = 0; i < dealerChain.size(); i++) {
+                            DeviceDealer dd = dealerChain.get(i);
+
+                            // 如果指定了经销商过滤，只统计该经销商的数据
+                            boolean shouldCountSubDealer = (effectiveDealerId == null || dd.getDealerId().equals(effectiveDealerId));
+                            if (!shouldCountSubDealer) {
+                                continue;
+                            }
+
+                            // 跳过一级经销商（已经在上面统计过了）
+                            if (i == 0) {
+                                continue;
+                            }
+
+                            // 计算该下级经销商的实际所得 = 总池子 × 该经销商的rate
+                            BigDecimal rate = dd.getCommissionRate() != null ? dd.getCommissionRate() : BigDecimal.ZERO;
+                            BigDecimal actualAmount = dealerPoolAmount.multiply(rate).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+
+                            // 为下级经销商创建或更新统计
+                            String subKey = String.valueOf(dd.getDealerId());
+                            final Long subDealerId = dd.getDealerId();
+                            final String subInstallerCode = iCode;
+                            Map<String, Object> subStat = dealerStats.computeIfAbsent(subKey, k -> {
+                                Map<String, Object> s = new HashMap<>();
+                                s.put("dealerId", subDealerId);
+                                s.put("dealerCode", null);
+                                s.put("dealerName", null);
+                                s.put("installerCode", subInstallerCode);
+                                s.put("orderCount", 0);
+                                s.put("totalAmount", BigDecimal.ZERO);
+                                s.put("dealerAmount", BigDecimal.ZERO);
+                                s.put("settledAmount", BigDecimal.ZERO);
+                                s.put("unsettledAmount", BigDecimal.ZERO);
+                                s.put("totalAmountByCurrency", new HashMap<String, BigDecimal>());
+                                s.put("dealerAmountByCurrency", new HashMap<String, BigDecimal>());
+                                s.put("settledAmountByCurrency", new HashMap<String, BigDecimal>());
+                                s.put("unsettledAmountByCurrency", new HashMap<String, BigDecimal>());
+                                return s;
+                            });
+
+                            String currency = normalizeCurrency(order.getCurrency());
+                            BigDecimal orderAmount = safeAmount(order.getAmount());
+                            boolean isSettled = order.getIsSettled() != null && order.getIsSettled() == 1;
+
+                            // 累加下级经销商的分润
+                            subStat.put("orderCount", (Integer) subStat.get("orderCount") + 1);
+                            subStat.put("totalAmount", ((BigDecimal) subStat.get("totalAmount")).add(orderAmount));
+                            subStat.put("dealerAmount", ((BigDecimal) subStat.get("dealerAmount")).add(actualAmount));
+                            addCurrencyAmount(getOrCreateCurrencyMap(subStat, "totalAmountByCurrency"), currency, orderAmount);
+                            addCurrencyAmount(getOrCreateCurrencyMap(subStat, "dealerAmountByCurrency"), currency, actualAmount);
+
+                            if (isSettled) {
+                                subStat.put("settledAmount", ((BigDecimal) subStat.get("settledAmount")).add(actualAmount));
+                                addCurrencyAmount(getOrCreateCurrencyMap(subStat, "settledAmountByCurrency"), currency, actualAmount);
+                                totalSettledDealerAmount = totalSettledDealerAmount.add(actualAmount);
+                                addCurrencyAmount(totalSettledDealerAmountByCurrency, currency, actualAmount);
+                            } else {
+                                subStat.put("unsettledAmount", ((BigDecimal) subStat.get("unsettledAmount")).add(actualAmount));
+                                addCurrencyAmount(getOrCreateCurrencyMap(subStat, "unsettledAmountByCurrency"), currency, actualAmount);
+                                totalUnsettledDealerAmount = totalUnsettledDealerAmount.add(actualAmount);
+                                addCurrencyAmount(totalUnsettledDealerAmountByCurrency, currency, actualAmount);
+                            }
+
+                            totalDealerAmount = totalDealerAmount.add(actualAmount);
+                            addCurrencyAmount(totalDealerAmountByCurrency, currency, actualAmount);
+                        }
+
+                        // 如果一级经销商需要统计，重新计算其分润（因为上面统计的是全部池子）
+                        if (dealerChain.size() > 1) {
+                            DeviceDealer topDealer = dealerChain.get(0);
+                            boolean shouldCountTopDealer = (effectiveDealerId == null || topDealer.getDealerId().equals(effectiveDealerId));
+
+                            if (shouldCountTopDealer && did != null && did.equals(topDealer.getDealerId())) {
+                                // 一级经销商的实际分润 = 总池子 × (100% - 所有下级的rate之和)
+                                BigDecimal topRate = new BigDecimal("100").subtract(totalSubRate);
+                                BigDecimal topActualAmount = dealerPoolAmount.multiply(topRate).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+
+                                // 修正一级经销商的分润金额（之前统计的是全部池子）
+                                BigDecimal diff = order.getDealerAmount().subtract(topActualAmount);
+                                if (diff.compareTo(BigDecimal.ZERO) != 0) {
+                                    // 获取一级经销商的统计对象
+                                    String topKey = String.valueOf(topDealer.getDealerId());
+                                    Map<String, Object> topStat = dealerStats.get(topKey);
+                                    if (topStat != null) {
+                                        topStat.put("dealerAmount", ((BigDecimal) topStat.get("dealerAmount")).subtract(diff));
+                                        String currency = normalizeCurrency(order.getCurrency());
+                                        addCurrencyAmount(getOrCreateCurrencyMap(topStat, "dealerAmountByCurrency"), currency, diff.negate());
+
+                                        boolean isSettled = order.getIsSettled() != null && order.getIsSettled() == 1;
+                                        if (isSettled) {
+                                            topStat.put("settledAmount", ((BigDecimal) topStat.get("settledAmount")).subtract(diff));
+                                            addCurrencyAmount(getOrCreateCurrencyMap(topStat, "settledAmountByCurrency"), currency, diff.negate());
+                                            totalSettledDealerAmount = totalSettledDealerAmount.subtract(diff);
+                                            addCurrencyAmount(totalSettledDealerAmountByCurrency, currency, diff.negate());
+                                        } else {
+                                            topStat.put("unsettledAmount", ((BigDecimal) topStat.get("unsettledAmount")).subtract(diff));
+                                            addCurrencyAmount(getOrCreateCurrencyMap(topStat, "unsettledAmountByCurrency"), currency, diff.negate());
+                                            totalUnsettledDealerAmount = totalUnsettledDealerAmount.subtract(diff);
+                                            addCurrencyAmount(totalUnsettledDealerAmountByCurrency, currency, diff.negate());
+                                        }
+
+                                        totalDealerAmount = totalDealerAmount.subtract(diff);
+                                        addCurrencyAmount(totalDealerAmountByCurrency, currency, diff.negate());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    log.debug("查询设备经销商链路失败（device_dealer表可能不存在）: deviceId={}, error={}",
+                            order.getDeviceId(), e.getMessage());
+                }
+            }
 
             String currency = normalizeCurrency(order.getCurrency());
             BigDecimal orderAmount = safeAmount(order.getAmount());
-            BigDecimal dAmt = order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO;
             BigDecimal installerAmt = order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO;
             BigDecimal planCost = safeAmount(order.getPlanCost());
-            boolean isSettled = order.getIsSettled() != null && order.getIsSettled() == 1;
-
-            stat.put("orderCount", (Integer) stat.get("orderCount") + 1);
-            stat.put("totalAmount", ((BigDecimal) stat.get("totalAmount")).add(orderAmount));
-            stat.put("dealerAmount", ((BigDecimal) stat.get("dealerAmount")).add(dAmt));
-            addCurrencyAmount(getOrCreateCurrencyMap(stat, "totalAmountByCurrency"), currency, orderAmount);
-            addCurrencyAmount(getOrCreateCurrencyMap(stat, "dealerAmountByCurrency"), currency, dAmt);
-            if (isSettled) {
-                stat.put("settledAmount", ((BigDecimal) stat.get("settledAmount")).add(dAmt));
-                addCurrencyAmount(getOrCreateCurrencyMap(stat, "settledAmountByCurrency"), currency, dAmt);
-                totalSettledDealerAmount = totalSettledDealerAmount.add(dAmt);
-                addCurrencyAmount(totalSettledDealerAmountByCurrency, currency, dAmt);
-            } else {
-                stat.put("unsettledAmount", ((BigDecimal) stat.get("unsettledAmount")).add(dAmt));
-                addCurrencyAmount(getOrCreateCurrencyMap(stat, "unsettledAmountByCurrency"), currency, dAmt);
-                totalUnsettledDealerAmount = totalUnsettledDealerAmount.add(dAmt);
-                addCurrencyAmount(totalUnsettledDealerAmountByCurrency, currency, dAmt);
-            }
+            BigDecimal dAmt = order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO;
 
             totalAmount = totalAmount.add(orderAmount);
             totalCost = totalCost.add(planCost);
@@ -635,12 +876,16 @@ public class BillingService {
             BigDecimal effectiveProfitAmount = calculateEffectiveProfitAmount(order, effectiveFeeAmount);
             totalProfitAmount = totalProfitAmount.add(effectiveProfitAmount);
             totalInstallerAmount = totalInstallerAmount.add(installerAmt);
-            totalDealerAmount = totalDealerAmount.add(dAmt);
+            if (shouldCountThisDealer) {
+                totalDealerAmount = totalDealerAmount.add(dAmt);
+            }
             addCurrencyAmount(totalAmountByCurrency, currency, orderAmount);
             addCurrencyAmount(totalCostByCurrency, currency, planCost);
             addCurrencyAmount(totalProfitAmountByCurrency, currency, effectiveProfitAmount);
             addCurrencyAmount(totalInstallerAmountByCurrency, currency, installerAmt);
-            addCurrencyAmount(totalDealerAmountByCurrency, currency, dAmt);
+            if (shouldCountThisDealer) {
+                addCurrencyAmount(totalDealerAmountByCurrency, currency, dAmt);
+            }
             if (order.getDeviceId() != null) {
                 deviceIds.add(order.getDeviceId());
             }
@@ -749,9 +994,9 @@ public class BillingService {
             row.put("productType", order.getProductType());
             row.put("productId", order.getProductId());
             row.put("amount", order.getAmount());
-            row.put("commissionRate", order.getCommissionRate());
-            row.put("installerAmount", order.getInstallerAmount());
-            row.put("dealerAmount", order.getDealerAmount());
+            row.put("commissionRate", scope.showDealerInfo ? order.getCommissionRate() : null);
+            row.put("installerAmount", scope.showInstallerInfo ? order.getInstallerAmount() : null);
+            row.put("dealerAmount", scope.showDealerInfo ? order.getDealerAmount() : null);
             row.put("paymentMethod", order.getPaymentMethod());
             row.put("paidAt", order.getPaidAt() != null ? sdf.format(order.getPaidAt()) : "");
             row.put("refundAt", order.getRefundAt() != null ? sdf.format(order.getRefundAt()) : "");
@@ -897,6 +1142,63 @@ public class BillingService {
      * @param orderId 订单ID
      * @param reason 退款原因
      */
+    public Map<String, Object> listOrders(Long currentUserId, Integer page, Integer size, String dimension,
+                                          String installerCode, Long dealerId, String deviceId,
+                                          String status, Date startDate, Date endDate) {
+        BillingDataScope scope = resolveBillingDataScope(currentUserId, installerCode, dealerId, dimension);
+
+        PaymentOrderStatus effectiveStatus = PaymentOrderStatus.PAID;
+        if (hasText(status)) {
+            PaymentOrderStatus statusEnum = PaymentOrderStatus.fromCode(status);
+            if (statusEnum != null) {
+                effectiveStatus = statusEnum;
+            }
+        }
+
+        QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
+        applyInstallerDealerScope(qw, scope);
+        if (hasText(deviceId)) {
+            qw.lambda().like(PaymentOrder::getDeviceId, deviceId);
+        }
+        qw.lambda().eq(PaymentOrder::getStatus, effectiveStatus);
+        if (startDate != null) {
+            qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
+        }
+        if (endDate != null) {
+            qw.lambda().le(PaymentOrder::getPaidAt, endDate);
+        }
+        qw.lambda().orderByDesc(PaymentOrder::getPaidAt);
+
+        int offset = (page - 1) * size;
+        qw.last("LIMIT " + offset + ", " + size);
+        List<PaymentOrder> list = orderRepository.selectList(qw);
+        for (PaymentOrder order : list) {
+            normalizeFinancialFieldsForDisplay(order);
+        }
+        maskOrderCommissionFields(list, scope.showInstallerInfo, scope.showDealerInfo);
+
+        QueryWrapper<PaymentOrder> countQw = new QueryWrapper<>();
+        applyInstallerDealerScope(countQw, scope);
+        if (hasText(deviceId)) {
+            countQw.lambda().like(PaymentOrder::getDeviceId, deviceId);
+        }
+        countQw.lambda().eq(PaymentOrder::getStatus, effectiveStatus);
+        if (startDate != null) {
+            countQw.lambda().ge(PaymentOrder::getPaidAt, startDate);
+        }
+        if (endDate != null) {
+            countQw.lambda().le(PaymentOrder::getPaidAt, endDate);
+        }
+        long total = orderRepository.selectCount(countQw);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("list", list);
+        result.put("total", total);
+        result.put("page", page);
+        result.put("size", size);
+        return result;
+    }
+
     @Transactional
     public void recordRefund(String orderId, String reason) {
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
@@ -942,6 +1244,42 @@ public class BillingService {
      * 权限说明：非管理员只能导出与自己关联的数据
      * @return Map包含 "isZip" (boolean) 和 "data" (byte[])
      */
+    public Map<String, Object> exportBillingDetailExcel(Long currentUserId, String dimension, String installerCode,
+                                                        Long dealerId, String deviceId, Date startDate,
+                                                        Date endDate) throws IOException {
+        BillingDataScope scope = resolveBillingDataScope(currentUserId, installerCode, dealerId, dimension);
+
+        QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
+        qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
+        applyInstallerDealerScope(qw, scope);
+        if (hasText(deviceId)) {
+            qw.lambda().like(PaymentOrder::getDeviceId, deviceId);
+        }
+        if (startDate != null) {
+            qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
+        }
+        if (endDate != null) {
+            qw.lambda().le(PaymentOrder::getPaidAt, endDate);
+        }
+        qw.lambda().orderByDesc(PaymentOrder::getPaidAt);
+
+        List<PaymentOrder> orders = orderRepository.selectList(qw);
+        for (PaymentOrder order : orders) {
+            normalizeFinancialFieldsForDisplay(order);
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        if (orders.size() <= EXCEL_BATCH_SIZE) {
+            byte[] excelData = createBillingDetailExcel(orders, null, scope.showInstallerInfo, scope.showDealerInfo);
+            result.put("isZip", false);
+            result.put("data", excelData);
+        } else {
+            byte[] zipData = createBillingDetailZip(orders, scope.showInstallerInfo, scope.showDealerInfo);
+            result.put("isZip", true);
+            result.put("data", zipData);
+        }
+        return result;
+    }
     public Map<String, Object> exportBillingDetailExcel(Long currentUserId, String installerCode, Long dealerId, String deviceId, Date startDate, Date endDate) throws IOException {
         BillingDataScope scope = resolveBillingDataScope(currentUserId, installerCode, dealerId);
         
