@@ -1,5 +1,6 @@
 package com.pura365.camera.model.payment;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 
@@ -14,6 +15,7 @@ public class PayRequest {
      */
     @Schema(description = "订单ID", required = true)
     @JsonProperty("order_id")
+    @JsonAlias("orderId")
     private String orderId;
 
     public String getOrderId() {

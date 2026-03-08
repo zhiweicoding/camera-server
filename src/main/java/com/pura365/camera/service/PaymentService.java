@@ -105,7 +105,7 @@ public class PaymentService {
         BigDecimal amount;
         String currency = resolveServerCurrency();
         CloudPlan plan = null;
-        if (PRODUCT_TYPE_CLOUD_STORAGE.equals(request.getProductType())) {
+        //if (PRODUCT_TYPE_CLOUD_STORAGE.equals(request.getProductType())) {
             plan = findPlanByPlanId(request.getProductId());
             if (plan == null) {
                 result.setErrorCode(404);
@@ -118,11 +118,11 @@ public class PaymentService {
                 return result;
             }
             amount = plan.getPrice() != null ? plan.getPrice() : BigDecimal.ZERO;
-        } else {
-            result.setErrorCode(400);
-            result.setErrorMessage("暂不支持的商品类型: " + request.getProductType());
-            return result;
-        }
+//        } else {
+//            result.setErrorCode(400);
+//            result.setErrorMessage("暂不支持的商品类型: " + request.getProductType());
+//            return result;
+//        }
 
         // 订单复用：检查是否有同样的待支付订单
         PaymentOrder existingOrder = findPendingOrder(userId, request.getDeviceId(), 

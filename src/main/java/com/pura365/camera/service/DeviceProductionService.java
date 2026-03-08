@@ -292,10 +292,11 @@ public class DeviceProductionService {
      *
      * @param deviceId   原设备ID（16位）
      * @param vendorCode 新的经销商代码（2位）
+     * @param commissionRate 分销链路比例（下级经销商从总经销商分润池中抽取的百分比）
      * @return 包含新设备ID等信息的Map
      */
     @Transactional
-    public Map<String, Object> scanAssignDealer(Long currentUserId, String deviceId, String vendorCode) {
+    public Map<String, Object> scanAssignDealer(Long currentUserId, String deviceId, String vendorCode, BigDecimal commissionRate) {
         // 校验设备ID长度
         if (deviceId == null || deviceId.length() != 16) {
             throw new RuntimeException("设备ID必须是16位");
@@ -339,7 +340,8 @@ public class DeviceProductionService {
         // 经销商代码变化时，仅更新归属，不修改设备ID
         if (vendorChanged) {
             // 补齐历史设备的初始链路节点，避免链路只有下级节点
-            ensureCurrentDealerInChain(oldDeviceId, device, oldVendorCode, previousDealerRate);
+            // 一级经销商的 commission_rate 应该为 NULL，让系统自动计算
+            ensureCurrentDealerInChain(oldDeviceId, device, oldVendorCode, null);
         }
 
         // 更新设备信息（机身码保持不变）
@@ -351,7 +353,8 @@ public class DeviceProductionService {
         deviceRepository.updateById(device);
 
         if (vendorChanged && targetDealer != null) {
-            BigDecimal chainRate = previousDealerRate != null ? previousDealerRate : BigDecimal.ZERO;
+            // 使用传入的分销链路比例，如果没有传入则使用默认值0
+            BigDecimal chainRate = commissionRate != null ? commissionRate : BigDecimal.ZERO;
             try {
                 writeDeviceDealerRecord(oldDeviceId, device, targetDealer, chainRate);
             } catch (Exception e) {
@@ -360,8 +363,8 @@ public class DeviceProductionService {
             }
         }
 
-        log.info("扫码分配经销商成功: deviceId={}, vendorCode={}, changed={}",
-                oldDeviceId, vendorCode, vendorChanged);
+        log.info("扫码分配经销商成功: deviceId={}, vendorCode={}, commissionRate={}, changed={}",
+                oldDeviceId, vendorCode, commissionRate, vendorChanged);
 
         Map<String, Object> result = new HashMap<>();
         result.put("deviceId", oldDeviceId);
@@ -489,7 +492,8 @@ public class DeviceProductionService {
                 // 如果经销商代码变化，仅更新归属，不修改设备ID
                 if (vendorChanged) {
                     // 补齐历史设备的初始链路节点，避免后续只出现下级节点导致链路断层
-                    ensureCurrentDealerInChain(oldDeviceId, device, oldVendorCode, previousDealerRate);
+                    // 一级经销商的 commission_rate 应该为 NULL，让系统自动计算
+                    ensureCurrentDealerInChain(oldDeviceId, device, oldVendorCode, null);
                 }
                 if (oldVendorCode != null) {
                     device.setVendorCode(oldVendorCode);
@@ -1397,9 +1401,12 @@ public class DeviceProductionService {
     }
 
     /**
-     * 为设备列表添加装机商和经销商的分佣比例信息
+     * 判断是否可以查看某个经销商节点的分佣比例
+     * 规则：
+     * - 管理员可以查看所有
+     * - 经销商可以查看自己和所有下级经销商的分佣比例
      */
-    private boolean canViewDealerNodeCommission(DeviceDataScope scope, Long dealerId) {
+    private boolean canViewDealerNodeCommission(DeviceDataScope scope, Long dealerId, List<DeviceDealer> dealerChain) {
         if (scope == null) {
             return true;
         }
@@ -1409,7 +1416,34 @@ public class DeviceProductionService {
         if (!scope.dealerRoleScope || scope.userDealerId == null || dealerId == null) {
             return false;
         }
-        return scope.userDealerId.equals(dealerId);
+
+        // 如果是自己，可以查看
+        if (scope.userDealerId.equals(dealerId)) {
+            return true;
+        }
+
+        // 检查是否是下级经销商：找到当前用户在链路中的位置，判断目标经销商是否在其后面
+        if (dealerChain != null && !dealerChain.isEmpty()) {
+            int userIndex = -1;
+            int targetIndex = -1;
+
+            for (int i = 0; i < dealerChain.size(); i++) {
+                DeviceDealer dd = dealerChain.get(i);
+                if (dd.getDealerId() != null && dd.getDealerId().equals(scope.userDealerId)) {
+                    userIndex = i;
+                }
+                if (dd.getDealerId() != null && dd.getDealerId().equals(dealerId)) {
+                    targetIndex = i;
+                }
+            }
+
+            // 如果目标经销商在当前用户后面（level更大），说明是下级，可以查看
+            if (userIndex >= 0 && targetIndex > userIndex) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private List<DeviceDealer> buildVisibleDealerChain(DeviceDataScope scope, boolean showDealerCommission, List<DeviceDealer> dealerChain) {
@@ -1434,7 +1468,7 @@ public class DeviceProductionService {
             copy.setTransferId(node.getTransferId());
             copy.setCreatedAt(node.getCreatedAt());
             copy.setUpdatedAt(node.getUpdatedAt());
-            copy.setCommissionRate(canViewDealerNodeCommission(scope, node.getDealerId()) ? node.getCommissionRate() : null);
+            copy.setCommissionRate(canViewDealerNodeCommission(scope, node.getDealerId(), dealerChain) ? node.getCommissionRate() : null);
             visibleChain.add(copy);
         }
         return visibleChain;
@@ -1591,7 +1625,7 @@ public class DeviceProductionService {
                     visibleInitialDealerRate = d.getDealerCommissionRate();
                 } else if (dealerChain != null && !dealerChain.isEmpty()) {
                     DeviceDealer firstDealer = dealerChain.get(0);
-                    if (canViewDealerNodeCommission(scope, firstDealer.getDealerId())) {
+                    if (canViewDealerNodeCommission(scope, firstDealer.getDealerId(), dealerChain)) {
                         visibleInitialDealerRate = d.getDealerCommissionRate();
                     }
                 } else {
@@ -1609,7 +1643,7 @@ public class DeviceProductionService {
                 map.put("currentVendorCode", currentDealer.getDealerCode());
                 map.put("currentVendorLevel", currentDealer.getLevel());
                 BigDecimal visibleCurrentDealerRate = null;
-                if (showDealerCommission && canViewDealerNodeCommission(scope, currentDealer.getDealerId())) {
+                if (showDealerCommission && canViewDealerNodeCommission(scope, currentDealer.getDealerId(), dealerChain)) {
                     visibleCurrentDealerRate = currentDealer.getCommissionRate();
                 }
                 map.put("currentVendorCommissionRate", visibleCurrentDealerRate);
@@ -1625,7 +1659,7 @@ public class DeviceProductionService {
                             name = dlr.getName();
                         }
                     }
-                    boolean canShowNodeRate = showDealerCommission && canViewDealerNodeCommission(scope, dd.getDealerId());
+                    boolean canShowNodeRate = showDealerCommission && canViewDealerNodeCommission(scope, dd.getDealerId(), dealerChain);
                     chainNames.add(canShowNodeRate ? name + "(" + dd.getCommissionRate() + "%)" : name);
                 }
                 map.put("vendorChain", String.join(" → ", chainNames));

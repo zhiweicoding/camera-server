@@ -822,23 +822,45 @@ public class BillingService {
                             DeviceDealer topDealer = dealerChain.get(0);
                             boolean shouldCountTopDealer = (effectiveDealerId == null || topDealer.getDealerId().equals(effectiveDealerId));
 
-                            if (shouldCountTopDealer && did != null && did.equals(topDealer.getDealerId())) {
+                            if (shouldCountTopDealer) {
                                 // 一级经销商的实际分润 = 总池子 × (100% - 所有下级的rate之和)
                                 BigDecimal topRate = new BigDecimal("100").subtract(totalSubRate);
                                 BigDecimal topActualAmount = dealerPoolAmount.multiply(topRate).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
 
-                                // 修正一级经销商的分润金额（之前统计的是全部池子）
-                                BigDecimal diff = order.getDealerAmount().subtract(topActualAmount);
-                                if (diff.compareTo(BigDecimal.ZERO) != 0) {
-                                    // 获取一级经销商的统计对象
-                                    String topKey = String.valueOf(topDealer.getDealerId());
-                                    Map<String, Object> topStat = dealerStats.get(topKey);
-                                    if (topStat != null) {
+                                // 获取或创建一级经销商的统计对象
+                                String topKey = String.valueOf(topDealer.getDealerId());
+                                final Long topDealerId = topDealer.getDealerId();
+                                final String topInstallerCode = iCode;
+                                Map<String, Object> topStat = dealerStats.computeIfAbsent(topKey, k -> {
+                                    Map<String, Object> s = new HashMap<>();
+                                    s.put("dealerId", topDealerId);
+                                    s.put("dealerCode", null);
+                                    s.put("dealerName", null);
+                                    s.put("installerCode", topInstallerCode);
+                                    s.put("orderCount", 0);
+                                    s.put("totalAmount", BigDecimal.ZERO);
+                                    s.put("dealerAmount", BigDecimal.ZERO);
+                                    s.put("settledAmount", BigDecimal.ZERO);
+                                    s.put("unsettledAmount", BigDecimal.ZERO);
+                                    s.put("totalAmountByCurrency", new HashMap<String, BigDecimal>());
+                                    s.put("dealerAmountByCurrency", new HashMap<String, BigDecimal>());
+                                    s.put("settledAmountByCurrency", new HashMap<String, BigDecimal>());
+                                    s.put("unsettledAmountByCurrency", new HashMap<String, BigDecimal>());
+                                    return s;
+                                });
+
+                                String currency = normalizeCurrency(order.getCurrency());
+                                BigDecimal orderAmount = safeAmount(order.getAmount());
+                                boolean isSettled = order.getIsSettled() != null && order.getIsSettled() == 1;
+
+                                // 如果一级经销商就是 order.dealer_id，说明之前已经统计了全部池子，需要修正
+                                if (did != null && did.equals(topDealer.getDealerId())) {
+                                    // 修正：减去多统计的部分
+                                    BigDecimal diff = order.getDealerAmount().subtract(topActualAmount);
+                                    if (diff.compareTo(BigDecimal.ZERO) != 0) {
                                         topStat.put("dealerAmount", ((BigDecimal) topStat.get("dealerAmount")).subtract(diff));
-                                        String currency = normalizeCurrency(order.getCurrency());
                                         addCurrencyAmount(getOrCreateCurrencyMap(topStat, "dealerAmountByCurrency"), currency, diff.negate());
 
-                                        boolean isSettled = order.getIsSettled() != null && order.getIsSettled() == 1;
                                         if (isSettled) {
                                             topStat.put("settledAmount", ((BigDecimal) topStat.get("settledAmount")).subtract(diff));
                                             addCurrencyAmount(getOrCreateCurrencyMap(topStat, "settledAmountByCurrency"), currency, diff.negate());
@@ -854,6 +876,28 @@ public class BillingService {
                                         totalDealerAmount = totalDealerAmount.subtract(diff);
                                         addCurrencyAmount(totalDealerAmountByCurrency, currency, diff.negate());
                                     }
+                                } else {
+                                    // 一级经销商不是 order.dealer_id，需要新增统计
+                                    topStat.put("orderCount", (Integer) topStat.get("orderCount") + 1);
+                                    topStat.put("totalAmount", ((BigDecimal) topStat.get("totalAmount")).add(orderAmount));
+                                    topStat.put("dealerAmount", ((BigDecimal) topStat.get("dealerAmount")).add(topActualAmount));
+                                    addCurrencyAmount(getOrCreateCurrencyMap(topStat, "totalAmountByCurrency"), currency, orderAmount);
+                                    addCurrencyAmount(getOrCreateCurrencyMap(topStat, "dealerAmountByCurrency"), currency, topActualAmount);
+
+                                    if (isSettled) {
+                                        topStat.put("settledAmount", ((BigDecimal) topStat.get("settledAmount")).add(topActualAmount));
+                                        addCurrencyAmount(getOrCreateCurrencyMap(topStat, "settledAmountByCurrency"), currency, topActualAmount);
+                                        totalSettledDealerAmount = totalSettledDealerAmount.add(topActualAmount);
+                                        addCurrencyAmount(totalSettledDealerAmountByCurrency, currency, topActualAmount);
+                                    } else {
+                                        topStat.put("unsettledAmount", ((BigDecimal) topStat.get("unsettledAmount")).add(topActualAmount));
+                                        addCurrencyAmount(getOrCreateCurrencyMap(topStat, "unsettledAmountByCurrency"), currency, topActualAmount);
+                                        totalUnsettledDealerAmount = totalUnsettledDealerAmount.add(topActualAmount);
+                                        addCurrencyAmount(totalUnsettledDealerAmountByCurrency, currency, topActualAmount);
+                                    }
+
+                                    totalDealerAmount = totalDealerAmount.add(topActualAmount);
+                                    addCurrencyAmount(totalDealerAmountByCurrency, currency, topActualAmount);
                                 }
                             }
                         }
@@ -988,19 +1032,28 @@ public class BillingService {
             row.put("orderId", order.getOrderId());
             row.put("deviceId", order.getDeviceId());
             row.put("installerCode", order.getInstallerCode());
+            row.put("installerId", order.getInstallerId());
+            row.put("installerName", getInstallerName(order.getInstallerId()));
             row.put("dealerId", order.getDealerId());
             row.put("dealerCode", order.getDealerCode());
             row.put("dealerName", getDealerName(order.getDealerId()));
             row.put("productType", order.getProductType());
             row.put("productId", order.getProductId());
             row.put("amount", order.getAmount());
+            row.put("currency", order.getCurrency());
+            row.put("feeAmount", order.getFeeAmount());
+            row.put("planCost", order.getPlanCost());
+            row.put("profitAmount", order.getProfitAmount());
             row.put("commissionRate", scope.showDealerInfo ? order.getCommissionRate() : null);
+            row.put("installerRate", scope.showInstallerInfo ? order.getInstallerRate() : null);
             row.put("installerAmount", scope.showInstallerInfo ? order.getInstallerAmount() : null);
+            row.put("dealerRate", scope.showDealerInfo ? order.getDealerRate() : null);
             row.put("dealerAmount", scope.showDealerInfo ? order.getDealerAmount() : null);
             row.put("paymentMethod", order.getPaymentMethod());
             row.put("paidAt", order.getPaidAt() != null ? sdf.format(order.getPaidAt()) : "");
             row.put("refundAt", order.getRefundAt() != null ? sdf.format(order.getRefundAt()) : "");
             row.put("refundReason", order.getRefundReason());
+            row.put("isSettled", order.getIsSettled());
             result.add(row);
         }
         return result;

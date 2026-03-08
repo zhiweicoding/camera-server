@@ -9,13 +9,15 @@ import com.pura365.camera.model.MessageListResponse;
 import com.pura365.camera.model.MessageVO;
 import com.pura365.camera.repository.AppMessageRepository;
 import com.pura365.camera.repository.DeviceRepository;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -34,13 +36,19 @@ public class MessageService {
     private final AppMessageRepository appMessageRepository;
     private final DeviceRepository deviceRepository;
     private final JPushService jPushService;
+    private final StringRedisTemplate stringRedisTemplate;
+    private final long motionPushCooldownSeconds;
 
     public MessageService(AppMessageRepository appMessageRepository,
                           DeviceRepository deviceRepository,
-                          JPushService jPushService) {
+                          JPushService jPushService,
+                          StringRedisTemplate stringRedisTemplate,
+                          @Value("${push.motion.cooldown-seconds:20}") long motionPushCooldownSeconds) {
         this.appMessageRepository = appMessageRepository;
         this.deviceRepository = deviceRepository;
         this.jPushService = jPushService;
+        this.stringRedisTemplate = stringRedisTemplate;
+        this.motionPushCooldownSeconds = motionPushCooldownSeconds;
     }
 
     /**
@@ -236,17 +244,23 @@ public class MessageService {
         
         appMessageRepository.insert(message);
         
-        boolean deviceOnline = isDeviceOnline(deviceId);
-        if (!ignoreDeviceOnlineCheck && !deviceOnline) {
-            org.slf4j.LoggerFactory.getLogger(MessageService.class)
-                .info("设备 {} 不在线，跳过推送", deviceId);
-            return message.getId();
-        }
-        if (ignoreDeviceOnlineCheck && !deviceOnline) {
+//        boolean deviceOnline = isDeviceOnline(deviceId);
+//        if (!ignoreDeviceOnlineCheck && !deviceOnline) {
+//            org.slf4j.LoggerFactory.getLogger(MessageService.class)
+//                .info("设备 {} 不在线，跳过推送", deviceId);
+//            return message.getId();
+//        }
+        if (ignoreDeviceOnlineCheck) {
             org.slf4j.LoggerFactory.getLogger(MessageService.class)
                     .info("设备 {} 不在线，ignoreDeviceOnlineCheck=true，继续推送", deviceId);
         }
-        
+
+        if (shouldSkipPushByCooldown(userId, deviceId, type)) {
+            org.slf4j.LoggerFactory.getLogger(MessageService.class)
+                    .info("命中推送冷却窗口，跳过推送 userId={}, deviceId={}, type={}", userId, deviceId, type);
+            return message.getId();
+        }
+
         // 触发极光推送
         pushMessageToUser(userId, deviceId, title, content, thumbnailUrl, videoUrl);
         
@@ -264,10 +278,28 @@ public class MessageService {
         return device != null && device.getStatus() == DeviceOnlineStatus.ONLINE;
     }
 
+    private boolean shouldSkipPushByCooldown(Long userId, String deviceId, String type) {
+        if (!"motion".equalsIgnoreCase(type)) {
+            return false;
+        }
+        if (motionPushCooldownSeconds <= 0) {
+            return false;
+        }
+        String redisKey = buildMotionCooldownKey(userId, deviceId);
+        Boolean first = stringRedisTemplate.opsForValue()
+                .setIfAbsent(redisKey, "1", motionPushCooldownSeconds, TimeUnit.SECONDS);
+        return Boolean.FALSE.equals(first);
+    }
+
+    private String buildMotionCooldownKey(Long userId, String deviceId) {
+        String safeDeviceId = StringUtils.hasText(deviceId) ? deviceId.trim() : "unknown";
+        return "push:cooldown:motion:" + userId + ":" + safeDeviceId;
+    }
+
     /**
      * 推送消息给用户
      */
-    private void pushMessageToUser(Long userId, String deviceId, String title, 
+    private void pushMessageToUser(Long userId, String deviceId, String title,
                                     String content, String thumbnailUrl, String videoUrl) {
         try {
             Map<String, String> extras = new java.util.HashMap<>();

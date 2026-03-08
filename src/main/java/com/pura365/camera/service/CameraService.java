@@ -286,10 +286,6 @@ public class CameraService {
                     request.getId(), request.getTopic(), deviceId);
         }
         
-        // 内容翻译：英文转中文
-        content = translateContent(content);
-        title = translateContent(title);
-
         // 兼容设备端字段差异，避免推送标题/内容为空导致推送失败
         if (!StringUtils.hasText(title)) {
             title = "设备消息通知";
@@ -335,20 +331,7 @@ public class CameraService {
                 deviceId, title, successCount, userDevices.size());
     }
     
-    /**
-     * 翻译消息内容（英文转中文）
-     */
-    private String translateContent(String content) {
-        if (content == null) {
-            return null;
-        }
-        // Motion detected -> 检测到物体移动
-        if (content.contains("Motion detected")) {
-            content = content.replace("Motion detected", "检测到物体移动");
-        }
-        return content;
-    }
-    
+
     /**
      * 推断消息类型
      */

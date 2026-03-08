@@ -35,6 +35,7 @@ import java.util.stream.Collectors;
 public class RechargeOrderReportService {
 
     private static final Logger log = LoggerFactory.getLogger(RechargeOrderReportService.class);
+    private static final BigDecimal HUNDRED = new BigDecimal("100");
 
     @Autowired
     private PaymentOrderRepository orderRepository;
@@ -66,6 +67,9 @@ public class RechargeOrderReportService {
     @Autowired
     private DealerRepository dealerRepository;
 
+    @Autowired
+    private DeviceDealerRepository deviceDealerRepository;
+
     // 报表Excel列标题
     private static final String[] EXCEL_HEADERS = {
             "充值订单号", "下单时间", "设备ID", "我的身份", "所属经销商",
@@ -83,11 +87,13 @@ public class RechargeOrderReportService {
      * 查询逻辑：直接使用订单表的快照字段进行筛选
      */
     public PageResult<RechargeOrderReportVO> queryOrders(RechargeOrderQueryRequest request) {
-        log.info("查询充值订单报表: page={}, size={}, vendorCode={}, salesmanId={}", 
+        log.info("查询充值订单报表: page={}, size={}, vendorCode={}, salesmanId={}",
                 request.getPage(), request.getSize(), request.getVendorCode(), request.getSalesmanId());
 
+        DealerQueryScope queryScope = resolveDealerQueryScope(request);
+
         // 直接使用订单表的快照字段查询
-        QueryWrapper<PaymentOrder> qw = buildQueryWrapper(request);
+        QueryWrapper<PaymentOrder> qw = buildQueryWrapper(request, queryScope);
 
         // 分页查询
         int offset = (request.getPage() - 1) * request.getSize();
@@ -95,13 +101,13 @@ public class RechargeOrderReportService {
         List<PaymentOrder> orders = orderRepository.selectList(qw);
 
         // 查询总数
-        QueryWrapper<PaymentOrder> countQw = buildQueryWrapper(request);
+        QueryWrapper<PaymentOrder> countQw = buildQueryWrapper(request, queryScope);
         long total = orderRepository.selectCount(countQw);
 
         // 转换为报表VO
         List<RechargeOrderReportVO> voList = new ArrayList<>();
         for (PaymentOrder order : orders) {
-            voList.add(convertToReportVO(order));
+            voList.add(convertToReportVO(order, queryScope));
         }
 
         log.info("查询充值订单报表完成: total={}, listSize={}", total, voList.size());
@@ -114,15 +120,17 @@ public class RechargeOrderReportService {
     public List<RechargeOrderReportVO> queryAllOrders(RechargeOrderQueryRequest request) {
         log.info("查询充值订单用于导出");
 
+        DealerQueryScope queryScope = resolveDealerQueryScope(request);
+
         // 直接使用订单表的快照字段查询
-        QueryWrapper<PaymentOrder> qw = buildQueryWrapper(request);
+        QueryWrapper<PaymentOrder> qw = buildQueryWrapper(request, queryScope);
         qw.lambda().orderByDesc(PaymentOrder::getCreatedAt);
 
         List<PaymentOrder> orders = orderRepository.selectList(qw);
 
         List<RechargeOrderReportVO> voList = new ArrayList<>();
         for (PaymentOrder order : orders) {
-            voList.add(convertToReportVO(order));
+            voList.add(convertToReportVO(order, queryScope));
         }
 
         log.info("查询充值订单用于导出完成: count={}", voList.size());
@@ -246,34 +254,25 @@ public class RechargeOrderReportService {
         }
     }
 
-    /**
-     * 构建查询条件
-     * 直接使用订单表的快照字段进行筛选
-     * 根据当前用户角色自动过滤：
-     * - 管理员(role=3)：可查看所有订单
-     * - 装机商(isInstaller=1)：只能查看自己关联的订单
-     * - 经销商(isDealer=1)：只能查看自己关联的订单
-     * - 既是装机商又是经销商：可查看两者关联的订单(OR条件)
-     */
-    private QueryWrapper<PaymentOrder> buildQueryWrapper(RechargeOrderQueryRequest request) {
-        QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
-
-        // 根据当前用户角色确定过滤条件
+    private DealerQueryScope resolveDealerQueryScope(RechargeOrderQueryRequest request) {
         String effectiveInstallerCode = request.getInstallerCode();
         String effectiveDealerCode = request.getVendorCode();
-        boolean needOrCondition = false; // 是否需要OR条件（既是装机商又是经销商）
-        
+        Long effectiveDealerId = null;
+        boolean needOrCondition = false;
+
         if (request.getCurrentUserId() != null) {
             User currentUser = userRepository.selectById(request.getCurrentUserId());
             if (currentUser != null) {
-                // 管理员可以查看所有订单，不需要强制过滤
                 boolean isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
-                
+
                 if (!isAdmin) {
-                    boolean isInstaller = currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null;
-                    boolean isDealer = currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null;
-                    
-                    // 装机商只能查看自己关联的订单
+                    boolean isInstaller = currentUser.getIsInstaller() != null
+                            && currentUser.getIsInstaller() == 1
+                            && currentUser.getInstallerId() != null;
+                    boolean isDealer = currentUser.getIsDealer() != null
+                            && currentUser.getIsDealer() == 1
+                            && currentUser.getDealerId() != null;
+
                     if (isInstaller) {
                         Installer installer = installerRepository.selectById(currentUser.getInstallerId());
                         if (installer != null && installer.getInstallerCode() != null) {
@@ -281,21 +280,36 @@ public class RechargeOrderReportService {
                             log.info("装机商用户查询充值订单, userId={}, installerCode={}", request.getCurrentUserId(), effectiveInstallerCode);
                         }
                     }
-                    
-                    // 经销商只能查看自己关联的订单
+
                     if (isDealer) {
                         Dealer dealer = dealerRepository.selectById(currentUser.getDealerId());
                         if (dealer != null && dealer.getDealerCode() != null) {
                             effectiveDealerCode = dealer.getDealerCode();
+                            effectiveDealerId = dealer.getId();
                             log.info("经销商用户查询充值订单, userId={}, dealerCode={}", request.getCurrentUserId(), effectiveDealerCode);
+                        } else {
+                            effectiveDealerId = currentUser.getDealerId();
                         }
                     }
-                    
-                    // 既是装机商又是经销商，需要OR条件
+
                     needOrCondition = isInstaller && isDealer;
                 }
             }
         }
+
+        List<String> dealerDeviceIds = resolveDealerDeviceIds(effectiveDealerCode);
+        return new DealerQueryScope(effectiveInstallerCode, effectiveDealerCode, effectiveDealerId, dealerDeviceIds, needOrCondition);
+    }
+
+    private QueryWrapper<PaymentOrder> buildQueryWrapper(RechargeOrderQueryRequest request, DealerQueryScope queryScope) {
+        QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
+
+        String effectiveInstallerCode = queryScope != null ? queryScope.getInstallerCode() : request.getInstallerCode();
+        String effectiveDealerCode = queryScope != null ? queryScope.getDealerCode() : request.getVendorCode();
+        boolean needOrCondition = queryScope != null && queryScope.isNeedOrCondition();
+        List<String> dealerDeviceIds = queryScope != null
+                ? queryScope.getDealerDeviceIds()
+                : resolveDealerDeviceIds(effectiveDealerCode);
 
         if (request.getOrderId() != null && !request.getOrderId().trim().isEmpty()) {
             qw.lambda().like(PaymentOrder::getOrderId, request.getOrderId());
@@ -303,20 +317,43 @@ public class RechargeOrderReportService {
         if (request.getDeviceId() != null && !request.getDeviceId().trim().isEmpty()) {
             qw.lambda().like(PaymentOrder::getDeviceId, request.getDeviceId());
         }
-        
+
         // 如果既是装机商又是经销商，使用OR条件
-        if (needOrCondition && effectiveInstallerCode != null && effectiveDealerCode != null) {
+        if (needOrCondition
+                && effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()
+                && effectiveDealerCode != null && !effectiveDealerCode.trim().isEmpty()) {
             final String finalInstallerCode = effectiveInstallerCode;
             final String finalDealerCode = effectiveDealerCode;
-            qw.and(wrapper -> wrapper
-                .eq("installer_code", finalInstallerCode)
-                .or()
-                .eq("dealer_code", finalDealerCode)
-            );
+            final List<String> finalDealerDeviceIds = dealerDeviceIds;
+            if (!finalDealerDeviceIds.isEmpty()) {
+                qw.and(wrapper -> wrapper
+                        .eq("installer_code", finalInstallerCode)
+                        .or()
+                        .eq("dealer_code", finalDealerCode)
+                        .or()
+                        .in("device_id", finalDealerDeviceIds)
+                );
+            } else {
+                qw.and(wrapper -> wrapper
+                        .eq("installer_code", finalInstallerCode)
+                        .or()
+                        .eq("dealer_code", finalDealerCode)
+                );
+            }
         } else {
             // 经销商过滤
             if (effectiveDealerCode != null && !effectiveDealerCode.trim().isEmpty()) {
-                qw.lambda().eq(PaymentOrder::getDealerCode, effectiveDealerCode);
+                final String finalDealerCode = effectiveDealerCode;
+                final List<String> finalDealerDeviceIds = dealerDeviceIds;
+                if (!finalDealerDeviceIds.isEmpty()) {
+                    qw.and(wrapper -> wrapper
+                            .eq("dealer_code", finalDealerCode)
+                            .or()
+                            .in("device_id", finalDealerDeviceIds)
+                    );
+                } else {
+                    qw.lambda().eq(PaymentOrder::getDealerCode, effectiveDealerCode);
+                }
             }
             // 装机商过滤
             if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
@@ -368,7 +405,7 @@ public class RechargeOrderReportService {
      * 将订单转换为报表VO
      * 优先使用订单表的快照字段，设备表作为补充
      */
-    private RechargeOrderReportVO convertToReportVO(PaymentOrder order) {
+    private RechargeOrderReportVO convertToReportVO(PaymentOrder order, DealerQueryScope queryScope) {
         RechargeOrderReportVO vo = new RechargeOrderReportVO();
 
         // 订单基本信息
@@ -450,11 +487,10 @@ public class RechargeOrderReportService {
             vo.setInstallerRateDesc(installerRate != null ? installerRate + "%" : "0%");
             vo.setInstallerAmount(installerAmount != null ? installerAmount : BigDecimal.ZERO);
 
-            // 经销商分润：使用订单表字段
-            BigDecimal dealerRate = order.getDealerRate();
-            BigDecimal dealerAmount = order.getDealerAmount();
-            vo.setLevel1RateDesc(dealerRate != null ? dealerRate + "%" : "0%");
-            vo.setLevel1Amount(dealerAmount != null ? dealerAmount : BigDecimal.ZERO);
+            // 经销商分润：优先按 device_dealer 链路计算当前经销商实得，未命中时回落订单快照
+            DealerCommissionDisplay dealerDisplay = resolveDealerCommissionDisplay(order, queryScope);
+            vo.setLevel1RateDesc(dealerDisplay.getRate() != null ? dealerDisplay.getRate() + "%" : "0%");
+            vo.setLevel1Amount(dealerDisplay.getAmount() != null ? dealerDisplay.getAmount() : BigDecimal.ZERO);
 
             // 二级经销商分润（已废弃，统一显示为0）
             vo.setLevel2RateDesc("0%");
@@ -535,6 +571,140 @@ public class RechargeOrderReportService {
             return BigDecimal.ZERO;
         }
         return profitAmount.multiply(rate).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+    }
+
+    private List<String> resolveDealerDeviceIds(String dealerCode) {
+        if (dealerCode == null || dealerCode.trim().isEmpty()) {
+            return Collections.emptyList();
+        }
+        try {
+            List<String> deviceIds = deviceDealerRepository.listDeviceIdsByDealerCode(dealerCode);
+            return deviceIds != null ? deviceIds : Collections.emptyList();
+        } catch (Exception e) {
+            log.debug("查询经销商关联设备失败: dealerCode={}, error={}", dealerCode, e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
+    private DealerCommissionDisplay resolveDealerCommissionDisplay(PaymentOrder order, DealerQueryScope queryScope) {
+        BigDecimal fallbackRate = order.getDealerRate() != null ? order.getDealerRate() : BigDecimal.ZERO;
+        BigDecimal fallbackAmount = order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO;
+
+        if (order.getDeviceId() == null || order.getDeviceId().trim().isEmpty() || fallbackAmount.compareTo(BigDecimal.ZERO) <= 0) {
+            return new DealerCommissionDisplay(fallbackRate, fallbackAmount);
+        }
+
+        List<DeviceDealer> dealerChain;
+        try {
+            dealerChain = deviceDealerRepository.getDealerChainByDeviceId(order.getDeviceId());
+        } catch (Exception e) {
+            log.debug("查询设备经销商链路失败: deviceId={}, error={}", order.getDeviceId(), e.getMessage());
+            return new DealerCommissionDisplay(fallbackRate, fallbackAmount);
+        }
+
+        if (dealerChain == null || dealerChain.isEmpty()) {
+            return new DealerCommissionDisplay(fallbackRate, fallbackAmount);
+        }
+
+        BigDecimal totalSubRate = BigDecimal.ZERO;
+        for (int i = 1; i < dealerChain.size(); i++) {
+            BigDecimal subRate = dealerChain.get(i).getCommissionRate() != null ? dealerChain.get(i).getCommissionRate() : BigDecimal.ZERO;
+            totalSubRate = totalSubRate.add(subRate);
+        }
+
+        for (int i = 0; i < dealerChain.size(); i++) {
+            DeviceDealer chainNode = dealerChain.get(i);
+            if (!isCurrentDealer(order, chainNode, queryScope)) {
+                continue;
+            }
+
+            BigDecimal chainRate = chainNode.getCommissionRate() != null ? chainNode.getCommissionRate() : BigDecimal.ZERO;
+            if (i == 0) {
+                chainRate = HUNDRED.subtract(totalSubRate);
+            }
+            if (chainRate.compareTo(BigDecimal.ZERO) < 0) {
+                chainRate = BigDecimal.ZERO;
+            }
+
+            BigDecimal actualAmount = fallbackAmount.multiply(chainRate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
+            BigDecimal actualRate = fallbackRate.multiply(chainRate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
+            return new DealerCommissionDisplay(actualRate, actualAmount);
+        }
+
+        return new DealerCommissionDisplay(fallbackRate, fallbackAmount);
+    }
+
+    private boolean isCurrentDealer(PaymentOrder order, DeviceDealer chainNode, DealerQueryScope queryScope) {
+        if (queryScope != null && queryScope.getDealerCode() != null && chainNode.getDealerCode() != null
+                && queryScope.getDealerCode().trim().equalsIgnoreCase(chainNode.getDealerCode().trim())) {
+            return true;
+        }
+        if (queryScope != null && queryScope.getDealerId() != null && chainNode.getDealerId() != null
+                && queryScope.getDealerId().equals(chainNode.getDealerId())) {
+            return true;
+        }
+        if (order.getDealerId() != null && chainNode.getDealerId() != null && order.getDealerId().equals(chainNode.getDealerId())) {
+            return true;
+        }
+        if (order.getDealerCode() == null || chainNode.getDealerCode() == null) {
+            return false;
+        }
+        return order.getDealerCode().trim().equalsIgnoreCase(chainNode.getDealerCode().trim());
+    }
+
+    private static class DealerQueryScope {
+        private final String installerCode;
+        private final String dealerCode;
+        private final Long dealerId;
+        private final List<String> dealerDeviceIds;
+        private final boolean needOrCondition;
+
+        private DealerQueryScope(String installerCode, String dealerCode, Long dealerId,
+                                 List<String> dealerDeviceIds, boolean needOrCondition) {
+            this.installerCode = installerCode;
+            this.dealerCode = dealerCode;
+            this.dealerId = dealerId;
+            this.dealerDeviceIds = dealerDeviceIds != null ? dealerDeviceIds : Collections.emptyList();
+            this.needOrCondition = needOrCondition;
+        }
+
+        public String getInstallerCode() {
+            return installerCode;
+        }
+
+        public String getDealerCode() {
+            return dealerCode;
+        }
+
+        public Long getDealerId() {
+            return dealerId;
+        }
+
+        public List<String> getDealerDeviceIds() {
+            return dealerDeviceIds;
+        }
+
+        public boolean isNeedOrCondition() {
+            return needOrCondition;
+        }
+    }
+
+    private static class DealerCommissionDisplay {
+        private final BigDecimal rate;
+        private final BigDecimal amount;
+
+        private DealerCommissionDisplay(BigDecimal rate, BigDecimal amount) {
+            this.rate = rate;
+            this.amount = amount;
+        }
+
+        public BigDecimal getRate() {
+            return rate;
+        }
+
+        public BigDecimal getAmount() {
+            return amount;
+        }
     }
 
     /**

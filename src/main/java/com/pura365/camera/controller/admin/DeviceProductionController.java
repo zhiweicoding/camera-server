@@ -16,6 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.ByteArrayOutputStream;
+import java.math.BigDecimal;
 import java.text.SimpleDateFormat;
 import java.util.HashMap;
 import java.util.List;
@@ -453,22 +454,39 @@ public class DeviceProductionController {
     /**
      * 扫码分配经销商（单个，兼容旧接口）
      * 根据设备ID和经销商代码，更新设备的经销商关联（不修改设备ID）
-     * 请求体：{ "deviceId": "A110000000000001", "vendorCode": "01" }
+     * 请求体：{ "deviceId": "A110000000000001", "vendorCode": "01", "commissionRate": 45 }
      */
     @PostMapping("/devices/scan-assign-dealer")
     public ApiResponse<Map<String, Object>> scanAssignDealer(
             @RequestAttribute(value = "currentUserId", required = false) Long currentUserId,
-            @RequestBody Map<String, String> body) {
+            @RequestBody Map<String, Object> body) {
         try {
-            String deviceId = body.get("deviceId");
-            String vendorCode = body.get("vendorCode");
+            String deviceId = (String) body.get("deviceId");
+            String vendorCode = (String) body.get("vendorCode");
+            Object commissionRateObj = body.get("commissionRate");
+
             if (deviceId == null || deviceId.trim().isEmpty()) {
                 return ApiResponse.error(400, "设备ID不能为空");
             }
             if (vendorCode == null || vendorCode.length() != 2) {
                 return ApiResponse.error(400, "经销商代码必须是2位");
             }
-            Map<String, Object> result = productionService.scanAssignDealer(currentUserId, deviceId.trim(), vendorCode);
+
+            // 解析 commissionRate
+            BigDecimal commissionRate = null;
+            if (commissionRateObj != null) {
+                if (commissionRateObj instanceof Number) {
+                    commissionRate = new BigDecimal(commissionRateObj.toString());
+                } else if (commissionRateObj instanceof String) {
+                    try {
+                        commissionRate = new BigDecimal((String) commissionRateObj);
+                    } catch (NumberFormatException e) {
+                        return ApiResponse.error(400, "分销链路比例格式错误");
+                    }
+                }
+            }
+
+            Map<String, Object> result = productionService.scanAssignDealer(currentUserId, deviceId.trim(), vendorCode, commissionRate);
             return ApiResponse.success(result);
         } catch (RuntimeException e) {
             return ApiResponse.error(400, e.getMessage());
