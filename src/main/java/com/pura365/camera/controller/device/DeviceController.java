@@ -2,10 +2,13 @@ package com.pura365.camera.controller.device;
 
 import com.pura365.camera.model.ApiResponse;
 import com.pura365.camera.model.device.*;
+import com.pura365.camera.domain.Device;
+import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.service.DeviceService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import io.swagger.v3.oas.annotations.media.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,6 +19,7 @@ import org.springframework.web.multipart.MultipartFile;
 import javax.validation.Valid;
 import java.io.File;
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -85,9 +89,17 @@ public class DeviceController {
      */
     private static final String MSG_DIRECTION_REQUIRED = "方向参数不能为空";
 
+    /**
+     * 错误消息：未提供可更新设置项
+     */
+    private static final String MSG_NO_SETTINGS_PROVIDED = "未提供可记录的设备设置项";
+
     @Autowired
     private DeviceService deviceService;
-    
+
+    @Autowired
+    private DeviceRepository deviceRepository;
+
     @Autowired
     private com.pura365.camera.service.CloudStorageService cloudStorageService;
 
@@ -378,6 +390,219 @@ public class DeviceController {
         } catch (Exception e) {
             log.error("发送PTZ指令失败 - userId={}, deviceId={}, direction={}", currentUserId, deviceId, request.getDirection(), e);
             return ApiResponse.error(HTTP_INTERNAL_ERROR, "发送PTZ指令失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * App 直连 MQTT 后，同步设备配置变更到后端数据库（仅记录，不发送MQTT）
+     */
+    @Operation(summary = "同步设备设置", description = "用于App直连MQTT成功后回写设备配置到后端，不触发MQTT下发")
+    @PostMapping("/{id}/settings/sync-direct")
+    public ApiResponse<DeviceDetailVO> syncDeviceSettingsFromDirectMqtt(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @Parameter(description = "设备ID") @PathVariable("id") String deviceId,
+            @RequestBody DirectMqttSettingsSyncRequest request) {
+        log.info("同步设备设置(直连MQTT) - userId={}, deviceId={}, request={}", currentUserId, deviceId, request);
+
+        if (!deviceService.hasUserDevice(currentUserId, deviceId)) {
+            log.warn("同步设备设置失败，无权限 - userId={}, deviceId={}", currentUserId, deviceId);
+            return ApiResponse.error(HTTP_FORBIDDEN, MSG_NO_PERMISSION);
+        }
+
+        Device device = deviceRepository.selectById(deviceId);
+        if (device == null) {
+            log.warn("同步设备设置失败，设备不存在 - userId={}, deviceId={}", currentUserId, deviceId);
+            return ApiResponse.error(HTTP_NOT_FOUND, MSG_DEVICE_NOT_FOUND);
+        }
+
+        boolean updated = false;
+
+        if (request.getRotate() != null) {
+            if (request.getRotate() != 0 && request.getRotate() != 1) {
+                return ApiResponse.error(HTTP_BAD_REQUEST, "rotate 仅支持 0 或 1");
+            }
+            device.setRotate(request.getRotate());
+            updated = true;
+        }
+
+        if (request.getWhiteLed() != null) {
+            if (request.getWhiteLed() != 0 && request.getWhiteLed() != 1) {
+                return ApiResponse.error(HTTP_BAD_REQUEST, "white_led 仅支持 0 或 1");
+            }
+            device.setWhiteLed(request.getWhiteLed());
+            updated = true;
+        }
+
+        if (request.getBulbDetect() != null) {
+            if (request.getBulbDetect() < 0 || request.getBulbDetect() > 2) {
+                return ApiResponse.error(HTTP_BAD_REQUEST, "bulb_detect 仅支持 0~2");
+            }
+            device.setBulbDetect(request.getBulbDetect());
+            updated = true;
+        }
+
+        if (request.getBulbBrightness() != null) {
+            if (request.getBulbBrightness() < 0 || request.getBulbBrightness() > 100) {
+                return ApiResponse.error(HTTP_BAD_REQUEST, "bulb_brightness 仅支持 0~100");
+            }
+            device.setBulbBrightness(request.getBulbBrightness());
+            updated = true;
+        }
+
+        if (request.getBulbEnable() != null) {
+            if (request.getBulbEnable() != 0 && request.getBulbEnable() != 1) {
+                return ApiResponse.error(HTTP_BAD_REQUEST, "bulb_enable 仅支持 0 或 1");
+            }
+            device.setBulbEnable(request.getBulbEnable());
+            updated = true;
+        }
+
+        if (request.getBulbTimeOn1() != null) {
+            device.setBulbTimeOn1(request.getBulbTimeOn1());
+            updated = true;
+        }
+
+        if (request.getBulbTimeOff1() != null) {
+            device.setBulbTimeOff1(request.getBulbTimeOff1());
+            updated = true;
+        }
+
+        if (request.getBulbTimeOn2() != null) {
+            device.setBulbTimeOn2(request.getBulbTimeOn2());
+            updated = true;
+        }
+
+        if (request.getBulbTimeOff2() != null) {
+            device.setBulbTimeOff2(request.getBulbTimeOff2());
+            updated = true;
+        }
+
+        if (!updated) {
+            return ApiResponse.error(HTTP_BAD_REQUEST, MSG_NO_SETTINGS_PROVIDED);
+        }
+
+        device.setUpdatedAt(LocalDateTime.now());
+        deviceRepository.updateById(device);
+
+        DeviceDetailVO detail = deviceService.getDeviceDetail(currentUserId, deviceId);
+        log.info("同步设备设置成功(直连MQTT) - userId={}, deviceId={}", currentUserId, deviceId);
+        return ApiResponse.success("设置同步成功", detail);
+    }
+
+    @Schema(description = "直连MQTT设备设置同步请求")
+    public static class DirectMqttSettingsSyncRequest {
+        @Schema(description = "画面旋转: 0-正常, 1-旋转180度")
+        private Integer rotate;
+
+        @Schema(description = "白光灯: 0-关闭, 1-开启")
+        private Integer whiteLed;
+
+        @Schema(description = "灯泡模式: 0-手动, 1-自动, 2-定时")
+        private Integer bulbDetect;
+
+        @Schema(description = "灯泡亮度: 0-100")
+        private Integer bulbBrightness;
+
+        @Schema(description = "灯泡开关: 0-关, 1-开")
+        private Integer bulbEnable;
+
+        @Schema(description = "定时1开启时间, 格式HH:mm")
+        private String bulbTimeOn1;
+
+        @Schema(description = "定时1关闭时间, 格式HH:mm")
+        private String bulbTimeOff1;
+
+        @Schema(description = "定时2开启时间, 格式HH:mm")
+        private String bulbTimeOn2;
+
+        @Schema(description = "定时2关闭时间, 格式HH:mm")
+        private String bulbTimeOff2;
+
+        public Integer getRotate() {
+            return rotate;
+        }
+
+        public void setRotate(Integer rotate) {
+            this.rotate = rotate;
+        }
+
+        public Integer getWhiteLed() {
+            return whiteLed;
+        }
+
+        public void setWhiteLed(Integer whiteLed) {
+            this.whiteLed = whiteLed;
+        }
+
+        public Integer getBulbDetect() {
+            return bulbDetect;
+        }
+
+        public void setBulbDetect(Integer bulbDetect) {
+            this.bulbDetect = bulbDetect;
+        }
+
+        public Integer getBulbBrightness() {
+            return bulbBrightness;
+        }
+
+        public void setBulbBrightness(Integer bulbBrightness) {
+            this.bulbBrightness = bulbBrightness;
+        }
+
+        public Integer getBulbEnable() {
+            return bulbEnable;
+        }
+
+        public void setBulbEnable(Integer bulbEnable) {
+            this.bulbEnable = bulbEnable;
+        }
+
+        public String getBulbTimeOn1() {
+            return bulbTimeOn1;
+        }
+
+        public void setBulbTimeOn1(String bulbTimeOn1) {
+            this.bulbTimeOn1 = bulbTimeOn1;
+        }
+
+        public String getBulbTimeOff1() {
+            return bulbTimeOff1;
+        }
+
+        public void setBulbTimeOff1(String bulbTimeOff1) {
+            this.bulbTimeOff1 = bulbTimeOff1;
+        }
+
+        public String getBulbTimeOn2() {
+            return bulbTimeOn2;
+        }
+
+        public void setBulbTimeOn2(String bulbTimeOn2) {
+            this.bulbTimeOn2 = bulbTimeOn2;
+        }
+
+        public String getBulbTimeOff2() {
+            return bulbTimeOff2;
+        }
+
+        public void setBulbTimeOff2(String bulbTimeOff2) {
+            this.bulbTimeOff2 = bulbTimeOff2;
+        }
+
+        @Override
+        public String toString() {
+            return "DirectMqttSettingsSyncRequest{" +
+                    "rotate=" + rotate +
+                    ", whiteLed=" + whiteLed +
+                    ", bulbDetect=" + bulbDetect +
+                    ", bulbBrightness=" + bulbBrightness +
+                    ", bulbEnable=" + bulbEnable +
+                    ", bulbTimeOn1='" + bulbTimeOn1 + '\'' +
+                    ", bulbTimeOff1='" + bulbTimeOff1 + '\'' +
+                    ", bulbTimeOn2='" + bulbTimeOn2 + '\'' +
+                    ", bulbTimeOff2='" + bulbTimeOff2 + '\'' +
+                    '}';
         }
     }
 }
