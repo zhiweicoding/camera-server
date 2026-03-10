@@ -5,6 +5,7 @@ import com.pura365.camera.domain.*;
 import com.pura365.camera.enums.CommissionFeeType;
 import com.pura365.camera.enums.CommissionProfitMode;
 import com.pura365.camera.repository.*;
+import com.pura365.camera.util.MoneyScaleUtil;
 import com.pura365.camera.util.PaymentFeeRuleUtil;
 import lombok.Data;
 import org.slf4j.Logger;
@@ -13,7 +14,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -147,7 +147,7 @@ public class CommissionCalculateService {
         result.setFeeAmount(feeAmount);
 
         // 4. 获取套餐成本（优先分润配置，其次回退套餐表）
-        BigDecimal planCost = resolvePlanCost(planId, planCommission);
+        BigDecimal planCost = MoneyScaleUtil.keepTwoDecimals(resolvePlanCost(planId, planCommission));
         result.setPlanCost(planCost);
 
         // 5. 计算可分润金额 = 支付金额 - 手续费 - 套餐成本
@@ -164,12 +164,12 @@ public class CommissionCalculateService {
                 ? device.getDealerCommissionRate() : BigDecimal.ZERO;
 
         // 7. 计算装机商分润 = 可分润金额 × 装机商比例
-        BigDecimal installerAmount = profitAmount.multiply(installerRate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
+        BigDecimal installerAmount = MoneyScaleUtil.percentOf(profitAmount, installerRate);
         result.setInstallerBaseAmount(installerAmount);
         result.setInstallerActualAmount(installerAmount);
 
         // 8. 计算经销商分润 = 可分润金额 × 经销商比例
-        BigDecimal dealerAmount = profitAmount.multiply(dealerRate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
+        BigDecimal dealerAmount = MoneyScaleUtil.percentOf(profitAmount, dealerRate);
         result.setLevel1BaseAmount(dealerAmount);
 
         // 9. 计算公司利润 = 可分润金额 - 装机商分润 - 经销商分润
@@ -271,11 +271,11 @@ public class CommissionCalculateService {
             if (i == 0) {
                 // 一级经销商（最上级）：分润 = 总池子 × (100% - 所有下级的rate之和)
                 BigDecimal topRate = HUNDRED.subtract(totalSubRate);
-                actualAmount = dealerPoolAmount.multiply(topRate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
+                actualAmount = MoneyScaleUtil.percentOf(dealerPoolAmount, topRate);
                 rate = topRate; // 显示计算出的比例
             } else {
                 // 下级经销商：分润 = 总池子 × 该经销商的rate
-                actualAmount = dealerPoolAmount.multiply(rate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
+                actualAmount = MoneyScaleUtil.percentOf(dealerPoolAmount, rate);
             }
 
             CommissionDetail detail = new CommissionDetail(
@@ -380,13 +380,13 @@ public class CommissionCalculateService {
 
         BigDecimal fee = BigDecimal.ZERO;
         if (feeRate != null) {
-            fee = payAmount.multiply(feeRate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
+            fee = MoneyScaleUtil.percentOf(payAmount, feeRate);
         }
         if (CommissionFeeType.MIXED == feeType && feeFixed != null) {
             fee = fee.add(feeFixed);
         }
 
-        return fee.setScale(2, RoundingMode.HALF_UP);
+        return MoneyScaleUtil.keepTwoDecimals(fee);
     }
 
     private BigDecimal calculateProfitAmount(BigDecimal payAmount, BigDecimal feeAmount, BigDecimal planCost,
@@ -401,7 +401,7 @@ public class CommissionCalculateService {
         }
 
         return distributable.compareTo(BigDecimal.ZERO) > 0
-                ? distributable.setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+                ? MoneyScaleUtil.keepTwoDecimals(distributable) : BigDecimal.ZERO;
     }
 
     private BigDecimal resolvePlanCost(String planId, PlanCommission commission) {

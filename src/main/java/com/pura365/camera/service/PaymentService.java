@@ -6,6 +6,7 @@ import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.enums.PaymentOrderStatus;
 import com.pura365.camera.model.payment.*;
 import com.pura365.camera.repository.*;
+import com.pura365.camera.util.MoneyScaleUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -607,9 +608,7 @@ public class PaymentService {
         BigDecimal installerRate = device.getInstallerCommissionRate();
         order.setInstallerRate(installerRate != null ? installerRate : BigDecimal.ZERO);
         if (installerRate != null && installerRate.compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal installerAmount = orderAmount
-                    .multiply(installerRate)
-                    .divide(new BigDecimal("100"), 2, BigDecimal.ROUND_HALF_UP);
+            BigDecimal installerAmount = MoneyScaleUtil.percentOf(orderAmount, installerRate);
             order.setInstallerAmount(installerAmount);
         } else {
             order.setInstallerAmount(BigDecimal.ZERO);
@@ -630,9 +629,7 @@ public class PaymentService {
         BigDecimal dealerRate = device.getDealerCommissionRate();
         order.setDealerRate(dealerRate != null ? dealerRate : BigDecimal.ZERO);
         if (dealerRate != null && dealerRate.compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal dealerAmount = orderAmount
-                    .multiply(dealerRate)
-                    .divide(new BigDecimal("100"), 2, BigDecimal.ROUND_HALF_UP);
+            BigDecimal dealerAmount = MoneyScaleUtil.percentOf(orderAmount, dealerRate);
             order.setDealerAmount(dealerAmount);
         } else {
             order.setDealerAmount(BigDecimal.ZERO);

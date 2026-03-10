@@ -9,6 +9,7 @@ import com.pura365.camera.model.report.PageResult;
 import com.pura365.camera.model.report.RechargeOrderQueryRequest;
 import com.pura365.camera.model.report.RechargeOrderReportVO;
 import com.pura365.camera.repository.*;
+import com.pura365.camera.util.MoneyScaleUtil;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.slf4j.Logger;
@@ -19,7 +20,6 @@ import org.springframework.stereotype.Service;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -438,11 +438,11 @@ public class RechargeOrderReportService {
             vo.setPlanType(plan.getType());
             vo.setPlanTypeName(commissionService.getPlanTypeName(plan.getType()));
             vo.setCloudType(getCloudType(plan.getType()));
-            vo.setOriginalPrice(plan.getPrice());
+            vo.setOriginalPrice(MoneyScaleUtil.keepTwoDecimals(plan.getPrice()));
         }
 
         // 支付信息
-        vo.setPayAmount(order.getAmount());
+        vo.setPayAmount(MoneyScaleUtil.keepTwoDecimals(order.getAmount()));
         vo.setCurrency(order.getCurrency());
         vo.setCurrencyName(getCurrencyName(order.getCurrency()));
         vo.setPaymentMethod(order.getPaymentMethod());
@@ -462,17 +462,21 @@ public class RechargeOrderReportService {
             vo.setFeeRateDesc(commissionService.buildFeeDesc(commission));
 
             // 计算手续费
-            BigDecimal feeAmount = snapshotFeeAmount != null ? snapshotFeeAmount : calculateFee(order.getAmount(), commission);
+            BigDecimal feeAmount = snapshotFeeAmount != null
+                    ? MoneyScaleUtil.keepTwoDecimals(snapshotFeeAmount)
+                    : calculateFee(order.getAmount(), commission);
             vo.setFeeAmount(feeAmount);
 
             // 套餐返点和成本
             vo.setRebateDesc(commission.getRebateRate() != null ? commission.getRebateRate() + "%" : "-");
-            BigDecimal planCost = snapshotPlanCost != null ? snapshotPlanCost
-                    : (commission.getPlanCost() != null ? commission.getPlanCost() : BigDecimal.ZERO);
+            BigDecimal planCost = snapshotPlanCost != null
+                    ? MoneyScaleUtil.keepTwoDecimals(snapshotPlanCost)
+                    : MoneyScaleUtil.keepTwoDecimals(commission.getPlanCost() != null ? commission.getPlanCost() : BigDecimal.ZERO);
             vo.setPlanCost(planCost);
 
             // 计算可分润金额
-            BigDecimal profitAmount = snapshotProfitAmount != null ? snapshotProfitAmount
+            BigDecimal profitAmount = snapshotProfitAmount != null
+                    ? MoneyScaleUtil.keepTwoDecimals(snapshotProfitAmount)
                     : calculateProfitAmount(order.getAmount(), feeAmount, planCost, commission);
             vo.setProfitAmount(profitAmount);
 
@@ -485,12 +489,12 @@ public class RechargeOrderReportService {
             BigDecimal installerRate = order.getInstallerRate() != null ? order.getInstallerRate() : order.getCommissionRate();
             BigDecimal installerAmount = order.getInstallerAmount();
             vo.setInstallerRateDesc(installerRate != null ? installerRate + "%" : "0%");
-            vo.setInstallerAmount(installerAmount != null ? installerAmount : BigDecimal.ZERO);
+            vo.setInstallerAmount(installerAmount != null ? MoneyScaleUtil.keepTwoDecimals(installerAmount) : BigDecimal.ZERO);
 
             // 经销商分润：优先按 device_dealer 链路计算当前经销商实得，未命中时回落订单快照
             DealerCommissionDisplay dealerDisplay = resolveDealerCommissionDisplay(order, queryScope);
             vo.setLevel1RateDesc(dealerDisplay.getRate() != null ? dealerDisplay.getRate() + "%" : "0%");
-            vo.setLevel1Amount(dealerDisplay.getAmount() != null ? dealerDisplay.getAmount() : BigDecimal.ZERO);
+            vo.setLevel1Amount(dealerDisplay.getAmount() != null ? MoneyScaleUtil.keepTwoDecimals(dealerDisplay.getAmount()) : BigDecimal.ZERO);
 
             // 二级经销商分润（已废弃，统一显示为0）
             vo.setLevel2RateDesc("0%");
@@ -499,10 +503,10 @@ public class RechargeOrderReportService {
             // 无分润配置时的默认值
             vo.setPayeeEntity("-");
             vo.setFeeRateDesc("-");
-            vo.setFeeAmount(snapshotFeeAmount != null ? snapshotFeeAmount : BigDecimal.ZERO);
+            vo.setFeeAmount(snapshotFeeAmount != null ? MoneyScaleUtil.keepTwoDecimals(snapshotFeeAmount) : BigDecimal.ZERO);
             vo.setRebateDesc("-");
-            vo.setPlanCost(snapshotPlanCost != null ? snapshotPlanCost : BigDecimal.ZERO);
-            vo.setProfitAmount(snapshotProfitAmount != null ? snapshotProfitAmount : BigDecimal.ZERO);
+            vo.setPlanCost(snapshotPlanCost != null ? MoneyScaleUtil.keepTwoDecimals(snapshotPlanCost) : BigDecimal.ZERO);
+            vo.setProfitAmount(snapshotProfitAmount != null ? MoneyScaleUtil.keepTwoDecimals(snapshotProfitAmount) : BigDecimal.ZERO);
             vo.setProfitMode("-");
             vo.setProfitModeName("-");
             vo.setInstallerRateDesc("0%");
@@ -534,13 +538,13 @@ public class RechargeOrderReportService {
         }
 
         if (feeRate != null) {
-            fee = amount.multiply(feeRate).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+            fee = MoneyScaleUtil.percentOf(amount, feeRate);
         }
         if (CommissionFeeType.MIXED == feeType && feeFixed != null) {
             fee = fee.add(feeFixed);
         }
 
-        return fee.setScale(2, RoundingMode.HALF_UP);
+        return MoneyScaleUtil.keepTwoDecimals(fee);
     }
 
     /**
@@ -560,7 +564,7 @@ public class RechargeOrderReportService {
             profit = profit.subtract(planCost != null ? planCost : BigDecimal.ZERO);
         }
 
-        return profit.compareTo(BigDecimal.ZERO) > 0 ? profit.setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+        return profit.compareTo(BigDecimal.ZERO) > 0 ? MoneyScaleUtil.keepTwoDecimals(profit) : BigDecimal.ZERO;
     }
 
     /**
@@ -570,7 +574,7 @@ public class RechargeOrderReportService {
         if (profitAmount == null || rate == null || rate.compareTo(BigDecimal.ZERO) == 0) {
             return BigDecimal.ZERO;
         }
-        return profitAmount.multiply(rate).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+        return MoneyScaleUtil.percentOf(profitAmount, rate);
     }
 
     private List<String> resolveDealerDeviceIds(String dealerCode) {
@@ -626,8 +630,8 @@ public class RechargeOrderReportService {
                 chainRate = BigDecimal.ZERO;
             }
 
-            BigDecimal actualAmount = fallbackAmount.multiply(chainRate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
-            BigDecimal actualRate = fallbackRate.multiply(chainRate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
+            BigDecimal actualAmount = MoneyScaleUtil.percentOf(fallbackAmount, chainRate);
+            BigDecimal actualRate = MoneyScaleUtil.percentOf(fallbackRate, chainRate);
             return new DealerCommissionDisplay(actualRate, actualAmount);
         }
 
@@ -834,11 +838,7 @@ public class RechargeOrderReportService {
      */
     private void createMoneyCell(Row row, int col, BigDecimal value, CellStyle style) {
         Cell cell = row.createCell(col);
-        if (value != null) {
-            cell.setCellValue(value.doubleValue());
-        } else {
-            cell.setCellValue(0.0);
-        }
+        cell.setCellValue(MoneyScaleUtil.keepTwoDecimals(value).doubleValue());
         cell.setCellStyle(style);
     }
 }

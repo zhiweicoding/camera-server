@@ -341,7 +341,7 @@ public class DeviceProductionService {
         if (vendorChanged) {
             // 补齐历史设备的初始链路节点，避免链路只有下级节点
             // 一级经销商的 commission_rate 应该为 NULL，让系统自动计算
-            ensureCurrentDealerInChain(oldDeviceId, device, oldVendorCode, null);
+            ensureCurrentDealerInChain(oldDeviceId, device, currentDealerCode, null);
         }
 
         // 更新设备信息（机身码保持不变）
@@ -493,7 +493,7 @@ public class DeviceProductionService {
                 if (vendorChanged) {
                     // 补齐历史设备的初始链路节点，避免后续只出现下级节点导致链路断层
                     // 一级经销商的 commission_rate 应该为 NULL，让系统自动计算
-                    ensureCurrentDealerInChain(oldDeviceId, device, oldVendorCode, null);
+                    ensureCurrentDealerInChain(oldDeviceId, device, currentDealerCode, null);
                 }
                 if (oldVendorCode != null) {
                     device.setVendorCode(oldVendorCode);
@@ -623,8 +623,7 @@ public class DeviceProductionService {
                 return;
             }
 
-            BigDecimal seedRate = commissionRate != null ? commissionRate : BigDecimal.ZERO;
-            writeDeviceDealerRecord(deviceId, device, dealer, seedRate);
+            writeDeviceDealerRecord(deviceId, device, dealer, commissionRate);
         } catch (Exception e) {
             // 历史数据兼容：失败不阻断主流程
             log.warn("补写初始 device_dealer 链路失败: deviceId={}, dealerCode={}, error={}",
@@ -1659,8 +1658,15 @@ public class DeviceProductionService {
                             name = dlr.getName();
                         }
                     }
+
+                    // 展示兜底：一级经销商未写入链路比例时，回退到设备初始经销商比例
+                    BigDecimal displayRate = dd.getCommissionRate();
+                    if (displayRate == null && dd.getLevel() != null && dd.getLevel() == 1) {
+                        displayRate = d.getDealerCommissionRate();
+                    }
+
                     boolean canShowNodeRate = showDealerCommission && canViewDealerNodeCommission(scope, dd.getDealerId(), dealerChain);
-                    chainNames.add(canShowNodeRate ? name + "(" + dd.getCommissionRate() + "%)" : name);
+                    chainNames.add(canShowNodeRate && displayRate != null ? name + "(" + displayRate + "%)" : name);
                 }
                 map.put("vendorChain", String.join(" → ", chainNames));
                 map.put("vendorChainList", buildVisibleDealerChain(scope, showDealerCommission, dealerChain));
