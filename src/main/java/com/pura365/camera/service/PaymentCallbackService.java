@@ -83,6 +83,9 @@ public class PaymentCallbackService {
 
         // 更新订单状态
         order.setStatus(PaymentOrderStatus.PAID);
+        if (paymentMethod != null && !paymentMethod.trim().isEmpty()) {
+            order.setPaymentMethod(paymentMethod.trim());
+        }
         order.setThirdOrderId(transactionId);
         order.setPaidAt(new Date());
         order.setUpdatedAt(new Date());

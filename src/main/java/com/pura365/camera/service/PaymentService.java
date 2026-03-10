@@ -68,6 +68,12 @@ public class PaymentService {
     private PaypalService paypalService;
 
     @Autowired
+    private ApplePayService applePayService;
+
+    @Autowired
+    private PaymentCallbackService paymentCallbackService;
+
+    @Autowired
     private CommissionCalculateService commissionCalculateService;
 
     @Value("${app.payment.default-currency:CNY}")
@@ -512,6 +518,73 @@ public class PaymentService {
     /**
      * 根据订单ID和用户ID获取订单（权限校验）
      */
+    public ApplePayResult applePayV2(Long userId, ApplePayRequest request) {
+        ApplePayResult result = new ApplePayResult();
+
+        if (request == null || !StringUtils.hasText(request.getOrderId())) {
+            result.setErrorCode(400);
+            result.setErrorMessage("order_id cannot be empty");
+            return result;
+        }
+        if (!StringUtils.hasText(request.getReceiptData())) {
+            result.setErrorCode(400);
+            result.setErrorMessage("receipt_data cannot be empty");
+            return result;
+        }
+
+        PaymentOrder order = getOrderByIdAndUser(request.getOrderId(), userId);
+        if (order == null) {
+            result.setErrorCode(404);
+            result.setErrorMessage("Order not found");
+            return result;
+        }
+
+        if (PaymentOrderStatus.PAID == order.getStatus()) {
+            ApplePayVO vo = new ApplePayVO();
+            vo.setTransactionId(order.getThirdOrderId());
+            vo.setStatus("completed");
+            result.setSuccess(true);
+            result.setData(vo);
+            return result;
+        }
+        if (PaymentOrderStatus.PENDING != order.getStatus()) {
+            log.warn("Order status does not allow payment: orderId={}, status={}", request.getOrderId(), order.getStatus());
+            result.setErrorCode(409);
+            result.setErrorMessage("Order status does not allow payment");
+            return result;
+        }
+
+        ApplePayService.AppleReceiptVerifyResult verifyResult = applePayService.verifyReceipt(request.getReceiptData());
+        if (!verifyResult.isSuccess()) {
+            result.setErrorCode(400);
+            result.setErrorMessage("Apple receipt verify failed: " + verifyResult.getErrorMessage());
+            return result;
+        }
+
+        String transactionId = verifyResult.getTransactionId();
+        if (!StringUtils.hasText(transactionId)) {
+            transactionId = "apple_" + order.getOrderId();
+        }
+
+        boolean callbackSuccess = paymentCallbackService.handlePaymentSuccess(
+                order.getOrderId(),
+                "apple",
+                transactionId
+        );
+        if (!callbackSuccess) {
+            result.setErrorCode(500);
+            result.setErrorMessage("Failed to handle payment callback");
+            return result;
+        }
+
+        ApplePayVO vo = new ApplePayVO();
+        vo.setTransactionId(transactionId);
+        vo.setStatus("completed");
+        result.setSuccess(true);
+        result.setData(vo);
+        return result;
+    }
+
     private PaymentOrder getOrderByIdAndUser(String orderId, Long userId) {
         PaymentOrder order = findOrderByOrderId(orderId);
         if (order == null || order.getUserId() == null || !order.getUserId().equals(userId)) {
@@ -656,6 +729,45 @@ public class PaymentService {
     /**
      * 创建订单结果
      */
+    public static class ApplePayResult {
+        private boolean success;
+        private ApplePayVO data;
+        private int errorCode;
+        private String errorMessage;
+
+        public boolean isSuccess() {
+            return success;
+        }
+
+        public void setSuccess(boolean success) {
+            this.success = success;
+        }
+
+        public ApplePayVO getData() {
+            return data;
+        }
+
+        public void setData(ApplePayVO data) {
+            this.data = data;
+        }
+
+        public int getErrorCode() {
+            return errorCode;
+        }
+
+        public void setErrorCode(int errorCode) {
+            this.errorCode = errorCode;
+        }
+
+        public String getErrorMessage() {
+            return errorMessage;
+        }
+
+        public void setErrorMessage(String errorMessage) {
+            this.errorMessage = errorMessage;
+        }
+    }
+
     public static class CreateOrderResult {
         private boolean success;
         private OrderVO order;

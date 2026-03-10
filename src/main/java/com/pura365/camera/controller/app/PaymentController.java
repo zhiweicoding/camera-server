@@ -1,9 +1,7 @@
 package com.pura365.camera.controller.app;
 
-import com.paypal.http.serializer.Json;
 import com.pura365.camera.model.ApiResponse;
 import com.pura365.camera.model.payment.*;
-import com.pura365.camera.service.GooglePayService;
 import com.pura365.camera.service.PaymentService;
 import com.pura365.camera.service.PaymentService.CreateOrderResult;
 import io.swagger.v3.oas.annotations.Operation;
@@ -128,6 +126,27 @@ public class PaymentController {
         }
         log.info("PayPal支付URL获取成功 - userId={}, orderId={}", currentUserId, orderId);
         return ApiResponse.success(result);
+    }
+
+    /**
+     * Apple Pay payment.
+     */
+    @Operation(summary = "Apple Pay", description = "Verify Apple IAP receipt and complete payment")
+    @PostMapping("/apple")
+    public ApiResponse<ApplePayVO> applePay(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @RequestBody(required = false) ApplePayRequest request) {
+        String orderId = request != null ? request.getOrderId() : null;
+        log.info("Apple pay - userId={}, orderId={}", currentUserId, orderId);
+
+        PaymentService.ApplePayResult result = paymentService.applePayV2(currentUserId, request);
+        if (!result.isSuccess()) {
+            log.warn("Apple pay failed - userId={}, orderId={}, error={}", currentUserId, orderId, result.getErrorMessage());
+            return ApiResponse.error(result.getErrorCode(), result.getErrorMessage());
+        }
+
+        log.info("Apple pay success - userId={}, orderId={}", currentUserId, orderId);
+        return ApiResponse.success(result.getData());
     }
 
     private String resolveOrderId(PayRequest request, String orderIdSnake, String orderIdCamel) {
