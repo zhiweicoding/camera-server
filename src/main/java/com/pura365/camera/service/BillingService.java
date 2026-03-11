@@ -35,11 +35,12 @@ public class BillingService {
     private static final String DEFAULT_CURRENCY = "CNY";
     private static final String DIMENSION_INSTALLER = "installer";
     private static final String DIMENSION_DEALER = "dealer";
+    private static final int SQL_IN_BATCH_SIZE = 500;
 
     @Autowired
     private PaymentOrderRepository orderRepository;
 
-@Autowired
+    @Autowired
     private DealerRepository dealerRepository;
 
     @Autowired
@@ -56,6 +57,9 @@ public class BillingService {
 
     @Autowired
     private DeviceDealerRepository deviceDealerRepository;
+
+    @Autowired
+    private PaymentOrderDealerSettlementRepository paymentOrderDealerSettlementRepository;
 
     private BigDecimal safeAmount(BigDecimal value) {
         return value != null ? value : BigDecimal.ZERO;
@@ -305,6 +309,150 @@ public class BillingService {
             return isSettledFlag(order.getDealerIsSettled());
         }
         return isSettledFlag(order.getIsSettled());
+    }
+
+    private Map<String, Set<Long>> loadDealerSettlementMapByOrderIds(Collection<String> orderIds) {
+        if (orderIds == null || orderIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        List<String> normalizedOrderIds = new ArrayList<>();
+        Set<String> dedup = new LinkedHashSet<>();
+        for (String orderId : orderIds) {
+            if (hasText(orderId)) {
+                dedup.add(orderId.trim());
+            }
+        }
+        normalizedOrderIds.addAll(dedup);
+        if (normalizedOrderIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<String, Set<Long>> settlementMap = new HashMap<>();
+        for (int i = 0; i < normalizedOrderIds.size(); i += SQL_IN_BATCH_SIZE) {
+            int toIndex = Math.min(i + SQL_IN_BATCH_SIZE, normalizedOrderIds.size());
+            List<String> batchOrderIds = normalizedOrderIds.subList(i, toIndex);
+            QueryWrapper<PaymentOrderDealerSettlement> qw = new QueryWrapper<>();
+            qw.lambda().in(PaymentOrderDealerSettlement::getOrderId, batchOrderIds);
+            List<PaymentOrderDealerSettlement> records = paymentOrderDealerSettlementRepository.selectList(qw);
+            for (PaymentOrderDealerSettlement record : records) {
+                if (record == null || !hasText(record.getOrderId()) || record.getDealerId() == null) {
+                    continue;
+                }
+                settlementMap.computeIfAbsent(record.getOrderId(), key -> new HashSet<>()).add(record.getDealerId());
+            }
+        }
+        return settlementMap;
+    }
+
+    private Map<String, Set<Long>> loadDealerSettlementMap(List<PaymentOrder> orders) {
+        if (orders == null || orders.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        List<String> orderIds = new ArrayList<>(orders.size());
+        for (PaymentOrder order : orders) {
+            if (order != null && hasText(order.getOrderId())) {
+                orderIds.add(order.getOrderId());
+            }
+        }
+        return loadDealerSettlementMapByOrderIds(orderIds);
+    }
+
+    private boolean isDealerSliceSettled(PaymentOrder order, Long dealerId, Map<String, Set<Long>> dealerSettlementMap) {
+        if (order == null || dealerId == null) {
+            return false;
+        }
+        String orderId = order.getOrderId();
+        if (hasText(orderId) && dealerSettlementMap != null && !dealerSettlementMap.isEmpty()) {
+            Set<Long> settledDealerIds = dealerSettlementMap.get(orderId);
+            if (settledDealerIds != null && settledDealerIds.contains(dealerId)) {
+                return true;
+            }
+        }
+        // Legacy fallback: keep historical direct-dealer settlement visible.
+        return order.getDealerId() != null
+                && dealerId.equals(order.getDealerId())
+                && isDealerSettled(order);
+    }
+
+    private int getDealerSettledValue(PaymentOrder order, Long dealerId, Map<String, Set<Long>> dealerSettlementMap) {
+        return isDealerSliceSettled(order, dealerId, dealerSettlementMap) ? 1 : 0;
+    }
+
+    private Set<Long> resolveDealerIdsForOrder(PaymentOrder order) {
+        if (order == null) {
+            return Collections.emptySet();
+        }
+        Set<Long> dealerIds = new HashSet<>();
+        for (DealerCommissionSlice slice : resolveDealerCommissionSlices(order)) {
+            if (slice.getDealerId() != null) {
+                dealerIds.add(slice.getDealerId());
+            }
+        }
+        if (dealerIds.isEmpty() && order.getDealerId() != null) {
+            dealerIds.add(order.getDealerId());
+        }
+        return dealerIds;
+    }
+
+    private Set<Long> loadSettledDealerIdsByOrderId(String orderId) {
+        if (!hasText(orderId)) {
+            return Collections.emptySet();
+        }
+        QueryWrapper<PaymentOrderDealerSettlement> qw = new QueryWrapper<>();
+        qw.lambda().eq(PaymentOrderDealerSettlement::getOrderId, orderId);
+        List<PaymentOrderDealerSettlement> records = paymentOrderDealerSettlementRepository.selectList(qw);
+        if (records == null || records.isEmpty()) {
+            return Collections.emptySet();
+        }
+        Set<Long> settledDealerIds = new HashSet<>();
+        for (PaymentOrderDealerSettlement record : records) {
+            if (record != null && record.getDealerId() != null) {
+                settledDealerIds.add(record.getDealerId());
+            }
+        }
+        return settledDealerIds;
+    }
+
+    private void upsertDealerSettlementRecord(String orderId, Long dealerId, Long operatorId, Date settledAt) {
+        if (!hasText(orderId) || dealerId == null) {
+            return;
+        }
+        QueryWrapper<PaymentOrderDealerSettlement> qw = new QueryWrapper<>();
+        qw.lambda()
+                .eq(PaymentOrderDealerSettlement::getOrderId, orderId)
+                .eq(PaymentOrderDealerSettlement::getDealerId, dealerId);
+        PaymentOrderDealerSettlement existed = paymentOrderDealerSettlementRepository.selectOne(qw);
+        if (existed == null) {
+            PaymentOrderDealerSettlement settlement = new PaymentOrderDealerSettlement();
+            settlement.setOrderId(orderId);
+            settlement.setDealerId(dealerId);
+            settlement.setSettledBy(operatorId);
+            settlement.setSettledAt(settledAt);
+            settlement.setCreatedAt(settledAt);
+            settlement.setUpdatedAt(settledAt);
+            paymentOrderDealerSettlementRepository.insert(settlement);
+            return;
+        }
+        existed.setSettledBy(operatorId);
+        existed.setSettledAt(settledAt);
+        existed.setUpdatedAt(settledAt);
+        paymentOrderDealerSettlementRepository.updateById(existed);
+    }
+
+    private void refreshLegacyDealerSettlementFlag(PaymentOrder order) {
+        if (order == null || !hasText(order.getOrderId())) {
+            return;
+        }
+        Set<Long> orderDealerIds = resolveDealerIdsForOrder(order);
+        boolean dealerSettled;
+        if (orderDealerIds.isEmpty()) {
+            dealerSettled = isDealerSettled(order);
+        } else {
+            Set<Long> settledDealerIds = loadSettledDealerIdsByOrderId(order.getOrderId());
+            dealerSettled = settledDealerIds.containsAll(orderDealerIds);
+        }
+        order.setDealerIsSettled(dealerSettled ? 1 : 0);
+        order.setIsSettled(isInstallerSettled(order) && dealerSettled ? 1 : 0);
     }
 
     private boolean isSettledByDimension(PaymentOrder order, String dimension) {
@@ -824,6 +972,7 @@ public class BillingService {
         }
 
         List<PaymentOrder> orders = orderRepository.selectList(qw);
+        Map<String, Set<Long>> dealerSettlementMap = loadDealerSettlementMap(orders);
 
         Map<String, Map<String, Object>> dealerStats = new HashMap<>();
         BigDecimal totalAmount = BigDecimal.ZERO;
@@ -848,7 +997,6 @@ public class BillingService {
             BigDecimal orderAmount = MoneyScaleUtil.keepTwoDecimals(order.getAmount());
             BigDecimal installerAmt = MoneyScaleUtil.keepTwoDecimals(order.getInstallerAmount());
             BigDecimal planCost = MoneyScaleUtil.keepTwoDecimals(order.getPlanCost());
-            boolean isSettled = isDealerSettled(order);
 
             totalAmount = totalAmount.add(orderAmount);
             totalCost = totalCost.add(planCost);
@@ -878,6 +1026,7 @@ public class BillingService {
                 if (sliceDealerId == null) {
                     continue;
                 }
+                boolean isSettled = isDealerSliceSettled(order, sliceDealerId, dealerSettlementMap);
                 String key = String.valueOf(sliceDealerId);
                 final Long finalDid = sliceDealerId;
                 final String finalICode = order.getInstallerCode();
@@ -1029,6 +1178,10 @@ public class BillingService {
         } else if (!scope.showInstallerInfo && scope.showDealerInfo) {
             settledDimension = DIMENSION_DEALER;
         }
+        Map<String, Set<Long>> detailDealerSettlementMap =
+                DIMENSION_DEALER.equals(settledDimension) && scope.dealerId != null
+                        ? loadDealerSettlementMap(orders)
+                        : Collections.emptyMap();
 
         List<Map<String, Object>> result = new ArrayList<>();
         for (PaymentOrder order : orders) {
@@ -1057,9 +1210,13 @@ public class BillingService {
             row.put("paidAt", order.getPaidAt() != null ? sdf.format(order.getPaidAt()) : "");
             row.put("refundAt", order.getRefundAt() != null ? sdf.format(order.getRefundAt()) : "");
             row.put("refundReason", order.getRefundReason());
-            row.put("isSettled", settledDimension != null
-                    ? getSettledValueByDimension(order, settledDimension)
-                    : order.getIsSettled());
+            if (DIMENSION_DEALER.equals(settledDimension) && scope.dealerId != null) {
+                row.put("isSettled", getDealerSettledValue(order, scope.dealerId, detailDealerSettlementMap));
+            } else if (settledDimension != null) {
+                row.put("isSettled", getSettledValueByDimension(order, settledDimension));
+            } else {
+                row.put("isSettled", order.getIsSettled());
+            }
             result.add(row);
         }
         return result;
@@ -1243,8 +1400,16 @@ public class BillingService {
         maskOrderCommissionFields(list, scope.showInstallerInfo, scope.showDealerInfo);
         String normalizedDimension = normalizeDimension(dimension);
         if (normalizedDimension != null) {
+            Map<String, Set<Long>> listDealerSettlementMap =
+                    DIMENSION_DEALER.equals(normalizedDimension) && scope.dealerId != null
+                            ? loadDealerSettlementMap(list)
+                            : Collections.emptyMap();
             for (PaymentOrder order : list) {
-                order.setIsSettled(getSettledValueByDimension(order, normalizedDimension));
+                if (DIMENSION_DEALER.equals(normalizedDimension) && scope.dealerId != null) {
+                    order.setIsSettled(getDealerSettledValue(order, scope.dealerId, listDealerSettlementMap));
+                } else {
+                    order.setIsSettled(getSettledValueByDimension(order, normalizedDimension));
+                }
             }
         }
 
@@ -1881,7 +2046,7 @@ public class BillingService {
      * @return 缂傚倸鍊搁崐鐑芥倿閿曞倸绠板Δ锝呭暞閸嬧晛鈹戦悩瀹犲缂佺媴缍侀弻鐔兼焽閿曗偓婢ь喗銇勯銈呪枅闁哄矉缍佹俊鎼佸Ψ閵夘喕绱撴俊鐐€栭幐鍝ョ礊婵犲倻鏆﹂柨鐔哄Т閸楁娊鏌ｉ弬鎸庡暈妞ゆ柨绉瑰?
      */
     @Transactional
-    public int settleOrders(List<String> orderIds, Long operatorId, String dimension) {
+    public int settleOrders(List<String> orderIds, Long operatorId, String dimension, Long dealerId) {
         if (orderIds == null || orderIds.isEmpty()) {
             return 0;
         }
@@ -1889,8 +2054,12 @@ public class BillingService {
         if (normalizedDimension == null) {
             throw new IllegalArgumentException("Invalid settlement dimension, only installer/dealer supported");
         }
+        if (DIMENSION_DEALER.equals(normalizedDimension) && dealerId == null) {
+            throw new IllegalArgumentException("dealerId is required for dealer settlement");
+        }
 
-        log.info("Settle orders in batch: operatorId={}, dimension={}, orderIds={}", operatorId, normalizedDimension, orderIds);
+        log.info("Settle orders in batch: operatorId={}, dimension={}, dealerId={}, orderIds={}",
+                operatorId, normalizedDimension, dealerId, orderIds);
 
         int count = 0;
         Date now = new Date();
@@ -1902,16 +2071,35 @@ public class BillingService {
             if (order == null) {
                 continue;
             }
-            if (isSettledByDimension(order, normalizedDimension)) {
+
+            if (DIMENSION_INSTALLER.equals(normalizedDimension)) {
+                if (isInstallerSettled(order)) {
+                    continue;
+                }
+                markOrderSettledByDimension(order, normalizedDimension);
+                order.setUpdatedAt(now);
+                orderRepository.updateById(order);
+                count++;
                 continue;
             }
 
-            markOrderSettledByDimension(order, normalizedDimension);
+            DealerCommissionSlice targetSlice = resolveDealerCommissionSlice(order, dealerId);
+            if (targetSlice == null || safeAmount(targetSlice.getAmount()).compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            Map<String, Set<Long>> settledMap = loadDealerSettlementMapByOrderIds(Collections.singleton(order.getOrderId()));
+            if (isDealerSliceSettled(order, dealerId, settledMap)) {
+                continue;
+            }
+
+            upsertDealerSettlementRecord(order.getOrderId(), dealerId, operatorId, now);
+            refreshLegacyDealerSettlementFlag(order);
             order.setUpdatedAt(now);
             orderRepository.updateById(order);
             count++;
         }
-        log.info("Batch settlement finished: operatorId={}, dimension={}, settledCount={}", operatorId, normalizedDimension, count);
+        log.info("Batch settlement finished: operatorId={}, dimension={}, dealerId={}, settledCount={}",
+                operatorId, normalizedDimension, dealerId, count);
         return count;
     }
 
@@ -1953,9 +2141,9 @@ public class BillingService {
             }
         }
         if (isSettled != null) {
-            if (DIMENSION_DEALER.equals(normalizedDimension)) {
+            if (DIMENSION_DEALER.equals(normalizedDimension) && dealerId == null) {
                 qw.apply("COALESCE(dealer_is_settled, is_settled, 0) = {0}", isSettled);
-            } else {
+            } else if (!DIMENSION_DEALER.equals(normalizedDimension)) {
                 qw.apply("COALESCE(installer_is_settled, is_settled, 0) = {0}", isSettled);
             }
         }
@@ -2005,7 +2193,15 @@ public class BillingService {
         if (endDate != null) {
             sumQw.lambda().le(PaymentOrder::getPaidAt, endDate);
         }
+        sumQw.lambda().orderByDesc(PaymentOrder::getPaidAt);
         List<PaymentOrder> allOrders = orderRepository.selectList(sumQw);
+        if (dealerId != null) {
+            applyDealerCommissionSlice(allOrders, dealerId);
+        }
+        Map<String, Set<Long>> dealerSettlementMap = DIMENSION_DEALER.equals(normalizedDimension) && dealerId != null
+                ? loadDealerSettlementMap(allOrders)
+                : Collections.emptyMap();
+        List<PaymentOrder> filteredOrders = new ArrayList<>();
         
         BigDecimal totalAmount = BigDecimal.ZERO;
         BigDecimal settledAmount = BigDecimal.ZERO;
@@ -2018,34 +2214,51 @@ public class BillingService {
             BigDecimal amount = MoneyScaleUtil.keepTwoDecimals(order.getAmount());
             // 闂傚倷绀侀幖顐ょ矓閻戞枻缍栧璺猴功閺嗐倕銆掑锝呬壕閻庢鍠栭…閿嬩繆閻戣В鈧箓骞嬪┑鍥╂殸缂傚倸鍊风欢锟犲磻婢舵劦鏁嬬憸鏃堝箖濡や緡妲归幖娣灩閸樼懓顪冮妶鍡橆梿闁稿鍔欏铏鐎涙鍘遍梺鍦劋閸ㄥ爼藟閻愬樊娼＄憸宥夋煀閿濆钃熺€光偓閸曨偆顓洪梺鎸庢⒒缁垰顭块幘缁樷拺闁圭娴烽埥澶愭煟濡や礁濮嶉挊鐔封攽閻樺弶鎼愰悗姘樀閺屾稑鈹戦崱妤婁痪濠?缂傚倸鍊搁崐椋庣矆娴ｇ儤宕叉慨妞诲亾鐎殿喓鍔戞慨鈧柕鍫濇噽閺屽牓姊虹化鏇燁潑闁告ê澧界划?
             BigDecimal profit;
+            int settledValue;
             if (DIMENSION_DEALER.equals(normalizedDimension)) {
                 if (dealerId != null) {
-                    DealerCommissionSlice slice = resolveDealerCommissionSlice(order, dealerId);
-                    profit = slice != null ? MoneyScaleUtil.keepTwoDecimals(slice.getAmount()) : BigDecimal.ZERO;
+                    profit = order.getDealerAmount() != null ? MoneyScaleUtil.keepTwoDecimals(order.getDealerAmount()) : BigDecimal.ZERO;
+                    settledValue = getDealerSettledValue(order, dealerId, dealerSettlementMap);
                 } else {
                     profit = order.getDealerAmount() != null ? MoneyScaleUtil.keepTwoDecimals(order.getDealerAmount()) : BigDecimal.ZERO;
+                    settledValue = getSettledValueByDimension(order, normalizedDimension);
                 }
             } else {
                 profit = order.getInstallerAmount() != null ? MoneyScaleUtil.keepTwoDecimals(order.getInstallerAmount()) : BigDecimal.ZERO;
+                settledValue = getSettledValueByDimension(order, normalizedDimension);
             }
+            order.setIsSettled(settledValue);
             
             totalAmount = totalAmount.add(amount);
             totalProfitAmount = totalProfitAmount.add(profit);
             
-            if (isSettledByDimension(order, normalizedDimension)) {
+            if (settledValue == 1) {
                 settledAmount = settledAmount.add(amount);
                 settledProfitAmount = settledProfitAmount.add(profit);
             } else {
                 unsettledAmount = unsettledAmount.add(amount);
                 unsettledProfitAmount = unsettledProfitAmount.add(profit);
             }
+            if (isSettled == null || settledValue == isSettled) {
+                filteredOrders.add(order);
+            }
+        }
+        int safePage = page != null && page > 0 ? page : 1;
+        int safeSize = size != null && size > 0 ? size : 20;
+        int safeOffset = (safePage - 1) * safeSize;
+        total = filteredOrders.size();
+        if (safeOffset >= total) {
+            list = Collections.emptyList();
+        } else {
+            int toIndex = Math.min(safeOffset + safeSize, (int) total);
+            list = new ArrayList<>(filteredOrders.subList(safeOffset, toIndex));
         }
 
         Map<String, Object> result = new HashMap<>();
         result.put("list", list);
         result.put("total", total);
-        result.put("page", page);
-        result.put("size", size);
+        result.put("page", safePage);
+        result.put("size", safeSize);
         result.put("totalAmount", totalAmount);
         result.put("settledAmount", settledAmount);
         result.put("unsettledAmount", unsettledAmount);
@@ -2130,7 +2343,7 @@ public class BillingService {
         }
         boolean isDealerSettlement = effectiveDealerId != null;
         
-        byte[] excelData = createSettlementExcel(orders, isDealerSettlement);
+        byte[] excelData = createSettlementExcel(orders, isDealerSettlement, effectiveDealerId);
         
         Map<String, Object> result = new HashMap<>();
         result.put("isZip", false);
@@ -2141,7 +2354,7 @@ public class BillingService {
     /**
      * 闂傚倷绀侀幉锛勬暜濡ゅ啰鐭欓柟瀵稿Х绾句粙鏌熼幆褍顣崇痪鎯с偢閺岀喖骞嗚椤ｆ娊鏌￠崱鈺佸⒋闁诡喛娉涢埥澶愬箳閸℃ぞ澹曞銇卞懏鐦╡l
      */
-    private byte[] createSettlementExcel(List<PaymentOrder> orders, boolean isDealerSettlement) throws IOException {
+    private byte[] createSettlementExcel(List<PaymentOrder> orders, boolean isDealerSettlement, Long targetDealerId) throws IOException {
         try (Workbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("结算表");
 
@@ -2186,6 +2399,9 @@ public class BillingService {
             SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
             int rowNum = 1;
             BigDecimal totalProfit = BigDecimal.ZERO;
+            Map<String, Set<Long>> dealerSettlementMap = isDealerSettlement && targetDealerId != null
+                    ? loadDealerSettlementMap(orders)
+                    : Collections.emptyMap();
             
             for (PaymentOrder order : orders) {
                 Row row = sheet.createRow(rowNum++);
@@ -2210,7 +2426,11 @@ public class BillingService {
                 createMoneyCell(row, col++, profit, moneyStyle);
                 totalProfit = totalProfit.add(profit);
                 
-                boolean settled = isDealerSettlement ? isDealerSettled(order) : isInstallerSettled(order);
+                boolean settled = isDealerSettlement
+                        ? (targetDealerId != null
+                        ? isDealerSliceSettled(order, targetDealerId, dealerSettlementMap)
+                        : isDealerSettled(order))
+                        : isInstallerSettled(order);
                 createTextCell(row, col++, settled ? "已结算" : "未结算", dataStyle);
             }
 

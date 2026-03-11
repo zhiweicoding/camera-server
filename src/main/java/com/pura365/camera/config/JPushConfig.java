@@ -2,7 +2,7 @@ package com.pura365.camera.config;
 
 import cn.jpush.api.JPushClient;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.util.StringUtils;
@@ -23,10 +23,15 @@ public class JPushConfig {
     private Boolean apnsProduction;
 
     @Bean
-    @ConditionalOnProperty(prefix = "push", name = "provider", havingValue = "jpush", matchIfMissing = true)
+    @ConditionalOnExpression(
+            "'${push.provider:jpush}'.trim().equalsIgnoreCase('jpush') " +
+            "|| '${push.provider:jpush}'.trim().equalsIgnoreCase('hybrid') " +
+            "|| '${push.provider:jpush}'.trim().equalsIgnoreCase('both') " +
+            "|| '${push.provider:jpush}'.trim().equalsIgnoreCase('all')"
+    )
     public JPushClient jPushClient() {
         if (!StringUtils.hasText(appKey) || !StringUtils.hasText(masterSecret)) {
-            throw new IllegalStateException("jpush.app-key and jpush.master-secret must be configured when push.provider=jpush");
+            throw new IllegalStateException("jpush.app-key and jpush.master-secret must be configured when push.provider is jpush/hybrid/both/all");
         }
         return new JPushClient(masterSecret, appKey);
     }

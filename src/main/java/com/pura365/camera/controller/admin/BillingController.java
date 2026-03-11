@@ -251,8 +251,19 @@ public class BillingController {
         if (dimension == null || (!"installer".equalsIgnoreCase(dimension) && !"dealer".equalsIgnoreCase(dimension))) {
             return ApiResponse.error(400, "Invalid settlement dimension, only installer/dealer supported");
         }
+        Long dealerId = null;
+        if ("dealer".equalsIgnoreCase(dimension)) {
+            if (body.get("dealerId") == null) {
+                return ApiResponse.error(400, "dealerId is required when dimension=dealer");
+            }
+            try {
+                dealerId = Long.valueOf(String.valueOf(body.get("dealerId")));
+            } catch (Exception ex) {
+                return ApiResponse.error(400, "Invalid dealerId");
+            }
+        }
 
-        int count = billingService.settleOrders(orderIds, currentUserId, dimension);
+        int count = billingService.settleOrders(orderIds, currentUserId, dimension, dealerId);
         Map<String, Object> result = new java.util.HashMap<>();
         result.put("settledCount", count);
         result.put("message", "成功结算 " + count + " 笔订单");
