@@ -40,6 +40,14 @@ public class UserPushToken {
     @TableField("device_model")
     private String deviceModel;
 
+    /** 推送提供者 (jpush, firebase, hybrid) */
+    @TableField("provider")
+    private String provider;
+
+    /** 渠道 (当前与 provider 相同) */
+    @TableField("channel")
+    private String channel;
+
     /** 系统版本 */
     @TableField("os_version")
     private String osVersion;

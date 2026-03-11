@@ -66,7 +66,7 @@ public class JPushService {
                 content == null ? 0 : content.length());
         List<UserPushToken> tokens = getUserPushTokens(userId);
         if (tokens.isEmpty()) {
-            logger.warn("鐢ㄦ埛 {} 娌℃湁娉ㄥ唽鍙敤鎺ㄩ€乼oken", userId);
+            logger.error("User {} has no enabled push tokens, skip push", userId);
             return false;
         }
         logger.info("Push token snapshot userId={} tokens={}", userId, summarizeTokens(tokens));

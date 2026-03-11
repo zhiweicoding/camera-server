@@ -13,6 +13,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.util.StringUtils;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Date;
@@ -21,6 +22,9 @@ import java.util.Date;
 @RestController
 @RequestMapping("/api/app/push")
 public class PushController {
+
+    @Value("${push.provider:jpush}")
+    private String pushProvider;
 
     private static final Logger log = LoggerFactory.getLogger(PushController.class);
 
@@ -62,17 +66,18 @@ public class PushController {
             return ApiResponse.error(400, "registration_id 不能为空");
         }
 
-        LambdaQueryWrapper<UserPushToken> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(UserPushToken::getUserId, currentUserId)
-                .eq(UserPushToken::getRegistrationId, normalizedRegistrationId);
-        UserPushToken existingToken = userPushTokenRepository.selectOne(wrapper);
+        LambdaQueryWrapper<UserPushToken> regWrapper = new LambdaQueryWrapper<>();
+        regWrapper.eq(UserPushToken::getUserId, currentUserId)
+                .eq(UserPushToken::getProvider, pushProvider);
+        UserPushToken existingToken = userPushTokenRepository.selectOne(regWrapper);
 
         if (existingToken != null) {
             existingToken.setDeviceType(normalizedDeviceType);
             existingToken.setAppVersion(normalizedAppVersion);
             existingToken.setDeviceModel(normalizedDeviceModel);
             existingToken.setOsVersion(normalizedOsVersion);
-            existingToken.setEnabled(EnableStatus.ENABLED);
+            existingToken.setProvider(pushProvider);
+            existingToken.setChannel(pushProvider);
             existingToken.setUpdatedAt(new Date());
             userPushTokenRepository.updateById(existingToken);
 
@@ -91,6 +96,8 @@ public class PushController {
             token.setDeviceModel(normalizedDeviceModel);
             token.setOsVersion(normalizedOsVersion);
             token.setEnabled(EnableStatus.ENABLED);
+            token.setProvider(pushProvider);
+            token.setChannel(pushProvider);
             token.setCreatedAt(new Date());
             token.setUpdatedAt(new Date());
             userPushTokenRepository.insert(token);

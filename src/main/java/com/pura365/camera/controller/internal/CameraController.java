@@ -279,13 +279,24 @@ public class CameraController {
      */
     @Operation(summary = "接收消息", description = "接收摄像头发送的事件或 AI 结果消息")
     @PostMapping(value = "/send_msg",
-            consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+            consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Void> sendMsg(HttpServletRequest request) {
+        log.info("=== /send_msg 请求 ===");
         try {
+            log.info("[send_msg]请求参数: {}", request.getParameterMap().entrySet().stream()
+                    .map(e -> e.getKey() + "=" + String.join(",", e.getValue()))
+                    .collect(Collectors.joining("&")));
             String rawBody = getRequestBody(request);
-            String token = extractJwtToken(request, rawBody);
+            log.info("[send_msg]请求体: {}", rawBody);
+            //String token = extractJwtToken(request, rawBody);
+            String token = request.getParameterMap().entrySet().stream()
+                    .map(e -> e.getKey() + "=" + String.join(",", e.getValue()))
+                    .collect(Collectors.joining("&"));
+            log.info("[send_msg]提取到的 token: {}", token);
             if (token == null) {
-                log.warn("[send_msg] 无法解析token，忽略该消息");
+
+                log.error("[send_msg] 无法解析token，忽略该消息");
                 return ResponseEntity.ok().build();
             }
 
@@ -309,6 +320,56 @@ public class CameraController {
 
             // 处理消息
             cameraService.handleMessage(msgRequest);
+            return ResponseEntity.ok().build();
+
+        } catch (Exception e) {
+            log.error("[send_msg] 处理异常", e);
+            return ResponseEntity.ok().build();
+        }
+    }
+
+    public static void main(String[] args) {
+
+    }
+
+    /**
+     * 接收消息通知接口
+     * 用于接收摄像头发送的事件信息或 AI 结果，不需要回复内容
+     */
+    @Operation(summary = "接收消息", description = "接收摄像头发送的事件或 AI 结果消息")
+    @PostMapping(value = "/send_msgTest")
+    public ResponseEntity<Void> send_msgTest(SendMsgRequest request) {
+        try {
+//            String rawBody = getRequestBody(request);
+//            String token = extractJwtToken(request, rawBody);
+//            if (token == null) {
+//                log.warn("[send_msg] 无法解析token，忽略该消息");
+//                return ResponseEntity.ok().build();
+//            }
+//
+//            SendMsgRequest msgRequest = parseSendMsgRequestFromToken(token);
+//            boolean validExp = TimeValidator.isValid(msgRequest.getExp());
+//            log.info("[send_msg][diagnostic] id={}, topic={}, title={}, msg={}, exp={}, expValid={}, picurl={}, videourl={}",
+//                    msgRequest.getId(),
+//                    msgRequest.getTopic(),
+//                    msgRequest.getTitle(),
+//                    msgRequest.getMsg(),
+//                    msgRequest.getExp(),
+//                    validExp,
+//                    msgRequest.getPicurl(),
+//                    msgRequest.getVideourl());
+//
+//            // 验证时间戳
+//            if (!validExp) {
+//                log.warn("[send_msg] 时间戳过期，忽略 - 设备={}, exp={}", msgRequest.getId(), msgRequest.getExp());
+//                return ResponseEntity.ok().build();
+//            }
+
+            request.setTopic("camera/pura365/B2330000GQqt6a5f/device");
+            request.setTitle("接口测试标题");
+            request.setMsg("接口测试消息内容");
+            // 处理消息
+            cameraService.handleMessage(request);
             return ResponseEntity.ok().build();
 
         } catch (Exception e) {
