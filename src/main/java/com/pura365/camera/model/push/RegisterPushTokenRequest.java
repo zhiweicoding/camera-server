@@ -16,11 +16,23 @@ public class RegisterPushTokenRequest {
     @JsonAlias({"deviceType"})
     private String deviceType;
 
-    /** 极光推送Registration ID */
-    @Schema(description = "极光推送Registration ID", required = true)
+    /** 推送Registration ID（JPush regId 或 FCM token） */
+    @Schema(description = "推送Registration ID", required = true)
     @JsonProperty("registration_id")
     @JsonAlias({"registrationId"})
     private String registrationId;
+
+    /** 推送提供方: jpush/fcm */
+    @Schema(description = "推送提供方", example = "jpush")
+    @JsonProperty("provider")
+    @JsonAlias({"push_provider", "pushProvider"})
+    private String provider;
+
+    /** 推送通道: jpush/fcm（兼容字段） */
+    @Schema(description = "推送通道", example = "jpush")
+    @JsonProperty("channel")
+    @JsonAlias({"push_channel", "pushChannel"})
+    private String channel;
 
     /** APP版本号 */
     @Schema(description = "APP版本号", example = "1.0.0")
@@ -54,6 +66,22 @@ public class RegisterPushTokenRequest {
 
     public void setRegistrationId(String registrationId) {
         this.registrationId = registrationId;
+    }
+
+    public String getProvider() {
+        return provider;
+    }
+
+    public void setProvider(String provider) {
+        this.provider = provider;
+    }
+
+    public String getChannel() {
+        return channel;
+    }
+
+    public void setChannel(String channel) {
+        this.channel = channel;
     }
 
     public String getAppVersion() {

@@ -67,14 +67,8 @@ public class JPushService {
         }
         logger.info("Push token snapshot userId={} tokens={}", userId, summarizeTokens(tokens));
 
-        List<String> registrationIds = extractRegistrationIds(tokens);
-        if (registrationIds.isEmpty()) {
-            logger.warn("用户 {} 的推送token全部为空或无效", userId);
-            return false;
-        }
-
-        return pushByProvider(registrationIds, title, content, extras,
-                "userId=" + userId + ", tokenCount=" + registrationIds.size());
+        return pushByTokenProviders(tokens, title, content, extras,
+                "userId=" + userId + ", tokenCount=" + tokens.size());
     }
 
     public boolean pushToUsers(List<Long> userIds, String title, String content, Map<String, String> extras) {
@@ -93,29 +87,56 @@ public class JPushService {
         }
         logger.info("Push token snapshot userIds={} tokens={}", userIds, summarizeTokens(tokens));
 
-        List<String> registrationIds = extractRegistrationIds(tokens);
-        if (registrationIds.isEmpty()) {
-            logger.warn("用户列表 {} 的推送token全部为空或无效", userIds);
+        return pushByTokenProviders(tokens, title, content, extras,
+                "userCount=" + userIds.size() + ", tokenCount=" + tokens.size());
+    }
+
+    private boolean pushByTokenProviders(List<UserPushToken> tokens,
+                                         String title,
+                                         String content,
+                                         Map<String, String> extras,
+                                         String context) {
+        if (tokens == null || tokens.isEmpty()) {
             return false;
         }
 
-        return pushByProvider(registrationIds, title, content, extras,
-                "userCount=" + userIds.size() + ", tokenCount=" + registrationIds.size());
-    }
+        List<String> jpushRegistrationIds = new ArrayList<>();
+        List<String> fcmTokens = new ArrayList<>();
 
-    private boolean pushByProvider(List<String> registrationIds,
-                                   String title,
-                                   String content,
-                                   Map<String, String> extras,
-                                   String context) {
-        if (isFirebaseProvider()) {
-            logger.info("Firebase push start {}, provider={}", context, pushProvider);
-            return firebasePushService.pushToTokens(registrationIds, title, content, extras);
+        for (UserPushToken token : tokens) {
+            if (token == null || !StringUtils.hasText(token.getRegistrationId())) {
+                continue;
+            }
+            String registrationId = token.getRegistrationId().trim();
+            if (shouldUseFcm(token)) {
+                fcmTokens.add(registrationId);
+            } else {
+                jpushRegistrationIds.add(registrationId);
+            }
         }
 
-        logger.info("JPush push start {}, provider={}, apnsProduction={}",
-                context, pushProvider, jPushConfig.getApnsProduction());
-        return pushToRegistrationIds(registrationIds, title, content, extras);
+        jpushRegistrationIds = new ArrayList<>(new LinkedHashSet<>(jpushRegistrationIds));
+        fcmTokens = new ArrayList<>(new LinkedHashSet<>(fcmTokens));
+
+        if (jpushRegistrationIds.isEmpty() && fcmTokens.isEmpty()) {
+            logger.warn("推送失败，所有token为空或无效: {}", context);
+            return false;
+        }
+
+        boolean anySuccess = false;
+
+        if (!jpushRegistrationIds.isEmpty()) {
+            logger.info("JPush push start {}, tokenCount={}, apnsProduction={}",
+                    context, jpushRegistrationIds.size(), jPushConfig.getApnsProduction());
+            anySuccess = pushToRegistrationIds(jpushRegistrationIds, title, content, extras) || anySuccess;
+        }
+
+        if (!fcmTokens.isEmpty()) {
+            logger.info("Firebase push start {}, tokenCount={}", context, fcmTokens.size());
+            anySuccess = firebasePushService.pushToTokens(fcmTokens, title, content, extras) || anySuccess;
+        }
+
+        return anySuccess;
     }
 
     private boolean pushToRegistrationIds(List<String> registrationIds,
@@ -217,18 +238,6 @@ public class JPushService {
         return userPushTokenRepository.selectList(wrapper);
     }
 
-    private List<String> extractRegistrationIds(List<UserPushToken> tokens) {
-        if (tokens == null || tokens.isEmpty()) {
-            return Collections.emptyList();
-        }
-        return tokens.stream()
-                .map(UserPushToken::getRegistrationId)
-                .filter(StringUtils::hasText)
-                .map(String::trim)
-                .distinct()
-                .collect(Collectors.toList());
-    }
-
     private List<List<String>> partition(List<String> registrationIds, int batchSize) {
         if (registrationIds == null || registrationIds.isEmpty()) {
             return Collections.emptyList();
@@ -242,12 +251,33 @@ public class JPushService {
         return result;
     }
 
-    private boolean isFirebaseProvider() {
-        if (!StringUtils.hasText(pushProvider)) {
-            return false;
+    private boolean shouldUseFcm(UserPushToken token) {
+        String provider = normalizeProvider(token.getProvider());
+        if (!StringUtils.hasText(provider)) {
+            provider = normalizeProvider(token.getChannel());
         }
-        String provider = pushProvider.trim().toLowerCase();
-        return "firebase".equals(provider) || "fcm".equals(provider);
+
+        if (!StringUtils.hasText(provider)) {
+            if (StringUtils.hasText(pushProvider)) {
+                provider = normalizeProvider(pushProvider);
+            }
+        }
+
+        return "fcm".equals(provider);
+    }
+
+    private String normalizeProvider(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return null;
+        }
+        String normalized = raw.trim().toLowerCase();
+        if ("firebase".equals(normalized)) {
+            return "fcm";
+        }
+        if ("fcm".equals(normalized) || "jpush".equals(normalized)) {
+            return normalized;
+        }
+        return null;
     }
 
     private String maskRegistrationId(String registrationId) {
@@ -279,6 +309,8 @@ public class JPushService {
         return "id=" + tokenId
                 + ",userId=" + userId
                 + ",deviceType=" + deviceType
+                + ",provider=" + (StringUtils.hasText(token.getProvider()) ? token.getProvider().trim() : "unknown")
+                + ",channel=" + (StringUtils.hasText(token.getChannel()) ? token.getChannel().trim() : "unknown")
                 + ",appVersion=" + appVersion
                 + ",registrationId=" + maskRegistrationId(token.getRegistrationId());
     }

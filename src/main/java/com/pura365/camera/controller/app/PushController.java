@@ -39,15 +39,15 @@ public class PushController {
     /**
      * 注册推送Token
      * 
-     * 客户端在APP启动或用户登录后调用此接口，将极光推送的Registration ID注册到服务端
+     * 客户端在APP启动或用户登录后调用此接口，注册推送通道的 token 到服务端
      */
     @Operation(summary = "注册推送Token", description = "客户端注册或更新推送Token")
     @PostMapping("/register")
     public ApiResponse<Void> registerPushToken(
             @RequestAttribute("currentUserId") Long currentUserId,
             @RequestBody RegisterPushTokenRequest request) {
-        log.info("注册推送Token - userId={}, deviceType={}, registrationId={}, deviceModel={}, osVersion={}, appVersion={}",
-                currentUserId, request.getDeviceType(), request.getRegistrationId(),
+        log.info("注册推送Token - userId={}, deviceType={}, provider={}, channel={}, registrationId={}, deviceModel={}, osVersion={}, appVersion={}",
+                currentUserId, request.getDeviceType(), request.getProvider(), request.getChannel(), request.getRegistrationId(),
                 request.getDeviceModel(), request.getOsVersion(), request.getAppVersion());
 
         if (!StringUtils.hasText(request.getDeviceType())) {
@@ -58,6 +58,8 @@ public class PushController {
             log.warn("注册推送Token失败，registration_id为空 - userId={}", currentUserId);
             return ApiResponse.error(400, "registration_id 不能为空");
         }
+        String normalizedProvider = normalizeProvider(request.getProvider(), request.getChannel());
+        String normalizedChannel = normalizeChannel(request.getChannel(), normalizedProvider);
 
         // 检查是否已存在
         LambdaQueryWrapper<UserPushToken> wrapper = new LambdaQueryWrapper<>();
@@ -68,6 +70,8 @@ public class PushController {
         if (existingToken != null) {
             // 更新现有记录
             existingToken.setDeviceType(request.getDeviceType());
+            existingToken.setProvider(normalizedProvider);
+            existingToken.setChannel(normalizedChannel);
             existingToken.setAppVersion(request.getAppVersion());
             existingToken.setDeviceModel(request.getDeviceModel());
             existingToken.setOsVersion(request.getOsVersion());
@@ -81,6 +85,8 @@ public class PushController {
             token.setUserId(currentUserId);
             token.setDeviceType(request.getDeviceType());
             token.setRegistrationId(request.getRegistrationId());
+            token.setProvider(normalizedProvider);
+            token.setChannel(normalizedChannel);
             token.setAppVersion(request.getAppVersion());
             token.setDeviceModel(request.getDeviceModel());
             token.setOsVersion(request.getOsVersion());
@@ -135,17 +141,17 @@ public class PushController {
             @RequestParam(value = "device_id", required = false) String deviceId,
             @RequestParam(value = "title", required = false, defaultValue = "测试推送") String title,
             @RequestParam(value = "content", required = false, defaultValue = "这是一条测试消息") String content) {
-        log.info("测试推送 - userId={}, deviceId={}, title={}, content={}", 
+        log.info("测试推送 - userId={}, deviceId={}, title={}, content={}",
                 currentUserId, deviceId, title, content);
-        
+
         try {
             Long messageId = messageService.createMessageAndPush(
-                    currentUserId, 
-                    deviceId, 
-                    "test", 
-                    title, 
-                    content, 
-                    null, 
+                    currentUserId,
+                    deviceId,
+                    "test",
+                    title,
+                    content,
+                    null,
                     null);
             log.info("测试推送成功 - userId={}, messageId={}", currentUserId, messageId);
             return ApiResponse.success("推送成功", messageId);
@@ -153,5 +159,40 @@ public class PushController {
             log.error("测试推送失败 - userId={}", currentUserId, e);
             return ApiResponse.error(500, "推送失败: " + e.getMessage());
         }
+    }
+
+    private String normalizeProvider(String provider, String channel) {
+        if (StringUtils.hasText(provider)) {
+            String normalized = provider.trim().toLowerCase();
+            if ("firebase".equals(normalized)) {
+                return "fcm";
+            }
+            if ("fcm".equals(normalized) || "jpush".equals(normalized)) {
+                return normalized;
+            }
+        }
+        if (StringUtils.hasText(channel)) {
+            String normalizedChannel = channel.trim().toLowerCase();
+            if ("firebase".equals(normalizedChannel)) {
+                return "fcm";
+            }
+            if ("fcm".equals(normalizedChannel) || "jpush".equals(normalizedChannel)) {
+                return normalizedChannel;
+            }
+        }
+        return "jpush";
+    }
+
+    private String normalizeChannel(String channel, String provider) {
+        if (StringUtils.hasText(channel)) {
+            String normalized = channel.trim().toLowerCase();
+            if ("firebase".equals(normalized)) {
+                return "fcm";
+            }
+            if ("fcm".equals(normalized) || "jpush".equals(normalized)) {
+                return normalized;
+            }
+        }
+        return provider;
     }
 }
