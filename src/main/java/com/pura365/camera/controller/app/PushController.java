@@ -73,9 +73,13 @@ public class PushController {
 
         if (existingToken != null) {
             existingToken.setDeviceType(normalizedDeviceType);
+            // Registration ID may rotate after app reinstall or system refresh.
+            existingToken.setRegistrationId(normalizedRegistrationId);
             existingToken.setAppVersion(normalizedAppVersion);
             existingToken.setDeviceModel(normalizedDeviceModel);
             existingToken.setOsVersion(normalizedOsVersion);
+            // Re-register should always restore token to enabled state.
+            existingToken.setEnabled(EnableStatus.ENABLED);
             existingToken.setProvider(pushProvider);
             existingToken.setChannel(pushProvider);
             existingToken.setUpdatedAt(new Date());
