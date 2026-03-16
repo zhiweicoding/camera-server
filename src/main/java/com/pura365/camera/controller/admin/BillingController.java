@@ -216,11 +216,12 @@ public class BillingController {
             @RequestParam(required = false) String installerCode,
             @RequestParam(required = false) Long dealerId,
             @RequestParam(required = false) Integer isSettled,
+            @RequestParam(required = false) String dimension,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate,
             @RequestParam(defaultValue = "1") Integer page,
             @RequestParam(defaultValue = "20") Integer size) {
-        return ApiResponse.success(billingService.getSettlementOrders(installerCode, dealerId, isSettled, startDate, endDate, page, size));
+        return ApiResponse.success(billingService.getSettlementOrders(installerCode, dealerId, isSettled, dimension, startDate, endDate, page, size));
     }
 
     /**
@@ -246,8 +247,23 @@ public class BillingController {
         if (orderIds == null || orderIds.isEmpty()) {
             return ApiResponse.error(400, "订单ID列表不能为空");
         }
+        String dimension = body.get("dimension") != null ? String.valueOf(body.get("dimension")) : null;
+        if (dimension == null || (!"installer".equalsIgnoreCase(dimension) && !"dealer".equalsIgnoreCase(dimension))) {
+            return ApiResponse.error(400, "Invalid settlement dimension, only installer/dealer supported");
+        }
+        Long dealerId = null;
+        if ("dealer".equalsIgnoreCase(dimension)) {
+            if (body.get("dealerId") == null) {
+                return ApiResponse.error(400, "dealerId is required when dimension=dealer");
+            }
+            try {
+                dealerId = Long.valueOf(String.valueOf(body.get("dealerId")));
+            } catch (Exception ex) {
+                return ApiResponse.error(400, "Invalid dealerId");
+            }
+        }
 
-        int count = billingService.settleOrders(orderIds, currentUserId);
+        int count = billingService.settleOrders(orderIds, currentUserId, dimension, dealerId);
         Map<String, Object> result = new java.util.HashMap<>();
         result.put("settledCount", count);
         result.put("message", "成功结算 " + count + " 笔订单");

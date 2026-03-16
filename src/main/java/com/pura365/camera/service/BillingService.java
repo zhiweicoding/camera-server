@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.*;
 import com.pura365.camera.enums.PaymentOrderStatus;
 import com.pura365.camera.repository.*;
+import com.pura365.camera.util.MoneyScaleUtil;
 import com.pura365.camera.util.PaymentFeeRuleUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,26 +19,28 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 /**
- * 账单统计服务
- * 提供经销商/业务员维度的账单统计和导出功能
+ * 闂備浇宕垫慨鐢稿礉瑜忕划濠氬箣濠靛牊娈鹃梺缁樻濞咃絿澹曟總鍛婄厽闁哄啠鍋撴俊鐐叉健瀹曘儵鍩€椤掑嫭鈷戦柛婵嗗婢ф洜绱掓径濠勬憼闁?
+ * 闂傚倷绀佸﹢杈╁垝椤栫偛绀夐柟鐑樻⒐椤愪粙鏌ｉ姀銏℃毄缁炬儳銈搁悡顐﹀炊閵娧€濮囬梺杞扮劍閿曘垽寮?婵犵數鍋為崹鍫曞箰婵犳碍鍤岄柣鎰靛墯閸欏繘鏌ｉ弮鍌氬付鐎瑰憡绻冩穱濠囶敍濮橆剚鍊┑鈽嗗灠閿曨亪鐛弽銊︾秶闁诡垎灞惧枠婵犵數鍋涢悧濠囧垂瑜版帒绠憸鐗堝笚閺呮繈鏌嶈閸撴瑩鎮鹃悜鑺ュ亜闁惧繐婀遍敍婊堟⒑缂佹ɑ鈷愭俊鐐叉健瀹曘儵鍩€椤掑嫭鈷戦柛娑橈功閻﹪鏌ゅú璇茬仸妞ゃ垺宀搁弻鍡楊吋閸涱垼妲遍梻浣告啞缁诲倻鈧凹鍓熼敐鐐烘偐缂佹鍘?
  */
 @Service
 public class BillingService {
 
     private static final Logger log = LoggerFactory.getLogger(BillingService.class);
     private static final String DEFAULT_CURRENCY = "CNY";
+    private static final String DIMENSION_INSTALLER = "installer";
+    private static final String DIMENSION_DEALER = "dealer";
+    private static final int SQL_IN_BATCH_SIZE = 500;
 
     @Autowired
     private PaymentOrderRepository orderRepository;
 
-@Autowired
+    @Autowired
     private DealerRepository dealerRepository;
 
     @Autowired
@@ -55,6 +58,9 @@ public class BillingService {
     @Autowired
     private DeviceDealerRepository deviceDealerRepository;
 
+    @Autowired
+    private PaymentOrderDealerSettlementRepository paymentOrderDealerSettlementRepository;
+
     private BigDecimal safeAmount(BigDecimal value) {
         return value != null ? value : BigDecimal.ZERO;
     }
@@ -68,7 +74,7 @@ public class BillingService {
             return PaymentFeeRuleUtil.calculateFee(order.getAmount(), order.getPaymentMethod());
         }
 
-        return safeAmount(order.getFeeAmount()).setScale(2, RoundingMode.HALF_UP);
+        return MoneyScaleUtil.keepTwoDecimals(order.getFeeAmount());
     }
 
     private BigDecimal calculateEffectiveProfitAmount(PaymentOrder order, BigDecimal effectiveFeeAmount) {
@@ -83,7 +89,7 @@ public class BillingService {
         if (snapshotProfit != null) {
             BigDecimal adjusted = snapshotProfit.subtract(safeEffectiveFee.subtract(snapshotFee));
             return adjusted.compareTo(BigDecimal.ZERO) > 0
-                    ? adjusted.setScale(2, RoundingMode.HALF_UP)
+                    ? MoneyScaleUtil.keepTwoDecimals(adjusted)
                     : BigDecimal.ZERO;
         }
 
@@ -91,7 +97,7 @@ public class BillingService {
                 .subtract(safeEffectiveFee)
                 .subtract(safeAmount(order.getPlanCost()));
         return fallback.compareTo(BigDecimal.ZERO) > 0
-                ? fallback.setScale(2, RoundingMode.HALF_UP)
+                ? MoneyScaleUtil.keepTwoDecimals(fallback)
                 : BigDecimal.ZERO;
     }
 
@@ -103,7 +109,10 @@ public class BillingService {
         BigDecimal effectiveFee = calculateEffectiveFeeAmount(order);
         BigDecimal effectiveProfit = calculateEffectiveProfitAmount(order, effectiveFee);
         order.setFeeAmount(effectiveFee);
+        order.setPlanCost(order.getPlanCost() != null ? MoneyScaleUtil.keepTwoDecimals(order.getPlanCost()) : null);
         order.setProfitAmount(effectiveProfit);
+        order.setInstallerAmount(order.getInstallerAmount() != null ? MoneyScaleUtil.keepTwoDecimals(order.getInstallerAmount()) : null);
+        order.setDealerAmount(order.getDealerAmount() != null ? MoneyScaleUtil.keepTwoDecimals(order.getDealerAmount()) : null);
     }
 
     private BigDecimal calculateRemainingProfit(BigDecimal totalProfitAmount,
@@ -119,7 +128,7 @@ public class BillingService {
                     dimension, safeProfitAmount, safeInstallerAmount, safeDealerAmount, remainingProfit);
             return BigDecimal.ZERO;
         }
-        return remainingProfit;
+        return MoneyScaleUtil.keepTwoDecimals(remainingProfit);
     }
 
     private String normalizeCurrency(String currency) {
@@ -244,8 +253,246 @@ public class BillingService {
         private boolean showDealerInfo = true;
     }
 
+    private static class DealerCommissionSlice {
+        private final Long dealerId;
+        private final String dealerCode;
+        private final BigDecimal rate;
+        private final BigDecimal amount;
+
+        private DealerCommissionSlice(Long dealerId, String dealerCode, BigDecimal rate, BigDecimal amount) {
+            this.dealerId = dealerId;
+            this.dealerCode = dealerCode;
+            this.rate = rate != null ? rate : BigDecimal.ZERO;
+            this.amount = amount != null ? amount : BigDecimal.ZERO;
+        }
+
+        public Long getDealerId() {
+            return dealerId;
+        }
+
+        public String getDealerCode() {
+            return dealerCode;
+        }
+
+        public BigDecimal getRate() {
+            return rate;
+        }
+
+        public BigDecimal getAmount() {
+            return amount;
+        }
+    }
+
     private boolean hasText(String value) {
         return value != null && !value.trim().isEmpty();
+    }
+
+    private boolean isSettledFlag(Integer value) {
+        return value != null && value == 1;
+    }
+
+    private boolean isInstallerSettled(PaymentOrder order) {
+        if (order == null) {
+            return false;
+        }
+        if (order.getInstallerIsSettled() != null) {
+            return isSettledFlag(order.getInstallerIsSettled());
+        }
+        return isSettledFlag(order.getIsSettled());
+    }
+
+    private boolean isDealerSettled(PaymentOrder order) {
+        if (order == null) {
+            return false;
+        }
+        if (order.getDealerIsSettled() != null) {
+            return isSettledFlag(order.getDealerIsSettled());
+        }
+        return isSettledFlag(order.getIsSettled());
+    }
+
+    private Map<String, Set<Long>> loadDealerSettlementMapByOrderIds(Collection<String> orderIds) {
+        if (orderIds == null || orderIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        List<String> normalizedOrderIds = new ArrayList<>();
+        Set<String> dedup = new LinkedHashSet<>();
+        for (String orderId : orderIds) {
+            if (hasText(orderId)) {
+                dedup.add(orderId.trim());
+            }
+        }
+        normalizedOrderIds.addAll(dedup);
+        if (normalizedOrderIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<String, Set<Long>> settlementMap = new HashMap<>();
+        for (int i = 0; i < normalizedOrderIds.size(); i += SQL_IN_BATCH_SIZE) {
+            int toIndex = Math.min(i + SQL_IN_BATCH_SIZE, normalizedOrderIds.size());
+            List<String> batchOrderIds = normalizedOrderIds.subList(i, toIndex);
+            QueryWrapper<PaymentOrderDealerSettlement> qw = new QueryWrapper<>();
+            qw.lambda().in(PaymentOrderDealerSettlement::getOrderId, batchOrderIds);
+            List<PaymentOrderDealerSettlement> records = paymentOrderDealerSettlementRepository.selectList(qw);
+            for (PaymentOrderDealerSettlement record : records) {
+                if (record == null || !hasText(record.getOrderId()) || record.getDealerId() == null) {
+                    continue;
+                }
+                settlementMap.computeIfAbsent(record.getOrderId(), key -> new HashSet<>()).add(record.getDealerId());
+            }
+        }
+        return settlementMap;
+    }
+
+    private Map<String, Set<Long>> loadDealerSettlementMap(List<PaymentOrder> orders) {
+        if (orders == null || orders.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        List<String> orderIds = new ArrayList<>(orders.size());
+        for (PaymentOrder order : orders) {
+            if (order != null && hasText(order.getOrderId())) {
+                orderIds.add(order.getOrderId());
+            }
+        }
+        return loadDealerSettlementMapByOrderIds(orderIds);
+    }
+
+    private boolean isDealerSliceSettled(PaymentOrder order, Long dealerId, Map<String, Set<Long>> dealerSettlementMap) {
+        if (order == null || dealerId == null) {
+            return false;
+        }
+        String orderId = order.getOrderId();
+        if (hasText(orderId) && dealerSettlementMap != null && !dealerSettlementMap.isEmpty()) {
+            Set<Long> settledDealerIds = dealerSettlementMap.get(orderId);
+            if (settledDealerIds != null && settledDealerIds.contains(dealerId)) {
+                return true;
+            }
+        }
+        // Legacy fallback: keep historical direct-dealer settlement visible.
+        return order.getDealerId() != null
+                && dealerId.equals(order.getDealerId())
+                && isDealerSettled(order);
+    }
+
+    private int getDealerSettledValue(PaymentOrder order, Long dealerId, Map<String, Set<Long>> dealerSettlementMap) {
+        return isDealerSliceSettled(order, dealerId, dealerSettlementMap) ? 1 : 0;
+    }
+
+    private Set<Long> resolveDealerIdsForOrder(PaymentOrder order) {
+        if (order == null) {
+            return Collections.emptySet();
+        }
+        Set<Long> dealerIds = new HashSet<>();
+        for (DealerCommissionSlice slice : resolveDealerCommissionSlices(order)) {
+            if (slice.getDealerId() != null) {
+                dealerIds.add(slice.getDealerId());
+            }
+        }
+        if (dealerIds.isEmpty() && order.getDealerId() != null) {
+            dealerIds.add(order.getDealerId());
+        }
+        return dealerIds;
+    }
+
+    private Set<Long> loadSettledDealerIdsByOrderId(String orderId) {
+        if (!hasText(orderId)) {
+            return Collections.emptySet();
+        }
+        QueryWrapper<PaymentOrderDealerSettlement> qw = new QueryWrapper<>();
+        qw.lambda().eq(PaymentOrderDealerSettlement::getOrderId, orderId);
+        List<PaymentOrderDealerSettlement> records = paymentOrderDealerSettlementRepository.selectList(qw);
+        if (records == null || records.isEmpty()) {
+            return Collections.emptySet();
+        }
+        Set<Long> settledDealerIds = new HashSet<>();
+        for (PaymentOrderDealerSettlement record : records) {
+            if (record != null && record.getDealerId() != null) {
+                settledDealerIds.add(record.getDealerId());
+            }
+        }
+        return settledDealerIds;
+    }
+
+    private void upsertDealerSettlementRecord(String orderId, Long dealerId, Long operatorId, Date settledAt) {
+        if (!hasText(orderId) || dealerId == null) {
+            return;
+        }
+        QueryWrapper<PaymentOrderDealerSettlement> qw = new QueryWrapper<>();
+        qw.lambda()
+                .eq(PaymentOrderDealerSettlement::getOrderId, orderId)
+                .eq(PaymentOrderDealerSettlement::getDealerId, dealerId);
+        PaymentOrderDealerSettlement existed = paymentOrderDealerSettlementRepository.selectOne(qw);
+        if (existed == null) {
+            PaymentOrderDealerSettlement settlement = new PaymentOrderDealerSettlement();
+            settlement.setOrderId(orderId);
+            settlement.setDealerId(dealerId);
+            settlement.setSettledBy(operatorId);
+            settlement.setSettledAt(settledAt);
+            settlement.setCreatedAt(settledAt);
+            settlement.setUpdatedAt(settledAt);
+            paymentOrderDealerSettlementRepository.insert(settlement);
+            return;
+        }
+        existed.setSettledBy(operatorId);
+        existed.setSettledAt(settledAt);
+        existed.setUpdatedAt(settledAt);
+        paymentOrderDealerSettlementRepository.updateById(existed);
+    }
+
+    private void refreshLegacyDealerSettlementFlag(PaymentOrder order) {
+        if (order == null || !hasText(order.getOrderId())) {
+            return;
+        }
+        Set<Long> orderDealerIds = resolveDealerIdsForOrder(order);
+        boolean dealerSettled;
+        if (orderDealerIds.isEmpty()) {
+            dealerSettled = isDealerSettled(order);
+        } else {
+            Set<Long> settledDealerIds = loadSettledDealerIdsByOrderId(order.getOrderId());
+            dealerSettled = settledDealerIds.containsAll(orderDealerIds);
+        }
+        order.setDealerIsSettled(dealerSettled ? 1 : 0);
+        order.setIsSettled(isInstallerSettled(order) && dealerSettled ? 1 : 0);
+    }
+
+    private boolean isSettledByDimension(PaymentOrder order, String dimension) {
+        String normalized = normalizeDimension(dimension);
+        if (DIMENSION_DEALER.equals(normalized)) {
+            return isDealerSettled(order);
+        }
+        return isInstallerSettled(order);
+    }
+
+    private int getSettledValueByDimension(PaymentOrder order, String dimension) {
+        return isSettledByDimension(order, dimension) ? 1 : 0;
+    }
+
+    private void markOrderSettledByDimension(PaymentOrder order, String dimension) {
+        if (order == null) {
+            return;
+        }
+        String normalized = normalizeDimension(dimension);
+        if (DIMENSION_DEALER.equals(normalized)) {
+            order.setDealerIsSettled(1);
+        } else {
+            order.setInstallerIsSettled(1);
+        }
+        // 兼容旧字段：只有两个维度都结算后才算整单结算
+        order.setIsSettled(isInstallerSettled(order) && isDealerSettled(order) ? 1 : 0);
+    }
+
+    private String resolveSettlementDimension(String dimension, String installerCode, Long dealerId) {
+        String normalized = normalizeDimension(dimension);
+        if (normalized != null) {
+            return normalized;
+        }
+        if (dealerId != null) {
+            return DIMENSION_DEALER;
+        }
+        if (hasText(installerCode)) {
+            return DIMENSION_INSTALLER;
+        }
+        return DIMENSION_INSTALLER;
     }
 
     private BillingDataScope resolveBillingDataScope(Long currentUserId, String installerCode, Long dealerId) {
@@ -257,7 +504,7 @@ public class BillingService {
             return null;
         }
         String normalized = dimension.trim().toLowerCase(Locale.ROOT);
-        if ("installer".equals(normalized) || "dealer".equals(normalized)) {
+        if (DIMENSION_INSTALLER.equals(normalized) || DIMENSION_DEALER.equals(normalized)) {
             return normalized;
         }
         return null;
@@ -342,15 +589,136 @@ public class BillingService {
         }
     }
 
-    private void applyInstallerDealerScope(QueryWrapper<PaymentOrder> qw, BillingDataScope scope) {
+    private List<String> resolveDealerDeviceIdsByDealerId(Long dealerId) {
+        if (dealerId == null) {
+            return Collections.emptyList();
+        }
+        try {
+            Dealer dealer = dealerRepository.selectById(dealerId);
+            if (dealer == null || !hasText(dealer.getDealerCode())) {
+                return Collections.emptyList();
+            }
+            List<String> ids = deviceDealerRepository.listDeviceIdsByDealerCode(dealer.getDealerCode());
+            return ids != null ? ids : Collections.emptyList();
+        } catch (Exception e) {
+            log.debug("闂傚倷绀侀幖顐ゆ偖椤愶箑纾块柟缁㈠櫘閺佸淇婇妶鍛殶缁炬儳銈搁悡顐﹀炊閵娧€濮囬梺杞扮劍閿曘垽寮诲☉銏″亜闂佸灝顑愬Λ锕傛⒑閻熸壋鍋撻悢铚傛睏闂佸湱鎳撶€氫即銆佸☉妯锋斀闁归偊鍓氬▍妤€鈹戦悩顔肩伇婵炲绋戠叅闁靛牆顦闂佺懓顕慨鐢碘偓? dealerId={}, error={}", dealerId, e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
+    private List<DealerCommissionSlice> resolveDealerCommissionSlices(PaymentOrder order) {
+        if (order == null) {
+            return Collections.emptyList();
+        }
+        BigDecimal dealerPoolAmount = safeAmount(order.getDealerAmount());
+        BigDecimal dealerPoolRate = safeAmount(order.getDealerRate());
+        if (dealerPoolAmount.compareTo(BigDecimal.ZERO) <= 0) {
+            return Collections.emptyList();
+        }
+
+        if (!hasText(order.getDeviceId())) {
+            if (order.getDealerId() == null) {
+                return Collections.emptyList();
+            }
+            return Collections.singletonList(
+                    new DealerCommissionSlice(order.getDealerId(), order.getDealerCode(), dealerPoolRate, dealerPoolAmount)
+            );
+        }
+
+        List<DeviceDealer> dealerChain;
+        try {
+            dealerChain = deviceDealerRepository.getDealerChainByDeviceId(order.getDeviceId());
+        } catch (Exception e) {
+            log.debug("闂傚倷绀侀幖顐ゆ偖椤愶箑纾块柟缁㈠櫘閺佸淇婇妶鍛殲濠殿垰銈搁弻鐔碱敍閸℃婀伴弽锛勭磽閸屾艾鈧绮堟担鐑樺床婵せ鍋撶€殿喓鍔戞慨鈧柕鍫濇噽閺屽牓姊虹化鏇炲⒉缂佸甯￠獮濠囨偐缂佹ê浠繛鎾村嚬閸ㄤ即鎮橀悩缁樼厪闁搞儯鍔岄悘鈺呮煙? deviceId={}, error={}", order.getDeviceId(), e.getMessage());
+            dealerChain = Collections.emptyList();
+        }
+
+        if (dealerChain == null || dealerChain.isEmpty()) {
+            if (order.getDealerId() == null) {
+                return Collections.emptyList();
+            }
+            return Collections.singletonList(
+                    new DealerCommissionSlice(order.getDealerId(), order.getDealerCode(), dealerPoolRate, dealerPoolAmount)
+            );
+        }
+
+        BigDecimal totalSubRate = BigDecimal.ZERO;
+        for (int i = 1; i < dealerChain.size(); i++) {
+            BigDecimal subRate = dealerChain.get(i).getCommissionRate() != null
+                    ? dealerChain.get(i).getCommissionRate() : BigDecimal.ZERO;
+            totalSubRate = totalSubRate.add(subRate);
+        }
+
+        List<DealerCommissionSlice> slices = new ArrayList<>();
+        for (int i = 0; i < dealerChain.size(); i++) {
+            DeviceDealer node = dealerChain.get(i);
+            BigDecimal chainRate = node.getCommissionRate() != null ? node.getCommissionRate() : BigDecimal.ZERO;
+            if (i == 0) {
+                chainRate = new BigDecimal("100").subtract(totalSubRate);
+            }
+            if (chainRate.compareTo(BigDecimal.ZERO) < 0) {
+                chainRate = BigDecimal.ZERO;
+            }
+            BigDecimal actualAmount = MoneyScaleUtil.percentOf(dealerPoolAmount, chainRate);
+            BigDecimal actualRate = MoneyScaleUtil.percentOf(dealerPoolRate, chainRate);
+            slices.add(new DealerCommissionSlice(node.getDealerId(), node.getDealerCode(), actualRate, actualAmount));
+        }
+        return slices;
+    }
+
+    private DealerCommissionSlice resolveDealerCommissionSlice(PaymentOrder order, Long targetDealerId) {
+        if (targetDealerId == null) {
+            return null;
+        }
+        for (DealerCommissionSlice slice : resolveDealerCommissionSlices(order)) {
+            if (slice.getDealerId() != null && targetDealerId.equals(slice.getDealerId())) {
+                return slice;
+            }
+        }
+        return null;
+    }
+
+    private void applyDealerCommissionSlice(List<PaymentOrder> orders, Long targetDealerId) {
+        if (orders == null || orders.isEmpty() || targetDealerId == null) {
+            return;
+        }
+        for (PaymentOrder order : orders) {
+            DealerCommissionSlice slice = resolveDealerCommissionSlice(order, targetDealerId);
+            if (slice != null) {
+                order.setDealerId(slice.getDealerId());
+                order.setDealerCode(slice.getDealerCode());
+                order.setDealerRate(slice.getRate());
+                order.setDealerAmount(slice.getAmount());
+            } else {
+                order.setDealerRate(BigDecimal.ZERO);
+                order.setDealerAmount(BigDecimal.ZERO);
+            }
+        }
+    }
+
+    private void applyInstallerDealerScope(QueryWrapper<PaymentOrder> qw,
+                                           BillingDataScope scope,
+                                           List<String> dealerDeviceIds) {
+        List<String> safeDealerDeviceIds = dealerDeviceIds != null ? dealerDeviceIds : Collections.emptyList();
         if (scope.useInstallerDealerOr) {
             final String installerCode = scope.installerCode;
             final Long dealerId = scope.dealerId;
-            qw.and(wrapper -> wrapper
-                    .eq("installer_code", installerCode)
-                    .or()
-                    .eq("dealer_id", dealerId)
-            );
+            final List<String> finalDealerDeviceIds = safeDealerDeviceIds;
+            if (!finalDealerDeviceIds.isEmpty()) {
+                qw.and(wrapper -> wrapper
+                        .eq("installer_code", installerCode)
+                        .or()
+                        .eq("dealer_id", dealerId)
+                        .or()
+                        .in("device_id", finalDealerDeviceIds)
+                );
+            } else {
+                qw.and(wrapper -> wrapper
+                        .eq("installer_code", installerCode)
+                        .or()
+                        .eq("dealer_id", dealerId)
+                );
+            }
             return;
         }
 
@@ -358,20 +726,34 @@ public class BillingService {
             qw.lambda().eq(PaymentOrder::getInstallerCode, scope.installerCode);
         }
         if (scope.dealerId != null) {
-            qw.lambda().eq(PaymentOrder::getDealerId, scope.dealerId);
+            final Long dealerId = scope.dealerId;
+            final List<String> finalDealerDeviceIds = safeDealerDeviceIds;
+            if (!finalDealerDeviceIds.isEmpty()) {
+                qw.and(wrapper -> wrapper
+                        .eq("dealer_id", dealerId)
+                        .or()
+                        .in("device_id", finalDealerDeviceIds)
+                );
+            } else {
+                qw.lambda().eq(PaymentOrder::getDealerId, scope.dealerId);
+            }
         }
+    }
+
+    private void applyInstallerDealerScope(QueryWrapper<PaymentOrder> qw, BillingDataScope scope) {
+        applyInstallerDealerScope(qw, scope, Collections.emptyList());
     }
 
 
     /**
-     * 获取装机商账单汇总统计
-     * 直接用 installerCode 查询 payment_order 表
+     * 闂傚倷绀侀崥瀣磿閹惰棄搴婇柤鑹扮堪娴滃綊鏌涢妷銏℃珕闁哥喐鍨块弻娑樷槈閸楃偞鐏嶇紓浣靛妽瀹€鎼佸蓟濞戙垺鍋勯梺鍨儛濡儲绻濋姀锝嗙【閻庢碍婢橀悾鐑芥晸閻樻彃宓嗛梺缁樻⒒閸庛倝鎳ｉ崶顒佲拺閻犲洠鈧啿鈷夐悗瑙勬礈閺佹悂宕氶幒妤佹優閻熸瑥瀚?
+     * 闂傚倷鑳堕崕鐢稿疾濞戙垺鍋ら柕濞у嫭娈伴梺鍦檸閸犳宕?installerCode 闂傚倷绀侀幖顐ゆ偖椤愶箑纾块柟缁㈠櫘閺?payment_order 闂?
      */
     public Map<String, Object> getInstallerBillingSummary(Long currentUserId, Long installerId, String installerCode, Date startDate, Date endDate) {
-        // 确定有效的装机商代码
+        // 缂傚倷鑳堕搹搴ㄥ矗鎼淬劌绐楅柡宥庡幗閸嬧晛螖閿濆懎鏆欓悗姘槸椤法鎹勬笟顖氬壉濠电偛鎳庣换姗€寮婚敐澶娢╅柕澶堝労娴煎倸顪冮妶鍐ㄥ姎闁挎洦浜滈锝夋偨缁嬪じ绱堕梺鍛婃处閸撴岸鎮靛鍕閻庣數顭堥鎾剁磼閹绘帗鍋ラ柟?
         String effectiveInstallerCode = installerCode;
         
-        // 非管理员只能查看自己的数据
+        // 闂傚倸鍊搁崐鎼佹偋韫囨稑纾婚柣鏃傗拡閺佸洭鏌熼梻瀵稿妽闁稿濞€閺屾盯鍩勯崘鐐暦闂佸摜濮撮幊姗€寮诲☉妯锋瀻婵☆垵顫夐幑锝夋⒑缁嬭法绠查柨鏇樺灩椤曪絾绻濆顑┿劎鎲告惔锝囦笉婵炲棙鎸婚悡鐘测攽閸屾凹妲风紒銊ㄥ吹缁辨帞鎷嬪畷鍥╃崲闂佽鍨伴崯鏉戠暦閻旂⒈鏁嗗ù锝堫嚃閸熲偓闂?
         if (currentUserId != null) {
             User currentUser = userRepository.selectById(currentUserId);
             if (currentUser != null) {
@@ -385,11 +767,11 @@ public class BillingService {
             }
         }
         
-        // 构建查询条件
+        // 闂傚倷绀侀幖顐︻敄閸涱垪鍋撳鐓庡缂佽鲸鎹囬獮妯兼嫚閼艰埖鎲伴梻渚€娼чˇ浠嬫偂閸儱鍚归柛鏇ㄥ灡閻撴稑顭跨捄鐑橆棏闁稿鎹囧畷锝嗗緞濡桨缂?
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
         
-        // 用 installerCode 查询
+        // 闂?installerCode 闂傚倷绀侀幖顐ゆ偖椤愶箑纾块柟缁㈠櫘閺?
         if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
             qw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
         }
@@ -402,7 +784,7 @@ public class BillingService {
 
         List<PaymentOrder> orders = orderRepository.selectList(qw);
 
-        // 按装机商代码分组统计
+        // 闂傚倷绀佸﹢閬嶁€﹂崼銉嬪洭骞庨崜鍨槹缁绘繈宕惰閻濇﹢姊洪崨濠勭畵閻庢凹鍘奸埢宥囦沪閻偄缍婇幃顏堝川椤栨稑浠归梻浣虹帛閻楁鍒掗幘宕囨殾婵娉涢獮銏＄箾閸℃ê鐏╅柣鎾茶兌缁辨捇宕掑▎鎺戝帯闂佸摜濮靛ú鐔笺€?
         Map<String, Map<String, Object>> installerStats = new HashMap<>();
         BigDecimal totalAmount = BigDecimal.ZERO;
         BigDecimal totalCost = BigDecimal.ZERO;
@@ -424,7 +806,7 @@ public class BillingService {
         for (PaymentOrder order : orders) {
             String code = order.getInstallerCode();
             if (code == null || code.trim().isEmpty()) {
-                code = "未分配";
+                code = "UNASSIGNED";
             }
 
             final String finalCode = code;
@@ -445,11 +827,11 @@ public class BillingService {
             });
 
             String currency = normalizeCurrency(order.getCurrency());
-            BigDecimal orderAmount = safeAmount(order.getAmount());
-            BigDecimal insAmt = order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO;
-            BigDecimal dealerAmt = order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO;
-            BigDecimal planCost = safeAmount(order.getPlanCost());
-            boolean isSettled = order.getIsSettled() != null && order.getIsSettled() == 1;
+            BigDecimal orderAmount = MoneyScaleUtil.keepTwoDecimals(order.getAmount());
+            BigDecimal insAmt = order.getInstallerAmount() != null ? MoneyScaleUtil.keepTwoDecimals(order.getInstallerAmount()) : BigDecimal.ZERO;
+            BigDecimal dealerAmt = order.getDealerAmount() != null ? MoneyScaleUtil.keepTwoDecimals(order.getDealerAmount()) : BigDecimal.ZERO;
+            BigDecimal planCost = MoneyScaleUtil.keepTwoDecimals(order.getPlanCost());
+            boolean isSettled = isInstallerSettled(order);
 
             stat.put("orderCount", (Integer) stat.get("orderCount") + 1);
             stat.put("totalAmount", ((BigDecimal) stat.get("totalAmount")).add(orderAmount));
@@ -486,7 +868,7 @@ public class BillingService {
             totalOrders++;
         }
 
-        // 补充装机商名称
+        // 闂備浇宕甸崑鐐电矙韫囨稑纾块梺顒€绉撮崒銊╂煛瀹ュ骸浜濋柛鐔稿灴閺屾稑鈽夐崡鐐寸亶缂備降鍔嶅畝鎼佸蓟濞戙垺鍋勯梺鍨儛濡偤姊虹拠鈥虫灍婵炲弶绮庨崚?
         List<Map<String, Object>> installerList = new ArrayList<>(installerStats.values());
         for (Map<String, Object> stat : installerList) {
             String code = (String) stat.get("installerCode");
@@ -502,7 +884,7 @@ public class BillingService {
                     }
                 }
             }
-            if (installerName == null && code != null && !"未分配".equals(code)) {
+            if (installerName == null && code != null && !"UNASSIGNED".equals(code)) {
                 QueryWrapper<Installer> iqw = new QueryWrapper<>();
                 iqw.lambda().eq(Installer::getInstallerCode, code);
                 Installer installer = installerRepository.selectOne(iqw);
@@ -511,10 +893,10 @@ public class BillingService {
                     stat.put("installerId", installer.getId());
                 }
             }
-            stat.put("installerName", installerName != null ? installerName : ("未分配".equals(code) ? "未分配" : "未知"));
+            stat.put("installerName", installerName != null ? installerName : ("UNASSIGNED".equals(code) ? "UNASSIGNED" : "UNKNOWN"));
         }
 
-        // 计算剩余利润 = 可分润金额 - 装机商分润 - 经销商分润
+        // 闂備浇宕垫慨宕囨閵堝洦顫曢柡鍥ュ灪閸嬧晛鈹戦悩瀹犲缂佲偓閸儲鐓冮悶娑掆偓鍏呭缂傚倸鍊哥粔鐢稿垂閸喚鏆︽慨妯挎硾閻撴盯鏌涘畝鈧崑鐔虹矆?= 闂傚倷绀侀幉锟犳偡椤栫偛鍨傚ù鍏兼綑閸ㄥ倿骞栫划瑙勵€嗘俊鎻掔墦閺屻劑寮撮悙娴嬪亾缁嬪簱鏋嶉柕濞垮剻?- 闂備浇宕甸崰宥囩矆娓氣偓楠炲﹨绠涢幘顖涙暊闂侀€炲苯澧撮柡灞剧洴閹垽鏌ㄧ€ｅ灚顥ｉ梻浣规偠閸斿本顨ラ幖浣哥叀?- 缂傚倸鍊搁崐椋庣矆娴ｇ儤宕叉慨妞诲亾鐎殿喓鍔戞慨鈧柕鍫濇噽閺屽牓姊虹化鏇炲⒉妞ゃ劌鎳橀幃妤冪磼濡偐顔?
         for (Map<String, Object> stat : installerList) {
             stat.put("totalAmountByCurrency", toOrderedCurrencyAmountMap(getOrCreateCurrencyMap(stat, "totalAmountByCurrency")));
             stat.put("installerAmountByCurrency", toOrderedCurrencyAmountMap(getOrCreateCurrencyMap(stat, "installerAmountByCurrency")));
@@ -569,95 +951,29 @@ public class BillingService {
     }
 
     /**
-     * 获取经销商账单汇总统计
-     * 根据当前用户角色自动过滤
+     * 闂傚倷绀侀崥瀣磿閹惰棄搴婇柤鑹扮堪娴滃綊鏌涢妷銏℃珖缁炬儳銈搁悡顐﹀炊閵娧€濮囬梺杞扮劍閿曘垽寮诲☉銏″亜闂佸灝顑愬Λ銉︾節閵忥絾纭鹃悗姘緲閻ｇ兘鏁撻悩鎻掑祮闂佺粯姊婚崕銈夋嚕閸ヮ剚鈷戦悹鍥ｂ偓鍐测拤閻庤娲滈弫鎼佸礆閹烘鎯為悷娆忓椤?
+     * 闂傚倷绀侀幖顐ょ矓閻戞枻缍栧璺猴功閺嗐倕霉閿濆拋娼熷ù婊冪秺閺岀喖骞嗚閺嗚鲸銇勯妶鍛殗闁哄矉缍侀敐鐐侯敆閳ь剚淇婃禒瀣厱闁冲搫鍊婚妴鎺楁煙閸欏灏︽鐐村浮瀵挳鎮滈崱姗嗘闂傚倷鑳堕崢褔銆冩惔銏㈩洸婵犲﹤瀚崣蹇涙煃閸濆嫬鈧绂嶉妶澶嬬厱闁靛绲芥俊钘夆攽?
      */
     public Map<String, Object> getDealerBillingSummary(Long currentUserId, String installerCode, Long dealerId, Date startDate, Date endDate) {
-        // 根据当前用户角色确定过滤条件
-        String effectiveInstallerCode = installerCode;
-        Long effectiveDealerId = dealerId;
+        BillingDataScope scope = resolveBillingDataScope(currentUserId, installerCode, dealerId, "dealer");
 
-        if (currentUserId != null) {
-            User currentUser = userRepository.selectById(currentUserId);
-            if (currentUser != null) {
-                boolean isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
-                if (!isAdmin) {
-                    // 装机商只能查看自己的数据
-                    if (currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null) {
-                        Installer installer = installerRepository.selectById(currentUser.getInstallerId());
-                        if (installer != null) {
-                            effectiveInstallerCode = installer.getInstallerCode();
-                        }
-                    }
-                    // 经销商只能查看自己的数据
-                    if (currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null) {
-                        effectiveDealerId = currentUser.getDealerId();
-                    }
-                }
-            }
+        List<String> dealerDeviceIds = scope.dealerId != null
+                ? resolveDealerDeviceIdsByDealerId(scope.dealerId)
+                : Collections.emptyList();
+
+        QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
+        qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
+        applyInstallerDealerScope(qw, scope, dealerDeviceIds);
+        if (startDate != null) {
+            qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
+        }
+        if (endDate != null) {
+            qw.lambda().le(PaymentOrder::getPaidAt, endDate);
         }
 
-        // 查询订单：如果指定了经销商，需要查询该经销商相关的所有设备
-        List<PaymentOrder> orders;
-        if (effectiveDealerId != null) {
-            // 查询该经销商在 device_dealer 表中关联的所有设备ID
-            List<String> dealerDeviceIds = new ArrayList<>();
-            try {
-                Dealer dealer = dealerRepository.selectById(effectiveDealerId);
-                if (dealer != null && dealer.getDealerCode() != null) {
-                    dealerDeviceIds = deviceDealerRepository.listDeviceIdsByDealerCode(dealer.getDealerCode());
-                }
-            } catch (Exception e) {
-                log.debug("查询经销商设备列表失败: {}", e.getMessage());
-            }
+        List<PaymentOrder> orders = orderRepository.selectList(qw);
+        Map<String, Set<Long>> dealerSettlementMap = loadDealerSettlementMap(orders);
 
-            // 创建 final 副本供 lambda 使用
-            final Long finalEffectiveDealerId = effectiveDealerId;
-            final List<String> finalDealerDeviceIds = dealerDeviceIds;
-
-            QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
-            qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
-            if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
-                qw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
-            }
-
-            // 查询条件：dealer_id = effectiveDealerId OR device_id IN (dealerDeviceIds)
-            if (!finalDealerDeviceIds.isEmpty()) {
-                qw.and(wrapper -> wrapper
-                    .eq("dealer_id", finalEffectiveDealerId)
-                    .or()
-                    .in("device_id", finalDealerDeviceIds)
-                );
-            } else {
-                qw.lambda().eq(PaymentOrder::getDealerId, effectiveDealerId);
-            }
-
-            if (startDate != null) {
-                qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
-            }
-            if (endDate != null) {
-                qw.lambda().le(PaymentOrder::getPaidAt, endDate);
-            }
-
-            orders = orderRepository.selectList(qw);
-        } else {
-            // 没有指定经销商，按原逻辑查询
-            QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
-            qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
-            if (effectiveInstallerCode != null && !effectiveInstallerCode.trim().isEmpty()) {
-                qw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
-            }
-            if (startDate != null) {
-                qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
-            }
-            if (endDate != null) {
-                qw.lambda().le(PaymentOrder::getPaidAt, endDate);
-            }
-
-            orders = orderRepository.selectList(qw);
-        }
-
-        // 按经销商分组统计
         Map<String, Map<String, Object>> dealerStats = new HashMap<>();
         BigDecimal totalAmount = BigDecimal.ZERO;
         BigDecimal totalCost = BigDecimal.ZERO;
@@ -677,21 +993,49 @@ public class BillingService {
         int totalOrders = 0;
 
         for (PaymentOrder order : orders) {
-            Long did = order.getDealerId();
-            String key = did != null ? String.valueOf(did) : "未分配";
-            String iCode = order.getInstallerCode();
+            String currency = normalizeCurrency(order.getCurrency());
+            BigDecimal orderAmount = MoneyScaleUtil.keepTwoDecimals(order.getAmount());
+            BigDecimal installerAmt = MoneyScaleUtil.keepTwoDecimals(order.getInstallerAmount());
+            BigDecimal planCost = MoneyScaleUtil.keepTwoDecimals(order.getPlanCost());
 
-            final Long finalDid = did;
-            final String finalICode = iCode;
+            totalAmount = totalAmount.add(orderAmount);
+            totalCost = totalCost.add(planCost);
+            BigDecimal effectiveFeeAmount = calculateEffectiveFeeAmount(order);
+            BigDecimal effectiveProfitAmount = calculateEffectiveProfitAmount(order, effectiveFeeAmount);
+            totalProfitAmount = totalProfitAmount.add(effectiveProfitAmount);
+            totalInstallerAmount = totalInstallerAmount.add(installerAmt);
+            addCurrencyAmount(totalAmountByCurrency, currency, orderAmount);
+            addCurrencyAmount(totalCostByCurrency, currency, planCost);
+            addCurrencyAmount(totalProfitAmountByCurrency, currency, effectiveProfitAmount);
+            addCurrencyAmount(totalInstallerAmountByCurrency, currency, installerAmt);
+            if (order.getDeviceId() != null) {
+                deviceIds.add(order.getDeviceId());
+            }
+            totalOrders++;
 
-            // 如果指定了经销商过滤，只统计该经销商的数据
-            boolean shouldCountThisDealer = (effectiveDealerId == null || (did != null && did.equals(effectiveDealerId)));
+            List<DealerCommissionSlice> dealerSlices;
+            if (scope.dealerId != null) {
+                DealerCommissionSlice targetSlice = resolveDealerCommissionSlice(order, scope.dealerId);
+                dealerSlices = targetSlice != null ? Collections.singletonList(targetSlice) : Collections.emptyList();
+            } else {
+                dealerSlices = resolveDealerCommissionSlices(order);
+            }
 
-            if (shouldCountThisDealer) {
+            for (DealerCommissionSlice slice : dealerSlices) {
+                Long sliceDealerId = slice.getDealerId();
+                if (sliceDealerId == null) {
+                    continue;
+                }
+                boolean isSettled = isDealerSliceSettled(order, sliceDealerId, dealerSettlementMap);
+                String key = String.valueOf(sliceDealerId);
+                final Long finalDid = sliceDealerId;
+                final String finalICode = order.getInstallerCode();
+                final String finalDealerCode = slice.getDealerCode();
+
                 Map<String, Object> stat = dealerStats.computeIfAbsent(key, k -> {
                     Map<String, Object> s = new HashMap<>();
                     s.put("dealerId", finalDid);
-                    s.put("dealerCode", null);
+                    s.put("dealerCode", finalDealerCode);
                     s.put("dealerName", null);
                     s.put("installerCode", finalICode);
                     s.put("orderCount", 0);
@@ -706,237 +1050,30 @@ public class BillingService {
                     return s;
                 });
 
-                String currency = normalizeCurrency(order.getCurrency());
-                BigDecimal orderAmount = safeAmount(order.getAmount());
-                BigDecimal dAmt = order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO;
-                BigDecimal installerAmt = order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO;
-                BigDecimal planCost = safeAmount(order.getPlanCost());
-                boolean isSettled = order.getIsSettled() != null && order.getIsSettled() == 1;
-
+                BigDecimal shareAmount = MoneyScaleUtil.keepTwoDecimals(slice.getAmount());
                 stat.put("orderCount", (Integer) stat.get("orderCount") + 1);
                 stat.put("totalAmount", ((BigDecimal) stat.get("totalAmount")).add(orderAmount));
-                stat.put("dealerAmount", ((BigDecimal) stat.get("dealerAmount")).add(dAmt));
+                stat.put("dealerAmount", ((BigDecimal) stat.get("dealerAmount")).add(shareAmount));
                 addCurrencyAmount(getOrCreateCurrencyMap(stat, "totalAmountByCurrency"), currency, orderAmount);
-                addCurrencyAmount(getOrCreateCurrencyMap(stat, "dealerAmountByCurrency"), currency, dAmt);
+                addCurrencyAmount(getOrCreateCurrencyMap(stat, "dealerAmountByCurrency"), currency, shareAmount);
+
                 if (isSettled) {
-                    stat.put("settledAmount", ((BigDecimal) stat.get("settledAmount")).add(dAmt));
-                    addCurrencyAmount(getOrCreateCurrencyMap(stat, "settledAmountByCurrency"), currency, dAmt);
-                    totalSettledDealerAmount = totalSettledDealerAmount.add(dAmt);
-                    addCurrencyAmount(totalSettledDealerAmountByCurrency, currency, dAmt);
+                    stat.put("settledAmount", ((BigDecimal) stat.get("settledAmount")).add(shareAmount));
+                    addCurrencyAmount(getOrCreateCurrencyMap(stat, "settledAmountByCurrency"), currency, shareAmount);
+                    totalSettledDealerAmount = totalSettledDealerAmount.add(shareAmount);
+                    addCurrencyAmount(totalSettledDealerAmountByCurrency, currency, shareAmount);
                 } else {
-                    stat.put("unsettledAmount", ((BigDecimal) stat.get("unsettledAmount")).add(dAmt));
-                    addCurrencyAmount(getOrCreateCurrencyMap(stat, "unsettledAmountByCurrency"), currency, dAmt);
-                    totalUnsettledDealerAmount = totalUnsettledDealerAmount.add(dAmt);
-                    addCurrencyAmount(totalUnsettledDealerAmountByCurrency, currency, dAmt);
+                    stat.put("unsettledAmount", ((BigDecimal) stat.get("unsettledAmount")).add(shareAmount));
+                    addCurrencyAmount(getOrCreateCurrencyMap(stat, "unsettledAmountByCurrency"), currency, shareAmount);
+                    totalUnsettledDealerAmount = totalUnsettledDealerAmount.add(shareAmount);
+                    addCurrencyAmount(totalUnsettledDealerAmountByCurrency, currency, shareAmount);
                 }
+
+                totalDealerAmount = totalDealerAmount.add(shareAmount);
+                addCurrencyAmount(totalDealerAmountByCurrency, currency, shareAmount);
             }
-
-            // ========== 处理多级经销商分润 ==========
-            // 查询该设备的经销商链路，为上级经销商也统计分润
-            if (order.getDeviceId() != null && order.getDealerAmount() != null && order.getDealerAmount().compareTo(BigDecimal.ZERO) > 0) {
-                try {
-                    List<DeviceDealer> dealerChain = deviceDealerRepository.getDealerChainByDeviceId(order.getDeviceId());
-                    if (dealerChain != null && dealerChain.size() > 1) {
-                        // 有多级经销商，需要计算每个经销商的分润
-                        // 逻辑：下级经销商的commission_rate表示从总池子中抽取的比例
-                        //      上级经销商分润 = 总池子 × (100% - 所有下级的rate之和)
-                        BigDecimal dealerPoolAmount = order.getDealerAmount();
-
-                        // 计算所有下级经销商的分润比例之和
-                        BigDecimal totalSubRate = BigDecimal.ZERO;
-                        for (int i = 1; i < dealerChain.size(); i++) {
-                            DeviceDealer dd = dealerChain.get(i);
-                            BigDecimal rate = dd.getCommissionRate() != null ? dd.getCommissionRate() : BigDecimal.ZERO;
-                            totalSubRate = totalSubRate.add(rate);
-                        }
-
-                        for (int i = 0; i < dealerChain.size(); i++) {
-                            DeviceDealer dd = dealerChain.get(i);
-
-                            // 如果指定了经销商过滤，只统计该经销商的数据
-                            boolean shouldCountSubDealer = (effectiveDealerId == null || dd.getDealerId().equals(effectiveDealerId));
-                            if (!shouldCountSubDealer) {
-                                continue;
-                            }
-
-                            // 跳过一级经销商（已经在上面统计过了）
-                            if (i == 0) {
-                                continue;
-                            }
-
-                            // 计算该下级经销商的实际所得 = 总池子 × 该经销商的rate
-                            BigDecimal rate = dd.getCommissionRate() != null ? dd.getCommissionRate() : BigDecimal.ZERO;
-                            BigDecimal actualAmount = dealerPoolAmount.multiply(rate).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
-
-                            // 为下级经销商创建或更新统计
-                            String subKey = String.valueOf(dd.getDealerId());
-                            final Long subDealerId = dd.getDealerId();
-                            final String subInstallerCode = iCode;
-                            Map<String, Object> subStat = dealerStats.computeIfAbsent(subKey, k -> {
-                                Map<String, Object> s = new HashMap<>();
-                                s.put("dealerId", subDealerId);
-                                s.put("dealerCode", null);
-                                s.put("dealerName", null);
-                                s.put("installerCode", subInstallerCode);
-                                s.put("orderCount", 0);
-                                s.put("totalAmount", BigDecimal.ZERO);
-                                s.put("dealerAmount", BigDecimal.ZERO);
-                                s.put("settledAmount", BigDecimal.ZERO);
-                                s.put("unsettledAmount", BigDecimal.ZERO);
-                                s.put("totalAmountByCurrency", new HashMap<String, BigDecimal>());
-                                s.put("dealerAmountByCurrency", new HashMap<String, BigDecimal>());
-                                s.put("settledAmountByCurrency", new HashMap<String, BigDecimal>());
-                                s.put("unsettledAmountByCurrency", new HashMap<String, BigDecimal>());
-                                return s;
-                            });
-
-                            String currency = normalizeCurrency(order.getCurrency());
-                            BigDecimal orderAmount = safeAmount(order.getAmount());
-                            boolean isSettled = order.getIsSettled() != null && order.getIsSettled() == 1;
-
-                            // 累加下级经销商的分润
-                            subStat.put("orderCount", (Integer) subStat.get("orderCount") + 1);
-                            subStat.put("totalAmount", ((BigDecimal) subStat.get("totalAmount")).add(orderAmount));
-                            subStat.put("dealerAmount", ((BigDecimal) subStat.get("dealerAmount")).add(actualAmount));
-                            addCurrencyAmount(getOrCreateCurrencyMap(subStat, "totalAmountByCurrency"), currency, orderAmount);
-                            addCurrencyAmount(getOrCreateCurrencyMap(subStat, "dealerAmountByCurrency"), currency, actualAmount);
-
-                            if (isSettled) {
-                                subStat.put("settledAmount", ((BigDecimal) subStat.get("settledAmount")).add(actualAmount));
-                                addCurrencyAmount(getOrCreateCurrencyMap(subStat, "settledAmountByCurrency"), currency, actualAmount);
-                                totalSettledDealerAmount = totalSettledDealerAmount.add(actualAmount);
-                                addCurrencyAmount(totalSettledDealerAmountByCurrency, currency, actualAmount);
-                            } else {
-                                subStat.put("unsettledAmount", ((BigDecimal) subStat.get("unsettledAmount")).add(actualAmount));
-                                addCurrencyAmount(getOrCreateCurrencyMap(subStat, "unsettledAmountByCurrency"), currency, actualAmount);
-                                totalUnsettledDealerAmount = totalUnsettledDealerAmount.add(actualAmount);
-                                addCurrencyAmount(totalUnsettledDealerAmountByCurrency, currency, actualAmount);
-                            }
-
-                            totalDealerAmount = totalDealerAmount.add(actualAmount);
-                            addCurrencyAmount(totalDealerAmountByCurrency, currency, actualAmount);
-                        }
-
-                        // 如果一级经销商需要统计，重新计算其分润（因为上面统计的是全部池子）
-                        if (dealerChain.size() > 1) {
-                            DeviceDealer topDealer = dealerChain.get(0);
-                            boolean shouldCountTopDealer = (effectiveDealerId == null || topDealer.getDealerId().equals(effectiveDealerId));
-
-                            if (shouldCountTopDealer) {
-                                // 一级经销商的实际分润 = 总池子 × (100% - 所有下级的rate之和)
-                                BigDecimal topRate = new BigDecimal("100").subtract(totalSubRate);
-                                BigDecimal topActualAmount = dealerPoolAmount.multiply(topRate).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
-
-                                // 获取或创建一级经销商的统计对象
-                                String topKey = String.valueOf(topDealer.getDealerId());
-                                final Long topDealerId = topDealer.getDealerId();
-                                final String topInstallerCode = iCode;
-                                Map<String, Object> topStat = dealerStats.computeIfAbsent(topKey, k -> {
-                                    Map<String, Object> s = new HashMap<>();
-                                    s.put("dealerId", topDealerId);
-                                    s.put("dealerCode", null);
-                                    s.put("dealerName", null);
-                                    s.put("installerCode", topInstallerCode);
-                                    s.put("orderCount", 0);
-                                    s.put("totalAmount", BigDecimal.ZERO);
-                                    s.put("dealerAmount", BigDecimal.ZERO);
-                                    s.put("settledAmount", BigDecimal.ZERO);
-                                    s.put("unsettledAmount", BigDecimal.ZERO);
-                                    s.put("totalAmountByCurrency", new HashMap<String, BigDecimal>());
-                                    s.put("dealerAmountByCurrency", new HashMap<String, BigDecimal>());
-                                    s.put("settledAmountByCurrency", new HashMap<String, BigDecimal>());
-                                    s.put("unsettledAmountByCurrency", new HashMap<String, BigDecimal>());
-                                    return s;
-                                });
-
-                                String currency = normalizeCurrency(order.getCurrency());
-                                BigDecimal orderAmount = safeAmount(order.getAmount());
-                                boolean isSettled = order.getIsSettled() != null && order.getIsSettled() == 1;
-
-                                // 如果一级经销商就是 order.dealer_id，说明之前已经统计了全部池子，需要修正
-                                if (did != null && did.equals(topDealer.getDealerId())) {
-                                    // 修正：减去多统计的部分
-                                    BigDecimal diff = order.getDealerAmount().subtract(topActualAmount);
-                                    if (diff.compareTo(BigDecimal.ZERO) != 0) {
-                                        topStat.put("dealerAmount", ((BigDecimal) topStat.get("dealerAmount")).subtract(diff));
-                                        addCurrencyAmount(getOrCreateCurrencyMap(topStat, "dealerAmountByCurrency"), currency, diff.negate());
-
-                                        if (isSettled) {
-                                            topStat.put("settledAmount", ((BigDecimal) topStat.get("settledAmount")).subtract(diff));
-                                            addCurrencyAmount(getOrCreateCurrencyMap(topStat, "settledAmountByCurrency"), currency, diff.negate());
-                                            totalSettledDealerAmount = totalSettledDealerAmount.subtract(diff);
-                                            addCurrencyAmount(totalSettledDealerAmountByCurrency, currency, diff.negate());
-                                        } else {
-                                            topStat.put("unsettledAmount", ((BigDecimal) topStat.get("unsettledAmount")).subtract(diff));
-                                            addCurrencyAmount(getOrCreateCurrencyMap(topStat, "unsettledAmountByCurrency"), currency, diff.negate());
-                                            totalUnsettledDealerAmount = totalUnsettledDealerAmount.subtract(diff);
-                                            addCurrencyAmount(totalUnsettledDealerAmountByCurrency, currency, diff.negate());
-                                        }
-
-                                        totalDealerAmount = totalDealerAmount.subtract(diff);
-                                        addCurrencyAmount(totalDealerAmountByCurrency, currency, diff.negate());
-                                    }
-                                } else {
-                                    // 一级经销商不是 order.dealer_id，需要新增统计
-                                    topStat.put("orderCount", (Integer) topStat.get("orderCount") + 1);
-                                    topStat.put("totalAmount", ((BigDecimal) topStat.get("totalAmount")).add(orderAmount));
-                                    topStat.put("dealerAmount", ((BigDecimal) topStat.get("dealerAmount")).add(topActualAmount));
-                                    addCurrencyAmount(getOrCreateCurrencyMap(topStat, "totalAmountByCurrency"), currency, orderAmount);
-                                    addCurrencyAmount(getOrCreateCurrencyMap(topStat, "dealerAmountByCurrency"), currency, topActualAmount);
-
-                                    if (isSettled) {
-                                        topStat.put("settledAmount", ((BigDecimal) topStat.get("settledAmount")).add(topActualAmount));
-                                        addCurrencyAmount(getOrCreateCurrencyMap(topStat, "settledAmountByCurrency"), currency, topActualAmount);
-                                        totalSettledDealerAmount = totalSettledDealerAmount.add(topActualAmount);
-                                        addCurrencyAmount(totalSettledDealerAmountByCurrency, currency, topActualAmount);
-                                    } else {
-                                        topStat.put("unsettledAmount", ((BigDecimal) topStat.get("unsettledAmount")).add(topActualAmount));
-                                        addCurrencyAmount(getOrCreateCurrencyMap(topStat, "unsettledAmountByCurrency"), currency, topActualAmount);
-                                        totalUnsettledDealerAmount = totalUnsettledDealerAmount.add(topActualAmount);
-                                        addCurrencyAmount(totalUnsettledDealerAmountByCurrency, currency, topActualAmount);
-                                    }
-
-                                    totalDealerAmount = totalDealerAmount.add(topActualAmount);
-                                    addCurrencyAmount(totalDealerAmountByCurrency, currency, topActualAmount);
-                                }
-                            }
-                        }
-                    }
-                } catch (Exception e) {
-                    log.debug("查询设备经销商链路失败（device_dealer表可能不存在）: deviceId={}, error={}",
-                            order.getDeviceId(), e.getMessage());
-                }
-            }
-
-            String currency = normalizeCurrency(order.getCurrency());
-            BigDecimal orderAmount = safeAmount(order.getAmount());
-            BigDecimal installerAmt = order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO;
-            BigDecimal planCost = safeAmount(order.getPlanCost());
-            BigDecimal dAmt = order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO;
-
-            totalAmount = totalAmount.add(orderAmount);
-            totalCost = totalCost.add(planCost);
-            BigDecimal effectiveFeeAmount = calculateEffectiveFeeAmount(order);
-            BigDecimal effectiveProfitAmount = calculateEffectiveProfitAmount(order, effectiveFeeAmount);
-            totalProfitAmount = totalProfitAmount.add(effectiveProfitAmount);
-            totalInstallerAmount = totalInstallerAmount.add(installerAmt);
-            if (shouldCountThisDealer) {
-                totalDealerAmount = totalDealerAmount.add(dAmt);
-            }
-            addCurrencyAmount(totalAmountByCurrency, currency, orderAmount);
-            addCurrencyAmount(totalCostByCurrency, currency, planCost);
-            addCurrencyAmount(totalProfitAmountByCurrency, currency, effectiveProfitAmount);
-            addCurrencyAmount(totalInstallerAmountByCurrency, currency, installerAmt);
-            if (shouldCountThisDealer) {
-                addCurrencyAmount(totalDealerAmountByCurrency, currency, dAmt);
-            }
-            if (order.getDeviceId() != null) {
-                deviceIds.add(order.getDeviceId());
-            }
-            totalOrders++;
         }
 
-        // 补充经销商名称
         List<Map<String, Object>> dealerList = new ArrayList<>(dealerStats.values());
         for (Map<String, Object> stat : dealerList) {
             Long did = (Long) stat.get("dealerId");
@@ -1003,18 +1140,21 @@ public class BillingService {
     }
 
     /**
-     * 获取订单明细列表（用于导出）
-     * @param installerCode 装机商代码（可选）
-     * @param dealerId 经销商ID（可选）
-     * @param startDate 开始日期
-     * @param endDate 结束日期
+     * 闂傚倷绀侀崥瀣磿閹惰棄搴婇柤鑹扮堪娴滃綊鏌涢妷銏℃珕濠殿垰銈搁弻鏇＄疀閺囩倫銏㈢磼閳ь剛鈧綆鍠楅悡娑㈡煕閺囥劌浜濋柟鐧哥悼缁辨帡顢欓懖鈺冾啋閻庤娲橀懝鎹愮亙闂佸憡娲嶉弬渚€宕戦幘璇茬妞ゆ棁濮ゅ▍鏍⒑閸撴彃浜栭柛銊︽そ瀵疇绠涢幘浣烘嚀椤劑宕橀鍛亾濡や降浜滈柡鍥舵線閹插墽鈧娲橀悷鈺呭箖椤旈敮鍋撻棃娑欐喐妞?
+     * @param installerCode 闂備浇宕甸崰宥囩矆娓氣偓楠炲﹨绠涢幘顖涙暊闂侀€炲苯澧撮柡灞剧洴閹垽鏌ㄧ€ｅ灚顥犻梻浣告憸閸庢劙宕滈悢鐓庣畾鐎广儱妫涢悷鐟扳攽閻樻彃顏い锔规櫊濮婃椽宕ㄦ繝鍕櫧闂佹悶鍔岄悥濂稿春閳ь剚銇勯幒鍡椾壕濡炪伇鈧崑鎾剁磽?
+     * @param dealerId 缂傚倸鍊搁崐椋庣矆娴ｇ儤宕叉慨妞诲亾鐎殿喓鍔戞慨鈧柕鍫濇噽閺屽牓姊洪崨濠勭煂闁伙附宀稿娲箰鎼达絺妲堥梺缁橆殔濡粓濡甸幇鏉胯摕闁靛濡囬崝鍨節閵忥絽鐓愮紒瀣尵缁?
+     * @param startDate 闂佽瀛╅鏍窗閹烘纾婚柟鐐灱閺€鑺ャ亜閺冨倵鎷￠柛搴㈠姈娣囧﹪顢曢悢鍛婄彋閻?
+     * @param endDate 缂傚倸鍊搁崐鐑芥倿閿曞倸绠伴悹鍥ф▕閻掕姤銇勯幇鍓佺暠缂侇偄绉归弻鏇熷緞濞戙垺顎嶉梺?
      */
     public List<Map<String, Object>> getOrderDetails(Long currentUserId, String installerCode, Long dealerId, Date startDate, Date endDate) {
         BillingDataScope scope = resolveBillingDataScope(currentUserId, installerCode, dealerId);
+        List<String> dealerDeviceIds = scope.dealerId != null
+                ? resolveDealerDeviceIdsByDealerId(scope.dealerId)
+                : Collections.emptyList();
 
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
-        applyInstallerDealerScope(qw, scope);
+        applyInstallerDealerScope(qw, scope, dealerDeviceIds);
         if (startDate != null) {
             qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
         }
@@ -1024,7 +1164,24 @@ public class BillingService {
         qw.lambda().orderByDesc(PaymentOrder::getPaidAt);
 
         List<PaymentOrder> orders = orderRepository.selectList(qw);
+        for (PaymentOrder order : orders) {
+            normalizeFinancialFieldsForDisplay(order);
+        }
+        if (scope.dealerId != null && scope.showDealerInfo) {
+            applyDealerCommissionSlice(orders, scope.dealerId);
+        }
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+
+        String settledDimension = null;
+        if (scope.showInstallerInfo && !scope.showDealerInfo) {
+            settledDimension = DIMENSION_INSTALLER;
+        } else if (!scope.showInstallerInfo && scope.showDealerInfo) {
+            settledDimension = DIMENSION_DEALER;
+        }
+        Map<String, Set<Long>> detailDealerSettlementMap =
+                DIMENSION_DEALER.equals(settledDimension) && scope.dealerId != null
+                        ? loadDealerSettlementMap(orders)
+                        : Collections.emptyMap();
 
         List<Map<String, Object>> result = new ArrayList<>();
         for (PaymentOrder order : orders) {
@@ -1053,23 +1210,29 @@ public class BillingService {
             row.put("paidAt", order.getPaidAt() != null ? sdf.format(order.getPaidAt()) : "");
             row.put("refundAt", order.getRefundAt() != null ? sdf.format(order.getRefundAt()) : "");
             row.put("refundReason", order.getRefundReason());
-            row.put("isSettled", order.getIsSettled());
+            if (DIMENSION_DEALER.equals(settledDimension) && scope.dealerId != null) {
+                row.put("isSettled", getDealerSettledValue(order, scope.dealerId, detailDealerSettlementMap));
+            } else if (settledDimension != null) {
+                row.put("isSettled", getSettledValueByDimension(order, settledDimension));
+            } else {
+                row.put("isSettled", order.getIsSettled());
+            }
             result.add(row);
         }
         return result;
     }
 
     /**
-     * 分页查询订单列表
-     * 根据当前用户角色自动过滤：
-     * - 管理员(role=3)：可查看所有订单
-     * - 装机商(isInstaller=1)：只能查看自己关联的订单
-     * - 经销商(isDealer=1)：只能查看自己关联的订单
-     * - 既是装机商又是经销商：可查看两者关联的订单(OR条件)
+     * 闂傚倷绀侀幉锛勬暜閹烘嚦娑樷攽鐎ｎ€儱顭块懜闈涘闁藉啰鍠栭弻鏇熷緞濡厧甯ラ梺鎼炲€曠€氫即骞冪憴鍕闂傚牊绋撴禒濂告倵鐟欏嫭绀堥柛鐘崇墪閻ｅ嘲顫濋鈺傛瀹曠喖鍩為幆褌澹?
+     * 闂傚倷绀侀幖顐ょ矓閻戞枻缍栧璺猴功閺嗐倕霉閿濆拋娼熷ù婊冪秺閺岀喖骞嗚閺嗚鲸銇勯妶鍛殗闁哄矉缍侀敐鐐侯敆閳ь剚淇婃禒瀣厱闁冲搫鍊婚妴鎺楁煙閸欏灏︽鐐村浮瀵挳鎮滈崱姗嗘闂傚倷鑳堕崢褔銆冩惔銏㈩洸婵犲﹤瀚崣蹇涙煃閸濆嫬鈧绂嶉妶澶嬬厱闁靛绲芥俊钘夆攽椤斿搫鐏查柡?
+     * - 缂傚倸鍊烽懗鑸靛垔鐎靛憡顫曢柡鍥ュ灩缁犳牕鈹戦悩鍙夋悙鐎?role=3)闂傚倷鐒︾€笛呯矙閹烘鍤岄柟瑙勫姂娴滃綊鏌＄仦璇插姎闁藉啰鍠栭弻鏇熺珶椤栨艾顏柣锝勭矙濮婃椽宕烽褎姣岄梺绋款儐閹瑰洭寮婚敓鐘查唶婵犲灚鍔栨瓏婵＄偑鍊栭幐鍝ョ礊婵犲倻鏆?
+     * - 闂備浇宕甸崰宥囩矆娓氣偓楠炲﹨绠涢幘顖涙暊闂侀€炲苯澧撮柡?isInstaller=1)闂傚倷鐒︾€笛呯矙閹烘鍤岄柟瑙勫姂娴滃湱鎲搁弮鍫濈疇婵°倕鎳忛崵宥夋煏婢诡垰鍟紒鈺呮⒒娴ｈ銇熷ù婊勭矒椤㈡牠宕奸妷銉ユ優濠电姴锕ら崰姘跺疮閸涘瓨鐓曟俊銈呭暙娴犳粎鎲搁幍顔尖枅闁哄被鍊栧蹇涘Ω閿旇瀚芥繝鐢靛仜閻楀﹪宕硅ぐ鎺戠閻庯綆鍠栭～鍛存煟濡灝鐨烘い?
+     * - 缂傚倸鍊搁崐椋庣矆娴ｇ儤宕叉慨妞诲亾鐎殿喓鍔戞慨鈧柕鍫濇噽閺?isDealer=1)闂傚倷鐒︾€笛呯矙閹烘鍤岄柟瑙勫姂娴滃湱鎲搁弮鍫濈疇婵°倕鎳忛崵宥夋煏婢诡垰鍟紒鈺呮⒒娴ｈ銇熷ù婊勭矒椤㈡牠宕奸妷銉ユ優濠电姴锕ら崰姘跺疮閸涘瓨鐓曟俊銈呭暙娴犳粎鎲搁幍顔尖枅闁哄被鍊栧蹇涘Ω閿旇瀚芥繝鐢靛仜閻楀﹪宕硅ぐ鎺戠閻庯綆鍠栭～鍛存煟濡灝鐨烘い?
+     * - 闂傚倷绀侀幖顐﹀疮閵娾晛鍨傞柛婵嗗珋閿濆浼犻柕澶涚畱閺呮娊姊洪崨濠佺繁闁哥姵顨堥懞鍗烆潩閼哥數鍘遍梺缁樻閺€閬嵥夊鍛亾濞堝灝鏋ら柡浣筋嚙椤曪絾瀵奸幖顓熸櫖濠电姴锕ら幊鎰潖妤ｅ啯鈷掑ù锝呮憸濮樸劑鏌涚€ｎ偅宕岄柡灞剧洴閹垽鏌ㄧ€ｅ墎宸濈紓鍌欑瑜板宕￠崘鑼殾闁挎繂顦介弫宥嗙箾閹寸偠澹樼€殿喓鍔戝鍝劽虹拋宕囩泿濡炪倖鍨电€氼噣骞冮鈧弻鍡楊吋閸℃鐣梻浣告啞娓氭宕㈤懝鑸汗闁绘绮悡鐘诲级閸稑濡介柍閿嬪笚缁绘盯宕奸悢椋庝患闂佺懓鍢查澶嬫叏閳ь剟鏌ｅΟ鍨毢妞?OR闂傚倷绀侀幖顐λ囬锕€鐒垫い鎺嗗亾鐎殿喖鐖奸、?
      */
     public Map<String, Object> listOrders(Long currentUserId, Integer page, Integer size, String installerCode, Long dealerId, 
                                           String deviceId, String status, Date startDate, Date endDate) {
-        // 根据当前用户角色确定过滤条件
+        // 闂傚倷绀侀幖顐ょ矓閻戞枻缍栧璺猴功閺嗐倕霉閿濆拋娼熷ù婊冪秺閺岀喖骞嗚閺嗚鲸銇勯妶鍛殗闁哄矉缍侀敐鐐侯敆閳ь剚淇婃禒瀣厱闁冲搫鍊婚妴鎺楁煙閸欏灏︽鐐村浮瀵挳鎮滈崱姗嗘缂傚倷鑳堕搹搴ㄥ矗鎼淬劌绐楅柡宥庡幗閸嬧晠鏌ｉ幇闈涘濞存嚎鍊濋弻娑㈠Ψ閿濆懎顬夋繝娈垮枔閸ㄤ粙寮婚埄鍐ㄧ窞闁糕€崇箰娴滈箖鏌涘▎蹇ｆ▓闁?
         String effectiveInstallerCode = installerCode;
         Long effectiveDealerId = dealerId;
         boolean needOrCondition = false; // dual-role OR scope
@@ -1084,29 +1247,29 @@ public class BillingService {
         if (currentUserId != null) {
             User currentUser = userRepository.selectById(currentUserId);
             if (currentUser != null) {
-                // 管理员可以查看所有订单，不需要强制过滤
+                // 缂傚倸鍊烽懗鑸靛垔鐎靛憡顫曢柡鍥ュ灩缁犳牕鈹戦悩鍙夋悙鐎瑰憡绻冩穱濠囶敍濮橆厽鍎撻柣鐘辩劍瑜板啴婀侀梺缁橈供閸犳牠宕濆鍫熺厽闁瑰灝瀚弧鈧梺璇″灠濞层劑鍩€椤掑﹦绉甸柛瀣閵嗗倿寮婚妷锔惧幐闂佸壊鍋呯换宥呂ｉ崗绗轰簻闁规儳纾粔铏光偓瑙勬穿缁绘繂顕ｉ幘顕呮晜闁糕剝鐟Σ宄扳攽閻愭潙鐏﹂柟绋挎憸缁棃鎮烽懜顑藉亾閹烘绀堝ù锝囨嚀閺嗩偅绻涙潏鍓ф偧妞ゎ厼鐗忛幑銏＄瑹閳ь剟寮诲☉銏犵闁规儳鍟挎慨鍝ョ磽娴ｇ瓔鍤欓柛鐕佸亰閳?
                 boolean isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
                 
                 if (!isAdmin) {
                     boolean isInstaller = currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null;
                     boolean isDealer = currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null;
                     
-                    // 装机商只能查看自己关联的订单
+                    // 闂備浇宕甸崰宥囩矆娓氣偓楠炲﹨绠涢幘顖涙暊闂侀€炲苯澧撮柡灞剧洴閹垽鏌ㄧ€ｅ灚顥ｉ柣鐔哥矋婵℃悂宕堕妸銉︾暠闂備礁鍚嬫禍浠嬪磿閹惰棄鐭楅柍褜鍓熷鍝劽虹拋宕囩泿濡炪倖鍨甸悧鎾崇暦闂堟侗鐓ラ柛鎰劤閺呯娀姊洪崨濠庢畼闁稿绋栭妵鎰版偐缂佹鍘鹃柡澶婄墑閸斿秹鍩涢幒鎾剁闁割偆鍠庨悘鈺呮煙瀹勯偊鍎斿┑顔瑰亾闂佺粯顭堢亸娆撍?
                     if (isInstaller) {
                         Installer installer = installerRepository.selectById(currentUser.getInstallerId());
                         if (installer != null && installer.getInstallerCode() != null) {
                             effectiveInstallerCode = installer.getInstallerCode();
-                            log.info("装机商用户查询订单列表, userId={}, installerCode={}", currentUserId, effectiveInstallerCode);
+                            log.info("闂備浇宕甸崰宥囩矆娓氣偓楠炲﹨绠涢幘顖涙暊闂侀€炲苯澧撮柡灞剧洴閹垽鏌ㄧ€ｅ灚锟ラ梻浣芥〃闂勫秹宕愬┑瀣祦閻庯綆鍠楅悡銉╂倵閿濆骸澧€殿喓鍔戦弻锝夋偐閸欏鍋嶉梺鎼炲妼閵堟悂銆佸Ο瑁や汗闁圭儤鍨归、鍛存⒑閸濆嫭宸濋柛瀣洴閹ê鈻庨幘鏉戜哗? userId={}, installerCode={}", currentUserId, effectiveInstallerCode);
                         }
                     }
                     
-                    // 经销商只能查看自己关联的订单
+                    // 缂傚倸鍊搁崐椋庣矆娴ｇ儤宕叉慨妞诲亾鐎殿喓鍔戞慨鈧柕鍫濇噽閺屽牓姊虹化鏇炲⒉妞ゃ劌鎳庨埥澶庮樄闁哄被鍊楅埀顒€婀辨慨纾嬵暱闂備胶绮幖顐ゆ崲濠靛绠氶柛銉㈡杹閸嬫捇鏁愭惔鈥崇濠电偛鐗婃竟鍡涘焵椤掆偓濠€閬嶁€﹂崼婵堟殾妞ゆ帒瀚惌妤冩喐閺冨牆绠犻柡鍥ュ灩缁秹鏌涚仦鍓с€掗柡鍡欏█閺岋綁鎮╅柆宥嗩€栭梺鎼炲妿閹虫捇鎮?
                     if (isDealer) {
                         effectiveDealerId = currentUser.getDealerId();
-                        log.info("经销商用户查询订单列表, userId={}, dealerId={}", currentUserId, effectiveDealerId);
+                        log.info("缂傚倸鍊搁崐椋庣矆娴ｇ儤宕叉慨妞诲亾鐎殿喓鍔戞慨鈧柕鍫濇噽閺屽牓姊虹化鏇炲⒉闁荤噦绠撳瀹犵疀濞戞瑧鍘甸梺鍦檸閸犳寮柆宥嗙厽闁瑰灝瀚壕鍧楁煙妞嬪骸鈻堝┑顔瑰亾闂佹寧绻傛鎼佸箖閸涘瓨鈷戦柛娑橆煬濞堟洘绻涢崣澶屽⒌鐎规洖缍婇、鏃堝幢濡桨绮? userId={}, dealerId={}", currentUserId, effectiveDealerId);
                     }
                     
-                    // 既是装机商又是经销商，需要OR条件
+                    // 闂傚倷绀侀幖顐﹀疮閵娾晛鍨傞柛婵嗗珋閿濆浼犻柕澶涚畱閺呮娊姊洪崨濠佺繁闁哥姵顨堥懞鍗烆潩閼哥數鍘遍梺缁樻閺€閬嵥夊鍛亾濞堝灝鏋ら柡浣筋嚙椤曪絾瀵奸幖顓熸櫖濠电姴锕ら幊鎰潖妤ｅ啯鈷掑ù锝呮憸濮樸劑鏌涚€ｎ偅宕岄柡灞剧洴閹垽鏌ㄧ€ｅ墎宸濈紓鍌欐祰妞村摜鎹㈤崼婢稒绗熼埀顒勫春閳ь剚銇勯幒鎴濃偓褰掑疮閸濆嫧妲堥柟鎹愬煐閹兼劙姊绘担鍛婃儓妞わ富鍋婇崺鈧い鎺嗗亾鐎殿喖鐖奸、?
                     needOrCondition = isInstaller && isDealer;
                 }
             }
@@ -1114,7 +1277,7 @@ public class BillingService {
         
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         
-        // 如果既是装机商又是经销商，使用OR条件
+        // 婵犵數濮烽。浠嬪焵椤掆偓閸熷潡鍩€椤掆偓缂嶅﹪骞冨Ο璇茬窞闁归偊鍓涢惈鍕⒑闂堟稓绠氶柛鎾寸箘閻熝囨⒑閼姐倕鏋嶇紒鈧笟鈧獮濠呯疀閹绢垱鏁犻梺閫炲苯澧撮柡灞剧洴閹垽鏌ㄧ€ｅ灚顥ｉ柣搴㈩問閸犳岸寮拠宸殨濞村吋鎯岄弫宥嗙節婵犲倹鍣芥慨濠囩畺濮婄粯鎷呴崫銉︾殤闂佺顑嗛幑鍥蓟濞戙垺鍋勯梺鍨儜缁便劎绱撴担浠嬪摵缂佽鍟撮獮蹇涘川椤栨稑纾梺闈涱煭闂勫嫬鈻撻、绀￠梻鍌欑閹碱偊藝椤愶箑鐒垫い鎺嗗亾鐎殿喖鐖奸、?
         if (needOrCondition && effectiveInstallerCode != null && effectiveDealerId != null) {
             final String finalInstallerCode = effectiveInstallerCode;
             final Long finalDealerId = effectiveDealerId;
@@ -1143,7 +1306,7 @@ public class BillingService {
         }
         qw.lambda().orderByDesc(PaymentOrder::getPaidAt);
 
-        // 分页查询
+        // 闂傚倷绀侀幉锛勬暜閹烘嚦娑樷攽鐎ｎ€儱顭块懜闈涘闁藉啰鍠栭弻鏇熷緞濡厧甯ラ梺?
         int offset = (page - 1) * size;
         qw.last("LIMIT " + offset + ", " + size);
         List<PaymentOrder> list = orderRepository.selectList(qw);
@@ -1151,9 +1314,9 @@ public class BillingService {
             normalizeFinancialFieldsForDisplay(order);
         }
 
-        // 查询总数
+        // 闂傚倷绀侀幖顐ゆ偖椤愶箑纾块柟缁㈠櫘閺佸淇婇妶鍛櫣缂佺姵鍨圭槐鎾存媴閼测剝鍨甸埢?
         QueryWrapper<PaymentOrder> countQw = new QueryWrapper<>();
-        // 如果既是装机商又是经销商，使用OR条件
+        // 婵犵數濮烽。浠嬪焵椤掆偓閸熷潡鍩€椤掆偓缂嶅﹪骞冨Ο璇茬窞闁归偊鍓涢惈鍕⒑闂堟稓绠氶柛鎾寸箘閻熝囨⒑閼姐倕鏋嶇紒鈧笟鈧獮濠呯疀閹绢垱鏁犻梺閫炲苯澧撮柡灞剧洴閹垽鏌ㄧ€ｅ灚顥ｉ柣搴㈩問閸犳岸寮拠宸殨濞村吋鎯岄弫宥嗙節婵犲倹鍣芥慨濠囩畺濮婄粯鎷呴崫銉︾殤闂佺顑嗛幑鍥蓟濞戙垺鍋勯梺鍨儜缁便劎绱撴担浠嬪摵缂佽鍟撮獮蹇涘川椤栨稑纾梺闈涱煭闂勫嫬鈻撻、绀￠梻鍌欑閹碱偊藝椤愶箑鐒垫い鎺嗗亾鐎殿喖鐖奸、?
         if (needOrCondition && effectiveInstallerCode != null && effectiveDealerId != null) {
             final String finalInstallerCode = effectiveInstallerCode;
             final Long finalDealerId = effectiveDealerId;
@@ -1191,14 +1354,17 @@ public class BillingService {
     }
 
     /**
-     * 记录退款
-     * @param orderId 订单ID
-     * @param reason 退款原因
+     * 闂備浇宕垫慨鎶芥倿閿曗偓椤灝螣閼测晝顦悗骞垮劚椤︿即鎮炴繝姘厓鐟滄粓宕滃▎鎾崇厺?
+     * @param orderId 闂備浇宕垫慨鎶芥⒔瀹ュ鍨傞柣鐔稿閺嗭箓鏌ｉ幋鐘虫嚈
+     * @param reason 闂傚倸鍊风欢锟犲磻閳ь剟鏌涚€ｎ偅灏扮紒缁樼洴瀹曞崬螣閸濆嫬袘闂佹眹鍩勯崹濂稿磻婵犲倻鏆?
      */
     public Map<String, Object> listOrders(Long currentUserId, Integer page, Integer size, String dimension,
                                           String installerCode, Long dealerId, String deviceId,
                                           String status, Date startDate, Date endDate) {
         BillingDataScope scope = resolveBillingDataScope(currentUserId, installerCode, dealerId, dimension);
+        List<String> dealerDeviceIds = scope.dealerId != null
+                ? resolveDealerDeviceIdsByDealerId(scope.dealerId)
+                : Collections.emptyList();
 
         PaymentOrderStatus effectiveStatus = PaymentOrderStatus.PAID;
         if (hasText(status)) {
@@ -1209,7 +1375,7 @@ public class BillingService {
         }
 
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
-        applyInstallerDealerScope(qw, scope);
+        applyInstallerDealerScope(qw, scope, dealerDeviceIds);
         if (hasText(deviceId)) {
             qw.lambda().like(PaymentOrder::getDeviceId, deviceId);
         }
@@ -1228,10 +1394,27 @@ public class BillingService {
         for (PaymentOrder order : list) {
             normalizeFinancialFieldsForDisplay(order);
         }
+        if (scope.dealerId != null && scope.showDealerInfo) {
+            applyDealerCommissionSlice(list, scope.dealerId);
+        }
         maskOrderCommissionFields(list, scope.showInstallerInfo, scope.showDealerInfo);
+        String normalizedDimension = normalizeDimension(dimension);
+        if (normalizedDimension != null) {
+            Map<String, Set<Long>> listDealerSettlementMap =
+                    DIMENSION_DEALER.equals(normalizedDimension) && scope.dealerId != null
+                            ? loadDealerSettlementMap(list)
+                            : Collections.emptyMap();
+            for (PaymentOrder order : list) {
+                if (DIMENSION_DEALER.equals(normalizedDimension) && scope.dealerId != null) {
+                    order.setIsSettled(getDealerSettledValue(order, scope.dealerId, listDealerSettlementMap));
+                } else {
+                    order.setIsSettled(getSettledValueByDimension(order, normalizedDimension));
+                }
+            }
+        }
 
         QueryWrapper<PaymentOrder> countQw = new QueryWrapper<>();
-        applyInstallerDealerScope(countQw, scope);
+        applyInstallerDealerScope(countQw, scope, dealerDeviceIds);
         if (hasText(deviceId)) {
             countQw.lambda().like(PaymentOrder::getDeviceId, deviceId);
         }
@@ -1258,24 +1441,24 @@ public class BillingService {
         qw.lambda().eq(PaymentOrder::getOrderId, orderId);
         PaymentOrder order = orderRepository.selectOne(qw);
         if (order == null) {
-            throw new RuntimeException("订单不存在");
+            throw new RuntimeException("Order not found");
         }
         if (order.getStatus() != PaymentOrderStatus.PAID) {
-            throw new RuntimeException("只有已支付的订单才能退款");
+            throw new RuntimeException("Only paid orders can be refunded");
         }
         order.setStatus(PaymentOrderStatus.REFUNDED);
         order.setRefundAt(new Date());
         order.setRefundReason(reason);
         order.setUpdatedAt(new Date());
         orderRepository.updateById(order);
-        log.info("记录退款: orderId={}, reason={}", orderId, reason);
+        log.info("閻犱焦婢樼紞宥夋焻閳ь剙鈻庨悙顒€鐏囬柛? orderId={}, reason={}", orderId, reason);
     }
 
-    // 充值明细Excel列标题
+    // Billing detail Excel headers
     private static final String[] BILLING_DETAIL_HEADERS = {
-            "订单号", "设备ID", "上线国家", "装机商代码", "装机商名称", "经销商ID", "经销商名称",
-            "套餐名称", "套餐类型", "支付金额", "支付币种", "支付通道", "支付时间",
-            "手续费", "套餐成本", "可分利润", "装机商分润", "经销商分润", "已结算"
+            "Order ID", "Device ID", "Online Country", "Installer Code", "Installer Name", "Dealer ID", "Dealer Name",
+            "Plan Name", "Product Type", "Amount", "Currency", "Payment Method", "Paid At",
+            "Fee Amount", "Plan Cost", "Profit Amount", "Installer Amount", "Dealer Amount", "Settled"
     };
 
     private static final int BILLING_COL_INSTALLER_CODE = 3;
@@ -1292,19 +1475,22 @@ public class BillingService {
     private static final int EXCEL_BATCH_SIZE = 10000;
 
     /**
-     * 导出充值明细Excel
-     * 如果数据超过1万条，分成多个Excel文件并打包成zip
-     * 权限说明：非管理员只能导出与自己关联的数据
-     * @return Map包含 "isZip" (boolean) 和 "data" (byte[])
+     * 闂備浇顕уù鐑藉极閹间礁鍌ㄧ憸鏂跨暦閻㈠壊鏁囬柕蹇曞Х椤ρ囨⒑閸涘﹣绶遍柛妯绘倐瀹曟垿骞樼拠鑼槯闂佺绻掗埛鍫濐焽閻樼數纾介柛灞剧懅椤︼箓鏌熼崫銉э紡cel
+     * 婵犵數濮烽。浠嬪焵椤掆偓閸熷潡鍩€椤掆偓缂嶅﹪骞冨Ο璇茬窞闁归偊鍓氶悗顒勬⒑缂佹﹩娈旈柣妤€妫涚划濠囨晝閸屾稑浠遍梺鍦劋閸ㄥ爼宕甸埀顒傜磽?婵犵數鍋為崹鍫曞箰缁嬫５娲晝閳ь剟鈥﹂崶顒夋晬闁绘劕鐡ㄥ▍鏍煟韫囨洖浠╂俊顐㈠閹绻濆顓犲幍闁诲孩绋掗敋濠殿喖娲﹂妵鍕晜閽樺鍤嬬紓浣割儏椤︾敻骞冮鍩跺洭鎮楁刊寮嗛梻鍌欑閹碱偊宕愮粙妫垫椽鏁愰崨顏呯€婚梺闈涚箞閸婃鐣垫笟鈧弻銈夊箹娴ｈ閿梺鎰佷簽閺佸寮诲☉銏犲唨鐟滃酣宕冲ú顏呯厱闁靛瀵岄崝鐢秔
+     * 闂傚倷绀侀幖顐λ囬鐐茬柈闁哄鍩堥悗鍫曟煣韫囨凹娼愰悗姘哺閹鈽夊▍铏灴閿濈偤寮介鐔哄弳濠电偞鍨堕悷銉╁传閻戞绠剧痪鏉垮綁缁ㄧ晫绱掗纰辩吋闁轰礁绉瑰畷鐔碱敆閳ь剟鍩€椤掑倸浠遍柡灞剧☉閳藉鈻嶉褌娴烽柕鍥ㄥ姌椤﹀綊鏌熼搹顐疁闁圭锕ュ鍕熼悜姗嗗晫闂傚倷绀侀幉锟犲垂閻撳寒娴栭柕濞у懐鐣堕悗鍏夊亾闁告洦鍓欏▓婊冾渻閵堝懐绠伴悗姘煎枤缁骞掑Δ浣哄幈闂婎偄娲﹂幐楣冨几閸愵煁褰掓偐閼碱剙鈪甸梺璇″灠閸熸潙鐣烽悢纰辨晢濞达綀顕栭崯鈧梻?
+     * @return Map闂傚倷绀侀幉锟犳偋閺囥垹绠犻幖娣妼缁?"isZip" (boolean) 闂?"data" (byte[])
      */
     public Map<String, Object> exportBillingDetailExcel(Long currentUserId, String dimension, String installerCode,
                                                         Long dealerId, String deviceId, Date startDate,
                                                         Date endDate) throws IOException {
         BillingDataScope scope = resolveBillingDataScope(currentUserId, installerCode, dealerId, dimension);
+        List<String> dealerDeviceIds = scope.dealerId != null
+                ? resolveDealerDeviceIdsByDealerId(scope.dealerId)
+                : Collections.emptyList();
 
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
-        applyInstallerDealerScope(qw, scope);
+        applyInstallerDealerScope(qw, scope, dealerDeviceIds);
         if (hasText(deviceId)) {
             qw.lambda().like(PaymentOrder::getDeviceId, deviceId);
         }
@@ -1319,6 +1505,9 @@ public class BillingService {
         List<PaymentOrder> orders = orderRepository.selectList(qw);
         for (PaymentOrder order : orders) {
             normalizeFinancialFieldsForDisplay(order);
+        }
+        if (scope.dealerId != null && scope.showDealerInfo) {
+            applyDealerCommissionSlice(orders, scope.dealerId);
         }
 
         Map<String, Object> result = new HashMap<>();
@@ -1335,14 +1524,16 @@ public class BillingService {
     }
     public Map<String, Object> exportBillingDetailExcel(Long currentUserId, String installerCode, Long dealerId, String deviceId, Date startDate, Date endDate) throws IOException {
         BillingDataScope scope = resolveBillingDataScope(currentUserId, installerCode, dealerId);
+        List<String> dealerDeviceIds = scope.dealerId != null
+                ? resolveDealerDeviceIdsByDealerId(scope.dealerId)
+                : Collections.emptyList();
         
-        log.info("开始导出充值明细Excel: currentUserId={}, installerCode={}, dealerId={}, deviceId={}, startDate={}, endDate={}", 
+        log.info("闂佽瀛╅鏍窗閹烘纾婚柟鐐灱閺€鑺ャ亜閺冨倵鎷￠柛搴＄箲閵囧嫰寮撮～顓熷枤閻庤娲橀悷鈺佺暦椤愶箑绀嬫い鎰╁灮椤戝牓姊绘担渚劸闁挎洏鍊濆畷銉р偓锝庘偓顓ㄧ秮楠炲鎮╅悽纰夌床闂備礁鎲＄划搴ㄣ€冨鎶弆: currentUserId={}, installerCode={}, dealerId={}, deviceId={}, startDate={}, endDate={}", 
                 currentUserId, scope.installerCode, scope.dealerId, deviceId, startDate, endDate);
 
-        // 查询所有符合条件的订单
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
-        applyInstallerDealerScope(qw, scope);
+        applyInstallerDealerScope(qw, scope, dealerDeviceIds);
         if (deviceId != null && !deviceId.trim().isEmpty()) {
             qw.lambda().like(PaymentOrder::getDeviceId, deviceId);
         }
@@ -1358,35 +1549,38 @@ public class BillingService {
         for (PaymentOrder order : orders) {
             normalizeFinancialFieldsForDisplay(order);
         }
-        log.info("查询到充值明细订单数: {}", orders.size());
+        if (scope.dealerId != null && scope.showDealerInfo) {
+            applyDealerCommissionSlice(orders, scope.dealerId);
+        }
+        log.info("闂傚倷绀侀幖顐ゆ偖椤愶箑纾块柟缁㈠櫘閺佸淇婇妶鍛櫣缂佲偓閸℃稒鐓涘璺猴功娴犮垽鎮介婊冣枅闁哄本绋掔换婵嬪磼濮橆厼鈧垰鈹戦垾鍐茬骇闁搞劌婀卞Σ鎰板箳濡も偓楠炪垺鎱ㄥΟ鐓庡付闁诡喖鎳樺娲川婵犲孩鐣峰┑鐐插级閿曘垹顕? {}", orders.size());
 
         Map<String, Object> result = new HashMap<>();
 
         if (orders.size() <= EXCEL_BATCH_SIZE) {
-            // 单个Excel文件
+            // 闂傚倷绀侀幉锟犮€冮崱妞曟椽骞嬮敂鐣屽帓濠电儑绲鹃幃鐚歟l闂傚倷绀侀幖顐﹀磹缁嬫５娲晲閸涱亝鐎?
             byte[] excelData = createBillingDetailExcel(orders, null, scope.showInstallerInfo, scope.showDealerInfo);
             result.put("isZip", false);
             result.put("data", excelData);
-            log.info("导出单个Excel文件完成");
+            log.info("Billing detail excel generated successfully");
         } else {
-            // 分片打包成zip
+            // 闂傚倷绀侀幉锛勬暜閹烘嚦娑樷槈濞嗘劖鐝烽梺鍝勭▉閸樿偐绮婚妷鈺傜厵闁诡垎鍐╂瘣闂佷紮绠戦悥濂稿蓟閻旇　鍋撳☉娅偐妲愬顤?
             byte[] zipData = createBillingDetailZip(orders, scope.showInstallerInfo, scope.showDealerInfo);
             result.put("isZip", true);
             result.put("data", zipData);
-            log.info("导出Zip文件完成，包含 {} 个Excel文件", (orders.size() + EXCEL_BATCH_SIZE - 1) / EXCEL_BATCH_SIZE);
+            log.info("閻庣數鍘ч崵顓犳嫻閿曗偓瀹曠喖寮版惔锝囩煄ZIP闁瑰瓨鍔曟慨? 闁哄倸娲ｅ▎銏ゅ极?{}", (orders.size() + EXCEL_BATCH_SIZE - 1) / EXCEL_BATCH_SIZE);
         }
 
         return result;
     }
 
     /**
-     * 创建充值明细Excel
+     * 闂傚倷绀侀幉锛勬暜濡ゅ啰鐭欓柟瀵稿Х绾句粙鏌熼幑鎰靛殭缂佲偓閸岀偞鐓曟繛鎴濆船楠炴劙鏌涚€ｎ偅宕岀€规洘顨婂畷妤冨枈鏉堛劎绋戠紓鍌氬€搁崐椋庣矆娓氣偓楠炴劗妲愭繅銆唋
      */
     private byte[] createBillingDetailExcel(List<PaymentOrder> orders, String sheetName) throws IOException {
         try (Workbook workbook = new XSSFWorkbook()) {
-            Sheet sheet = workbook.createSheet(sheetName != null ? sheetName : "充值明细");
+            Sheet sheet = workbook.createSheet(sheetName != null ? sheetName : "Billing Detail");
 
-            // 创建标题样式
+            // 闂傚倷绀侀幉锛勬暜濡ゅ啰鐭欓柟瀵稿Х绾句粙鏌熼幑鎰靛殭闁告劏鍋撻梻浣规偠閸庢椽宕滈敃鍌氭辈妞ゆ牜鍋為悡娑氣偓骞垮劚閹冲骸危閼姐倗纾?
             CellStyle headerStyle = workbook.createCellStyle();
             headerStyle.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
             headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
@@ -1399,14 +1593,14 @@ public class BillingService {
             headerFont.setBold(true);
             headerStyle.setFont(headerFont);
 
-            // 创建数据样式
+            // 闂傚倷绀侀幉锛勬暜濡ゅ啰鐭欓柟瀵稿Х绾句粙鏌熼幑鎰靛殭闁哄绶氶弻锝呂旈埀顒勬偋閸℃瑧鐭堥柨鏇炲€归悡娑氣偓骞垮劚閹冲骸危閼姐倗纾?
             CellStyle dataStyle = workbook.createCellStyle();
             dataStyle.setBorderBottom(BorderStyle.THIN);
             dataStyle.setBorderTop(BorderStyle.THIN);
             dataStyle.setBorderLeft(BorderStyle.THIN);
             dataStyle.setBorderRight(BorderStyle.THIN);
 
-            // 创建金额样式
+            // 闂傚倷绀侀幉锛勬暜濡ゅ啰鐭欓柟瀵稿Х绾句粙鏌熼崜褏甯涢柣鎾冲€块弻鐔告綇閹呮В闂佸搫顦板浠嬪蓟閳ユ剚鍚嬮柛娑卞幗浜涚紓?
             CellStyle moneyStyle = workbook.createCellStyle();
             moneyStyle.setBorderBottom(BorderStyle.THIN);
             moneyStyle.setBorderTop(BorderStyle.THIN);
@@ -1415,7 +1609,7 @@ public class BillingService {
             DataFormat format = workbook.createDataFormat();
             moneyStyle.setDataFormat(format.getFormat("#,##0.00"));
 
-            // 写入标题行
+            // 闂傚倷绀侀幉锟犲礉閺嶎厽鍋￠柕澶嗘櫅閻鏌涢埄鍐槈闁告劏鍋撻梻浣规偠閸庢椽宕滈敃鍌氭辈妞ゆ牜鍋為崑?
             Row headerRow = sheet.createRow(0);
             for (int i = 0; i < BILLING_DETAIL_HEADERS.length; i++) {
                 Cell cell = headerRow.createCell(i);
@@ -1423,57 +1617,58 @@ public class BillingService {
                 cell.setCellStyle(headerStyle);
             }
 
-            // 写入数据行
+            // 闂傚倷绀侀幉锟犲礉閺嶎厽鍋￠柕澶嗘櫅閻鏌涢埄鍐槈闁哄绶氶弻锝呂旈埀顒勬偋閸℃瑧鐭堥柨鏇炲€归崑?
             SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
             int rowNum = 1;
             for (PaymentOrder order : orders) {
                 Row row = sheet.createRow(rowNum++);
                 int col = 0;
 
-                // 订单号
+                // 闂備浇宕垫慨鎶芥⒔瀹ュ鍨傞柣鐔稿閺嗭箓鏌ｉ弮鍌氬付闁?
                 createTextCell(row, col++, order.getOrderId(), dataStyle);
-                // 设备ID
+                // 闂備浇宕垫慨鎶芥倿閿曞倸纾块柟璺哄閸ヮ剚鍋犲☉?
                 createTextCell(row, col++, order.getDeviceId(), dataStyle);
-                // 上线国家
+                // 婵犵數鍋為崹鍫曞箰閹间焦鏅濋柨鏇炲€搁崥褰掑箹濞ｎ剙濡奸柣鎰躬閺岋箑螣娓氼垱鈻撻梺鍝ュ暱閸?
                 createTextCell(row, col++, order.getOnlineCountry(), dataStyle);
-                // 装机商代码
+                // 闂備浇宕甸崰宥囩矆娓氣偓楠炲﹨绠涢幘顖涙暊闂侀€炲苯澧撮柡灞剧洴閹垽鏌ㄧ€ｅ灚顥犻梻浣告憸閸庢劙宕滈悢鐓庣畾?
                 createTextCell(row, col++, order.getInstallerCode(), dataStyle);
-                // 装机商名称
+                // 闂備浇宕甸崰宥囩矆娓氣偓楠炲﹨绠涢幘顖涙暊闂侀€炲苯澧撮柡灞剧洴閹垽鏌ㄧ€ｅ灚顥ｉ梻浣筋嚃閸犳煤濠婂懎鍨?
                 String installerName = getInstallerName(order.getInstallerId());
                 createTextCell(row, col++, installerName, dataStyle);
-                // 经销商ID
+                // 缂傚倸鍊搁崐椋庣矆娴ｇ儤宕叉慨妞诲亾鐎殿喓鍔戞慨鈧柕鍫濇噽閺屽牓姊洪崨濠勭煂闁?
                 createTextCell(row, col++, order.getDealerId() != null ? String.valueOf(order.getDealerId()) : "", dataStyle);
-                // 经销商名称
+                // 缂傚倸鍊搁崐椋庣矆娴ｇ儤宕叉慨妞诲亾鐎殿喓鍔戞慨鈧柕鍫濇噽閺屽牓姊虹化鏇炲⒉妞ゃ劌妫濆畷鎰暦閸モ晝锛?
                 String dealerName = getDealerName(order.getDealerId());
                 createTextCell(row, col++, dealerName, dataStyle);
-                // 套餐名称
+                // 婵犵數濞€濞佳囧磹瑜版帇鈧啯绻濋崶浣告喘閹晫绮欓懗顖呮洟鎮楅獮鍨姎婵?
                 String productName = getProductName(order.getProductId());
                 createTextCell(row, col++, productName, dataStyle);
-                // 套餐类型
+                // 婵犵數濞€濞佳囧磹瑜版帇鈧啯绻濋崶浣告喘閹粙鎮介棃娑欐闂佽崵濮村ú鈺冧焊濞嗘挸鐒?
                 createTextCell(row, col++, order.getProductType(), dataStyle);
-                // 支付金额
+                // 闂傚倷娴囬妴鈧柛瀣尰閵囧嫰寮介妸褎鍣柣銏╁灡閻╊垰顫忓ú顏勭煑濠㈣泛锕︽导灞筋渻?
                 createMoneyCell(row, col++, order.getAmount(), moneyStyle);
-                // 支付币种
+                // 闂傚倷娴囬妴鈧柛瀣尰閵囧嫰寮介妸褎鍣柣銏╁灡閻╊垶骞冩禒瀣垫晬婵炲棙甯掗崢鈥愁渻?
                 createTextCell(row, col++, order.getCurrency(), dataStyle);
-                // 支付通道
+                // 闂傚倷娴囬妴鈧柛瀣尰閵囧嫰寮介妸褎鍣柣銏╁灡閻╊垰顫忓ú顏嶆晝闁挎繂鎳庨幗鍨箾?
                 createTextCell(row, col++, order.getPaymentMethod(), dataStyle);
-                // 支付时间
+                // 闂傚倷娴囬妴鈧柛瀣尰閵囧嫰寮介妸褎鍣柣銏╁灡閻╊垶寮婚敓鐘茬闁靛ě鍐幗婵?
                 createTextCell(row, col++, order.getPaidAt() != null ? sdf.format(order.getPaidAt()) : "", dataStyle);
-                // 手续费
+                // 闂傚倷绀佺紞濠傤焽瑜旈、鏍炊椤掍礁浠洪梺鐓庮潟閸婃牜鈧?
                 createMoneyCell(row, col++, order.getFeeAmount(), moneyStyle);
-                // 套餐成本
+                // 婵犵數濞€濞佳囧磹瑜版帇鈧啯绻濋崶浣告喘閹晫绮欑捄顭戝悈闂備礁缍婇崑濠囧储娴犲绠?
                 createMoneyCell(row, col++, order.getPlanCost(), moneyStyle);
-                // 可分利润
+                // 闂傚倷绀侀幉锟犳偡椤栫偛鍨傚ù鍏兼綑閸ㄥ倿骞栧ǎ顒€濡肩紒鈧崱娑欑厓闁告繂瀚埀顒冩硶濡?
                 createMoneyCell(row, col++, order.getProfitAmount(), moneyStyle);
-                // 装机商分润
+                // 闂備浇宕甸崰宥囩矆娓氣偓楠炲﹨绠涢幘顖涙暊闂侀€炲苯澧撮柡灞剧洴閹垽鏌ㄧ€ｅ灚顥ｉ梻浣规偠閸斿本顨ラ幖浣哥叀?
                 createMoneyCell(row, col++, order.getInstallerAmount(), moneyStyle);
-                // 经销商分润
+                // 缂傚倸鍊搁崐椋庣矆娴ｇ儤宕叉慨妞诲亾鐎殿喓鍔戞慨鈧柕鍫濇噽閺屽牓姊虹化鏇炲⒉妞ゃ劌鎳橀幃妤冪磼濡偐顔?
                 createMoneyCell(row, col++, order.getDealerAmount(), moneyStyle);
-                // 已结算
-                createTextCell(row, col++, order.getIsSettled() != null && order.getIsSettled() == 1 ? "是" : "否", dataStyle);
+                // 闂佽姘﹂～澶愭偤閺囩姳鐒婃繛鍡樺灥閸ㄦ繈鏌曟繛褍鎳嶇粭?
+                boolean settled = isInstallerSettled(order) && isDealerSettled(order);
+                createTextCell(row, col++, settled ? "Yes" : "No", dataStyle);
             }
 
-            // 自动调整列宽
+            // 闂傚倷鑳堕崢褔銆冩惔銏㈩洸婵犲﹤瀚崣蹇涙煃閸濆嫬鏆為悗姘煎墴閺屾盯骞囬妸锔界彆濠电偛鐗嗛…鐑藉蓟濞戙垹绠抽柟鍨暞閻ｈ泛顪?
             for (int i = 0; i < BILLING_DETAIL_HEADERS.length; i++) {
                 sheet.autoSizeColumn(i);
                 int width = sheet.getColumnWidth(i);
@@ -1603,7 +1798,7 @@ public class BillingService {
     }
 
     /**
-     * 创建充值明细Zip（包含多个Excel文件）
+     * 闂傚倷绀侀幉锛勬暜濡ゅ啰鐭欓柟瀵稿Х绾句粙鏌熼幑鎰靛殭缂佲偓閸岀偞鐓曟繛鎴濆船楠炴劙鏌涚€ｎ偅宕岀€规洘顨婂畷妤冨枈鏉堛劎绋戠紓鍌氬€搁崐椋庣矆娓氣偓楠炴鍩￠¨鍫曟⒒娴ｇ懓顕滅紒瀣灴閹囧幢濞嗗苯浜鹃柛顭戝亾閼拌法鈧娲忛崕鐢搞€侀弴銏狀潊闁冲搫鍊甸弻銈呪攽閻愭潙鐏﹂柟绋垮⒔閳ь剚姘ㄩ崝鏀僥l闂傚倷绀侀幖顐﹀磹缁嬫５娲晲閸涱亝鐎婚梺闈涚箞閸婃牠寮?
      */
     private byte[] createBillingDetailZip(List<PaymentOrder> orders) throws IOException {
         ByteArrayOutputStream zipOut = new ByteArrayOutputStream();
@@ -1614,8 +1809,8 @@ public class BillingService {
                 int toIndex = Math.min(fromIndex + EXCEL_BATCH_SIZE, orders.size());
                 List<PaymentOrder> batch = orders.subList(fromIndex, toIndex);
 
-                String fileName = String.format("充值明细_%d-%d.xlsx", fromIndex + 1, toIndex);
-                byte[] excelData = createBillingDetailExcel(batch, "充值明细");
+                String fileName = String.format("billing-detail-%d-%d.xlsx", fromIndex + 1, toIndex);
+                byte[] excelData = createBillingDetailExcel(batch, "Billing Detail");
 
                 ZipEntry entry = new ZipEntry(fileName);
                 zos.putNextEntry(entry);
@@ -1637,8 +1832,8 @@ public class BillingService {
                 int toIndex = Math.min(fromIndex + EXCEL_BATCH_SIZE, orders.size());
                 List<PaymentOrder> batch = orders.subList(fromIndex, toIndex);
 
-                String fileName = String.format("充值明细_%d-%d.xlsx", fromIndex + 1, toIndex);
-                byte[] excelData = createBillingDetailExcel(batch, "充值明细", showInstallerInfo, showDealerInfo);
+                String fileName = String.format("billing-detail-%d-%d.xlsx", fromIndex + 1, toIndex);
+                byte[] excelData = createBillingDetailExcel(batch, "Billing Detail", showInstallerInfo, showDealerInfo);
 
                 ZipEntry entry = new ZipEntry(fileName);
                 zos.putNextEntry(entry);
@@ -1650,7 +1845,7 @@ public class BillingService {
     }
 
     /**
-     * 获取装机商名称
+     * 闂傚倷绀侀崥瀣磿閹惰棄搴婇柤鑹扮堪娴滃綊鏌涢妷銏℃珕闁哥喐鍨块弻娑樷槈閸楃偞鐏嶇紓浣靛妽瀹€鎼佸蓟濞戙垺鍋勯梺鍨儛濡偤姊虹拠鈥虫灍婵炲弶绮庨崚?
      */
     private String getInstallerName(Long installerId) {
         if (installerId == null) return "";
@@ -1659,7 +1854,7 @@ public class BillingService {
     }
 
     /**
-     * 获取套餐名称
+     * 闂傚倷绀侀崥瀣磿閹惰棄搴婇柤鑹扮堪娴滃綊鏌涢妷锝呭闂傚嫬瀚穱濠囧Χ閸涱喖顎涘┑鈽嗗灙閸嬫捇姊绘担鍛婂暈闁肩懓澧界划鏃堝箚閹靛啿寰?
      */
     private String getProductName(String productId) {
         if (productId == null || productId.trim().isEmpty()) return "";
@@ -1670,7 +1865,7 @@ public class BillingService {
     }
 
     /**
-     * 获取经销商名称
+     * 闂傚倷绀侀崥瀣磿閹惰棄搴婇柤鑹扮堪娴滃綊鏌涢妷銏℃珖缁炬儳銈搁悡顐﹀炊閵娧€濮囬梺杞扮劍閿曘垽寮诲☉銏″亜闂佸灝顑愬Λ鐐烘⒑鐠団€虫灍婵炲弶绮庨崚?
      */
     private String getDealerName(Long dealerId) {
         if (dealerId == null) return "";
@@ -1679,7 +1874,7 @@ public class BillingService {
     }
 
     /**
-     * 创建文本单元格
+     * 闂傚倷绀侀幉锛勬暜濡ゅ啰鐭欓柟瀵稿Х绾句粙鏌熼幑鎰靛殭婵☆偅锕㈤弻娑㈠Ψ閿濆懎顬夐梺鍦厴娴滃爼寮诲☉妯滄梹鎷呴崷顓фК闂備礁鎲¤摫闁圭懓娲ら?
      */
     private void createTextCell(Row row, int col, String value, CellStyle style) {
         Cell cell = row.createCell(col);
@@ -1688,7 +1883,7 @@ public class BillingService {
     }
 
     /**
-     * 创建金额单元格
+     * 闂傚倷绀侀幉锛勬暜濡ゅ啰鐭欓柟瀵稿Х绾句粙鏌熼崜褏甯涢柣鎾冲€块弻鐔告綇閹呮В闂佸搫顦板浠嬪蓟濞戞鏃€鎷呴崷顓фК闂備礁鎲¤摫闁圭懓娲ら?
      */
     private void createMoneyCell(Row row, int col, BigDecimal value, CellStyle style) {
         Cell cell = row.createCell(col);
@@ -1701,8 +1896,8 @@ public class BillingService {
     }
 
     /**
-     * 获取当前用户的账单汇总统计
-     * 返回设备总数、经销商分润等汇总数据
+     * 闂傚倷绀侀崥瀣磿閹惰棄搴婇柤鑹扮堪娴滃綊鏌涢妷顔荤暗濞存粌缍婇弻鐔煎箚瑜嶉弳杈ㄣ亜閵堝懏鍤囬柡宀嬬秮閿濈偤顢楅埀顒佷繆娴犲鐓曢柍鍝勫€诲ú鎾煙椤栨艾鏆ｇ€规洜鍠栭、娆戝枈鏉堛剱鐔兼⒒娴ｅ憡鍟炴い銊ユ鐓ゆ慨妞诲亾闁诡垰娲╅妵鎰板箳閹寸姷鏆犻梻浣哄帶椤洟宕愬Δ鍛槬闁绘绮崑?
+     * 闂備礁鎼ˇ顐﹀疾濠婂牆钃熼柕濞垮剭濞差亜鍐€妞ゆ劧绲介娑㈡⒑鐠団€崇€婚悘鐐村珟閿濆鈷戦悹鍥ｂ偓鍐差潾缂備緡鍣崹璺侯嚕閹惰姤鍋勯柣鎾冲閵夈儍褰掓晲閸噥浠╅梺姹囧劚閹虫ê顫忛悜妯诲劅闁规儳鍘栨竟鏇㈡⒒娴ｅ憡鎲搁柛鐘查铻炴俊銈呮噹閸ㄥ倿骞栫划瑙勵€嗘俊鎻掔墦閺屻劑寮崹顔规寖闂佸湱鍘ч崥瀣箞閵娾晜鍋￠柣妤€鐗嗛ˇ鈺呮⒑闁偛鑻晶鎵磼椤曞懎鐏︾€殿喗濞婇幃銏ゆ偂鎼达綆鍞?
      */
     public Map<String, Object> getMySummary(Long currentUserId, Date startDate, Date endDate) {
         Map<String, Object> result = new HashMap<>();
@@ -1720,43 +1915,54 @@ public class BillingService {
             return result;
         }
         
-        // 统计设备总数
+        // 缂傚倸鍊搁崐鐑芥嚄閸洖绐楅柡鍥ュ焺閺佸洭鏌涘┑鍕姕濠殿垰銈搁弻鐔碱敍閸℃婀伴弽锟犳⒒娴ｇ瓔鍤冮柛鎾寸〒閸掓帡顢涢悙鍙夎緢?
         long totalDevices = 0;
         String installerCode = null;
         Long dealerId = null;
         
-        // 装机商用户
+        // 闂備浇宕甸崰宥囩矆娓氣偓楠炲﹨绠涢幘顖涙暊闂侀€炲苯澧撮柡灞剧洴閹垽鏌ㄧ€ｅ灚锟ラ梻浣芥〃闂勫秹宕愬┑瀣祦?
         if (currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null) {
             Installer installer = installerRepository.selectById(currentUser.getInstallerId());
             if (installer != null) {
                 installerCode = installer.getInstallerCode();
-                // 统计装机商下的设备数
+                // 缂傚倸鍊搁崐鐑芥嚄閸洖绐楅柡鍥ュ焺閺佸洭鏌涘┑鍕姕闁哥喐鍨块弻娑樷槈閸楃偞鐏嶇紓浣靛妽瀹€鎼佸蓟濞戙垺鍋勯梺鍨儛濡稓绱撴担璇℃當闁硅櫕锕㈤獮鍡涘礃椤旇偐顦板銈嗘礀閹冲酣寮查鐔虹瘈闁靛骏绲剧涵鐐箾鐠囇呯暤鐎?
                 QueryWrapper<ManufacturedDevice> deviceQw = new QueryWrapper<>();
                 deviceQw.lambda().eq(ManufacturedDevice::getAssemblerCode, installerCode);
                 totalDevices = deviceRepository.selectCount(deviceQw);
             }
         }
         
-        // 经销商用户
+        // 缂傚倸鍊搁崐椋庣矆娴ｇ儤宕叉慨妞诲亾鐎殿喓鍔戞慨鈧柕鍫濇噽閺屽牓姊虹化鏇炲⒉闁荤噦绠撳瀹犵疀濞戞瑧鍘?
         if (currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null) {
             dealerId = currentUser.getDealerId();
             Dealer dealer = dealerRepository.selectById(dealerId);
             if (dealer != null) {
-                // 统计经销商下的设备数
+                // 缂傚倸鍊搁崐鐑芥嚄閸洖绐楅柡鍥ュ焺閺佸洭鏌涘┑鍕姢缁炬儳銈搁悡顐﹀炊閵娧€濮囬梺杞扮劍閿曘垽寮诲☉銏″亜闂佸灝顑愬Λ娑氱磽娴ｈ娈旈柟铏耿楠炲棝宕橀鑲╊槹濡炪倖娲栭幊搴ㄥ疾椤撶喓绡€闁靛骏绲剧涵鐐箾鐠囇呯暤鐎?
                 QueryWrapper<ManufacturedDevice> deviceQw = new QueryWrapper<>();
                 deviceQw.lambda().eq(ManufacturedDevice::getVendorCode, dealer.getDealerCode());
                 long dealerDevices = deviceRepository.selectCount(deviceQw);
-                // 如果既是装机商又是经销商，取较大值
+                // 婵犵數濮烽。浠嬪焵椤掆偓閸熷潡鍩€椤掆偓缂嶅﹪骞冨Ο璇茬窞闁归偊鍓涢惈鍕⒑闂堟稓绠氶柛鎾寸箘閻熝囨⒑閼姐倕鏋嶇紒鈧笟鈧獮濠呯疀閹绢垱鏁犻梺閫炲苯澧撮柡灞剧洴閹垽鏌ㄧ€ｅ灚顥ｉ柣搴㈩問閸犳岸寮拠宸殨濞村吋鎯岄弫宥嗙節婵犲倹鍣芥慨濠囩畺濮婄粯鎷呴崫銉︾殤闂佺顑嗛幑鍥蓟濞戙垺鍋勯梺鍨儜缁便劎绱撴担浠嬪摵缂佽鐗嗛悾鐑芥晲婢跺﹤鍞ㄥ銈嗗笒閸婂鎮伴埡鍌滅瘈闁靛繒濮烽崹濠氭煕閹板墎鍒板ù?
                 totalDevices = Math.max(totalDevices, dealerDevices);
             }
         }
         
-        // 统计经销商分润总额
+        // 缂傚倸鍊搁崐鐑芥嚄閸洖绐楅柡鍥ュ焺閺佸洭鏌涘┑鍕姢缁炬儳銈搁悡顐﹀炊閵娧€濮囬梺杞扮劍閿曘垽寮诲☉銏″亜闂佸灝顑愬Λ鐐烘⒑閹肩偛濡煎Δ鐘虫倐閸┿儲寰勯幇顓熸珕闁荤喐鐟辩徊鑺ョ閹€鏀介柣妯哄暱閸ゎ剟鏌?
         BigDecimal totalDealerAmount = BigDecimal.ZERO;
         if (dealerId != null) {
+            List<String> dealerDeviceIds = resolveDealerDeviceIdsByDealerId(dealerId);
             QueryWrapper<PaymentOrder> orderQw = new QueryWrapper<>();
-            orderQw.lambda().eq(PaymentOrder::getDealerId, dealerId)
-                    .eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
+            orderQw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
+            final Long finalDealerId = dealerId;
+            final List<String> finalDealerDeviceIds = dealerDeviceIds;
+            if (!finalDealerDeviceIds.isEmpty()) {
+                orderQw.and(wrapper -> wrapper
+                        .eq("dealer_id", finalDealerId)
+                        .or()
+                        .in("device_id", finalDealerDeviceIds)
+                );
+            } else {
+                orderQw.lambda().eq(PaymentOrder::getDealerId, dealerId);
+            }
             if (startDate != null) {
                 orderQw.lambda().ge(PaymentOrder::getPaidAt, startDate);
             }
@@ -1765,8 +1971,9 @@ public class BillingService {
             }
             List<PaymentOrder> orders = orderRepository.selectList(orderQw);
             for (PaymentOrder order : orders) {
-                if (order.getDealerAmount() != null) {
-                    totalDealerAmount = totalDealerAmount.add(order.getDealerAmount());
+                DealerCommissionSlice slice = resolveDealerCommissionSlice(order, dealerId);
+                if (slice != null) {
+                    totalDealerAmount = totalDealerAmount.add(MoneyScaleUtil.keepTwoDecimals(slice.getAmount()));
                 }
             }
         }
@@ -1774,19 +1981,19 @@ public class BillingService {
         result.put("totalDevices", totalDevices);
         result.put("totalDealerAmount", totalDealerAmount);
         
-        log.info("获取用户账单汇总: userId={}, totalDevices={}, totalDealerAmount={}", 
+        log.info("闂傚倷绀侀崥瀣磿閹惰棄搴婇柤鑹扮堪娴滃綊鏌涢妷顔煎闁稿鍔戦弻鏇熺節韫囨洜鏆犻梺缁樻尰濞茬喖骞冭ぐ鎺戠疀闁告挷鑳堕弳鐘绘倵鐟欏嫭绀堥柛鐘插閺呫儵姊洪幖鐐插姌闁告柨顦靛畷? userId={}, totalDevices={}, totalDealerAmount={}", 
                 currentUserId, totalDevices, totalDealerAmount);
         return result;
     }
 
     /**
-     * 获取装机商下设备的支付统计
-     * @param installerId 装机商ID
-     * @param startDate 开始日期
-     * @param endDate 结束日期
+     * 闂傚倷绀侀崥瀣磿閹惰棄搴婇柤鑹扮堪娴滃綊鏌涢妷銏℃珕闁哥喐鍨块弻娑樷槈閸楃偞鐏嶇紓浣靛妽瀹€鎼佸蓟濞戙垺鍋勯梺鍨儛濡稓绱撴担璇℃當闁硅櫕鍔欓獮蹇曗偓锝庡枛缁犳氨鎲稿鍏撅綁鎮介崨濠勫幗闂侀潧顭堥崕閬嶎敂椤忓牊鐓涘〒姘搐閺嬬喓绱掗崒娑樼瑨閾伙綁鏌ゅù瀣珔闁绘挻宀搁弻?
+     * @param installerId 闂備浇宕甸崰宥囩矆娓氣偓楠炲﹨绠涢幘顖涙暊闂侀€炲苯澧撮柡灞剧洴閹垽鏌ㄧ€ｎ亞锛廌
+     * @param startDate 闂佽瀛╅鏍窗閹烘纾婚柟鐐灱閺€鑺ャ亜閺冨倵鎷￠柛搴㈠姈娣囧﹪顢曢悢鍛婄彋閻?
+     * @param endDate 缂傚倸鍊搁崐鐑芥倿閿曞倸绠伴悹鍥ф▕閻掕姤銇勯幇鍓佺暠缂侇偄绉归弻鏇熷緞濞戙垺顎嶉梺?
      */
     public Map<String, Object> getDevicePaymentStats(Long installerId, Date startDate, Date endDate) {
-        // 获取装机商下的所有设备
+        // 闂傚倷绀侀崥瀣磿閹惰棄搴婇柤鑹扮堪娴滃綊鏌涢妷銏℃珕闁哥喐鍨块弻娑樷槈閸楃偞鐏嶇紓浣靛妽瀹€鎼佸蓟濞戙垺鍋勯梺鍨儛濡稓绱撴担璇℃當闁硅櫕锕㈤獮鍡涘礃椤旇偐顦板銈嗗坊閸嬫挻銇勯敐鍡欏弨闁哄矉绻濆畷鐓庘攽閹邦厜顏勵渻閵堝棙鈷愭繛鍙壝?
         QueryWrapper<ManufacturedDevice> deviceQw = new QueryWrapper<>();
         deviceQw.lambda().eq(ManufacturedDevice::getInstallerId, installerId);
         List<ManufacturedDevice> devices = deviceRepository.selectList(deviceQw);
@@ -1833,49 +2040,87 @@ public class BillingService {
     }
 
     /**
-     * 批量结算订单
-     * @param orderIds 订单ID列表
-     * @param operatorId 操作员ID
-     * @return 结算成功的订单数量
+     * 闂傚倷绀佺紞濠傤焽瑜忕槐鐐寸節閸パ囨７闂佹儳绻愬﹢杈╁婵傚憡鐓欓柟顖嗗喚鏆㈤梺鍝勬－閸撶喖骞冪憴鍕闂傚牊绋撴禒濂告倵?
+     * @param orderIds 闂備浇宕垫慨鎶芥⒔瀹ュ鍨傞柣鐔稿閺嗭箓鏌ｉ幋鐘虫嚈闂傚倷绀侀幉锛勬暜濡ゅ懌鈧啯寰勯幇顑?
+     * @param operatorId 闂傚倷鑳堕幊鎾绘倶濠靛牏鐭撶€规洖娲ㄧ粈濠囨煛閸愩劎澧曠€瑰憡绻冩穱濠囧Χ閸ャ劌鐝?
+     * @return 缂傚倸鍊搁崐鐑芥倿閿曞倸绠板Δ锝呭暞閸嬧晛鈹戦悩瀹犲缂佺媴缍侀弻鐔兼焽閿曗偓婢ь喗銇勯銈呪枅闁哄矉缍佹俊鎼佸Ψ閵夘喕绱撴俊鐐€栭幐鍝ョ礊婵犲倻鏆﹂柨鐔哄Т閸楁娊鏌ｉ弬鎸庡暈妞ゆ柨绉瑰?
      */
     @Transactional
-    public int settleOrders(List<String> orderIds, Long operatorId) {
+    public int settleOrders(List<String> orderIds, Long operatorId, String dimension, Long dealerId) {
         if (orderIds == null || orderIds.isEmpty()) {
             return 0;
         }
-        log.info("批量结算订单: operatorId={}, orderIds={}", operatorId, orderIds);
-        
+        String normalizedDimension = normalizeDimension(dimension);
+        if (normalizedDimension == null) {
+            throw new IllegalArgumentException("Invalid settlement dimension, only installer/dealer supported");
+        }
+        if (DIMENSION_DEALER.equals(normalizedDimension) && dealerId == null) {
+            throw new IllegalArgumentException("dealerId is required for dealer settlement");
+        }
+
+        log.info("Settle orders in batch: operatorId={}, dimension={}, dealerId={}, orderIds={}",
+                operatorId, normalizedDimension, dealerId, orderIds);
+
         int count = 0;
         Date now = new Date();
         for (String orderId : orderIds) {
             QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
             qw.lambda().eq(PaymentOrder::getOrderId, orderId)
-                    .eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID)
-                    .eq(PaymentOrder::getIsSettled, 0);
+                    .eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
             PaymentOrder order = orderRepository.selectOne(qw);
-            if (order != null) {
-                order.setIsSettled(1);
+            if (order == null) {
+                continue;
+            }
+
+            if (DIMENSION_INSTALLER.equals(normalizedDimension)) {
+                if (isInstallerSettled(order)) {
+                    continue;
+                }
+                markOrderSettledByDimension(order, normalizedDimension);
                 order.setUpdatedAt(now);
                 orderRepository.updateById(order);
                 count++;
+                continue;
             }
+
+            DealerCommissionSlice targetSlice = resolveDealerCommissionSlice(order, dealerId);
+            if (targetSlice == null || safeAmount(targetSlice.getAmount()).compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            Map<String, Set<Long>> settledMap = loadDealerSettlementMapByOrderIds(Collections.singleton(order.getOrderId()));
+            if (isDealerSliceSettled(order, dealerId, settledMap)) {
+                continue;
+            }
+
+            upsertDealerSettlementRecord(order.getOrderId(), dealerId, operatorId, now);
+            refreshLegacyDealerSettlementFlag(order);
+            order.setUpdatedAt(now);
+            orderRepository.updateById(order);
+            count++;
         }
-        log.info("结算完成: 成功结算 {} 笔订单", count);
+        log.info("Batch settlement finished: operatorId={}, dimension={}, dealerId={}, settledCount={}",
+                operatorId, normalizedDimension, dealerId, count);
         return count;
     }
 
     /**
-     * 获取结算订单列表
-     * @param installerCode 装机商代码（可选）
-     * @param dealerId 经销商ID（可选）
-     * @param isSettled 结算状态：null-全部，0-未结算，1-已结算
-     * @param startDate 开始日期
-     * @param endDate 结束日期
-     * @param page 页码
-     * @param size 每页条数
+     * 闂傚倷绀侀崥瀣磿閹惰棄搴婇柤鑹扮堪娴滃綊鏌涢妷銏℃珖缁炬儳銈搁弻鐔煎箚瑜嶉。鎶芥煛閸♀晛澧撮柟顔款潐閹峰懘妫冨☉姘偅闁诲氦顫夊ú婊堝窗閺嵮呮殾婵﹩鍎甸弮鍫濈闁宠鍎虫禍?
+     * @param installerCode 闂備浇宕甸崰宥囩矆娓氣偓楠炲﹨绠涢幘顖涙暊闂侀€炲苯澧撮柡灞剧洴閹垽鏌ㄧ€ｅ灚顥犻梻浣告憸閸庢劙宕滈悢鐓庣畾鐎广儱妫涢悷鐟扳攽閻樻彃顏い锔规櫊濮婃椽宕ㄦ繝鍕櫧闂佹悶鍔岄悥濂稿春閳ь剚銇勯幒鍡椾壕濡炪伇鈧崑鎾剁磽?
+     * @param dealerId 缂傚倸鍊搁崐椋庣矆娴ｇ儤宕叉慨妞诲亾鐎殿喓鍔戞慨鈧柕鍫濇噽閺屽牓姊洪崨濠勭煂闁伙附宀稿娲箰鎼达絺妲堥梺缁橆殔濡粓濡甸幇鏉胯摕闁靛濡囬崝鍨節閵忥絽鐓愮紒瀣尵缁?
+     * @param isSettled 缂傚倸鍊搁崐鐑芥倿閿曞倸绠板Δ锝呭暞閸嬧晛鈹戦悩宕囶暡闁稿鍔欓弻銈夊传閵夘喗姣岄梺绋款儐閹歌崵绮悢鍝ョ瘈闁告洦鍘惧畷绉恥ll-闂傚倷鑳堕…鍫㈡崲閸儱绀夐柟杈剧畱绾惧潡鏌熺紒銏犳灍闁?-闂傚倷绀侀幖顐︽偋濠婂嫮顩查柣鎰版涧閸ㄦ繈鏌曟繛褍鎳嶇粭澶娾攽鎺抽崐鏇㈩敄閸モ晝鐭?-闂佽姘﹂～澶愭偤閺囩姳鐒婃繛鍡樺灥閸ㄦ繈鏌曟繛褍鎳嶇粭?
+     * @param startDate 闂佽瀛╅鏍窗閹烘纾婚柟鐐灱閺€鑺ャ亜閺冨倵鎷￠柛搴㈠姈娣囧﹪顢曢悢鍛婄彋閻?
+     * @param endDate 缂傚倸鍊搁崐鐑芥倿閿曞倸绠伴悹鍥ф▕閻掕姤銇勯幇鍓佺暠缂侇偄绉归弻鏇熷緞濞戙垺顎嶉梺?
+     * @param page 婵犵绱曢崑鎴﹀磹濡ゅ懎鏋侀柟闂寸劍閸?
+     * @param size 濠电姵顔栭崳顖滃緤閻ｅ本宕叉慨妞诲亾濠碘€崇摠瀵板嫰骞囬鍌炵崜闂備焦鏋奸弲娑㈠疮椤栨埃鏋?
      */
     public Map<String, Object> getSettlementOrders(String installerCode, Long dealerId, Integer isSettled,
-                                                    Date startDate, Date endDate, Integer page, Integer size) {
+                                                   String dimension, Date startDate, Date endDate,
+                                                   Integer page, Integer size) {
+        List<String> dealerDeviceIds = dealerId != null
+                ? resolveDealerDeviceIdsByDealerId(dealerId)
+                : Collections.emptyList();
+        String normalizedDimension = resolveSettlementDimension(dimension, installerCode, dealerId);
+
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
         
@@ -1883,10 +2128,24 @@ public class BillingService {
             qw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
         }
         if (dealerId != null) {
-            qw.lambda().eq(PaymentOrder::getDealerId, dealerId);
+            final Long finalDealerId = dealerId;
+            final List<String> finalDealerDeviceIds = dealerDeviceIds;
+            if (!finalDealerDeviceIds.isEmpty()) {
+                qw.and(wrapper -> wrapper
+                        .eq("dealer_id", finalDealerId)
+                        .or()
+                        .in("device_id", finalDealerDeviceIds)
+                );
+            } else {
+                qw.lambda().eq(PaymentOrder::getDealerId, dealerId);
+            }
         }
         if (isSettled != null) {
-            qw.lambda().eq(PaymentOrder::getIsSettled, isSettled);
+            if (DIMENSION_DEALER.equals(normalizedDimension) && dealerId == null) {
+                qw.apply("COALESCE(dealer_is_settled, is_settled, 0) = {0}", isSettled);
+            } else if (!DIMENSION_DEALER.equals(normalizedDimension)) {
+                qw.apply("COALESCE(installer_is_settled, is_settled, 0) = {0}", isSettled);
+            }
         }
         if (startDate != null) {
             qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
@@ -1896,21 +2155,37 @@ public class BillingService {
         }
         qw.lambda().orderByDesc(PaymentOrder::getPaidAt);
 
-        // 分页查询
+        // 闂傚倷绀侀幉锛勬暜閹烘嚦娑樷攽鐎ｎ€儱顭块懜闈涘闁藉啰鍠栭弻鏇熷緞濡厧甯ラ梺?
         int offset = (page - 1) * size;
         QueryWrapper<PaymentOrder> countQw = qw.clone();
         qw.last("LIMIT " + offset + ", " + size);
         List<PaymentOrder> list = orderRepository.selectList(qw);
+        if (dealerId != null) {
+            applyDealerCommissionSlice(list, dealerId);
+        }
+        for (PaymentOrder order : list) {
+            order.setIsSettled(getSettledValueByDimension(order, normalizedDimension));
+        }
         long total = orderRepository.selectCount(countQw);
 
-        // 计算汇总数据
+        // 闂備浇宕垫慨宕囨閵堝洦顫曢柡鍥ュ灪閸嬧晠鎮归崶銊ф殭鐟滄柨鐣烽崼鏇炍╅柕蹇曞С婢规洜绱撻崒娆戝妽閽冭鲸绻涢崼婵堝煟闁?
         QueryWrapper<PaymentOrder> sumQw = new QueryWrapper<>();
         sumQw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
         if (installerCode != null && !installerCode.trim().isEmpty()) {
             sumQw.lambda().eq(PaymentOrder::getInstallerCode, installerCode);
         }
         if (dealerId != null) {
-            sumQw.lambda().eq(PaymentOrder::getDealerId, dealerId);
+            final Long finalDealerId = dealerId;
+            final List<String> finalDealerDeviceIds = dealerDeviceIds;
+            if (!finalDealerDeviceIds.isEmpty()) {
+                sumQw.and(wrapper -> wrapper
+                        .eq("dealer_id", finalDealerId)
+                        .or()
+                        .in("device_id", finalDealerDeviceIds)
+                );
+            } else {
+                sumQw.lambda().eq(PaymentOrder::getDealerId, dealerId);
+            }
         }
         if (startDate != null) {
             sumQw.lambda().ge(PaymentOrder::getPaidAt, startDate);
@@ -1918,7 +2193,15 @@ public class BillingService {
         if (endDate != null) {
             sumQw.lambda().le(PaymentOrder::getPaidAt, endDate);
         }
+        sumQw.lambda().orderByDesc(PaymentOrder::getPaidAt);
         List<PaymentOrder> allOrders = orderRepository.selectList(sumQw);
+        if (dealerId != null) {
+            applyDealerCommissionSlice(allOrders, dealerId);
+        }
+        Map<String, Set<Long>> dealerSettlementMap = DIMENSION_DEALER.equals(normalizedDimension) && dealerId != null
+                ? loadDealerSettlementMap(allOrders)
+                : Collections.emptyMap();
+        List<PaymentOrder> filteredOrders = new ArrayList<>();
         
         BigDecimal totalAmount = BigDecimal.ZERO;
         BigDecimal settledAmount = BigDecimal.ZERO;
@@ -1928,32 +2211,54 @@ public class BillingService {
         BigDecimal unsettledProfitAmount = BigDecimal.ZERO;
         
         for (PaymentOrder order : allOrders) {
-            BigDecimal amount = order.getAmount() != null ? order.getAmount() : BigDecimal.ZERO;
-            // 根据查询类型确定分润金额（装机商/经销商）
+            BigDecimal amount = MoneyScaleUtil.keepTwoDecimals(order.getAmount());
+            // 闂傚倷绀侀幖顐ょ矓閻戞枻缍栧璺猴功閺嗐倕銆掑锝呬壕閻庢鍠栭…閿嬩繆閻戣В鈧箓骞嬪┑鍥╂殸缂傚倸鍊风欢锟犲磻婢舵劦鏁嬬憸鏃堝箖濡や緡妲归幖娣灩閸樼懓顪冮妶鍡橆梿闁稿鍔欏铏鐎涙鍘遍梺鍦劋閸ㄥ爼藟閻愬樊娼＄憸宥夋煀閿濆钃熺€光偓閸曨偆顓洪梺鎸庢⒒缁垰顭块幘缁樷拺闁圭娴烽埥澶愭煟濡や礁濮嶉挊鐔封攽閻樺弶鎼愰悗姘樀閺屾稑鈹戦崱妤婁痪濠?缂傚倸鍊搁崐椋庣矆娴ｇ儤宕叉慨妞诲亾鐎殿喓鍔戞慨鈧柕鍫濇噽閺屽牓姊虹化鏇燁潑闁告ê澧界划?
             BigDecimal profit;
-            if (dealerId != null) {
-                profit = order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO;
+            int settledValue;
+            if (DIMENSION_DEALER.equals(normalizedDimension)) {
+                if (dealerId != null) {
+                    profit = order.getDealerAmount() != null ? MoneyScaleUtil.keepTwoDecimals(order.getDealerAmount()) : BigDecimal.ZERO;
+                    settledValue = getDealerSettledValue(order, dealerId, dealerSettlementMap);
+                } else {
+                    profit = order.getDealerAmount() != null ? MoneyScaleUtil.keepTwoDecimals(order.getDealerAmount()) : BigDecimal.ZERO;
+                    settledValue = getSettledValueByDimension(order, normalizedDimension);
+                }
             } else {
-                profit = order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO;
+                profit = order.getInstallerAmount() != null ? MoneyScaleUtil.keepTwoDecimals(order.getInstallerAmount()) : BigDecimal.ZERO;
+                settledValue = getSettledValueByDimension(order, normalizedDimension);
             }
+            order.setIsSettled(settledValue);
             
             totalAmount = totalAmount.add(amount);
             totalProfitAmount = totalProfitAmount.add(profit);
             
-            if (order.getIsSettled() != null && order.getIsSettled() == 1) {
+            if (settledValue == 1) {
                 settledAmount = settledAmount.add(amount);
                 settledProfitAmount = settledProfitAmount.add(profit);
             } else {
                 unsettledAmount = unsettledAmount.add(amount);
                 unsettledProfitAmount = unsettledProfitAmount.add(profit);
             }
+            if (isSettled == null || settledValue == isSettled) {
+                filteredOrders.add(order);
+            }
+        }
+        int safePage = page != null && page > 0 ? page : 1;
+        int safeSize = size != null && size > 0 ? size : 20;
+        int safeOffset = (safePage - 1) * safeSize;
+        total = filteredOrders.size();
+        if (safeOffset >= total) {
+            list = Collections.emptyList();
+        } else {
+            int toIndex = Math.min(safeOffset + safeSize, (int) total);
+            list = new ArrayList<>(filteredOrders.subList(safeOffset, toIndex));
         }
 
         Map<String, Object> result = new HashMap<>();
         result.put("list", list);
         result.put("total", total);
-        result.put("page", page);
-        result.put("size", size);
+        result.put("page", safePage);
+        result.put("size", safeSize);
         result.put("totalAmount", totalAmount);
         result.put("settledAmount", settledAmount);
         result.put("unsettledAmount", unsettledAmount);
@@ -1963,19 +2268,19 @@ public class BillingService {
         return result;
     }
 
-    // 结算表Excel列标题
+    // 缂傚倸鍊搁崐鐑芥倿閿曞倸绠板Δ锝呭暞閸嬧晠鏌ゆ慨鎰偓鏍磻濮椻偓閺屽秹濡烽绛嬩淮cel闂傚倷绀侀幉锛勬暜濡ゅ懌鈧啴宕卞☉娆忎函闂佹寧绻傚Λ瀵告?
     private static final String[] SETTLEMENT_HEADERS = {
             "订单号", "设备ID", "上线国家", "装机商代码", "装机商名称", "经销商ID", "经销商名称",
             "套餐名称", "支付金额", "支付币种", "支付时间", "分润金额", "结算状态"
     };
 
     /**
-     * 导出结算表Excel
-     * 权限说明：非管理员只能导出与自己关联的数据
+     * 闂備浇顕уù鐑藉极閹间礁鍌ㄧ憸鏂跨暦閻㈠壊鏁囬柣妯兼暩閿涙粓姊虹憴鍕姢濠⒀冮叄瀵娊顢楅崟顒€浠╁┑鐐村灦瀹稿宕戦幘瀹︺劎绱炵欢鈧琹
+     * 闂傚倷绀侀幖顐λ囬鐐茬柈闁哄鍩堥悗鍫曟煣韫囨凹娼愰悗姘哺閹鈽夊▍铏灴閿濈偤寮介鐔哄弳濠电偞鍨堕悷銉╁传閻戞绠剧痪鏉垮綁缁ㄧ晫绱掗纰辩吋闁轰礁绉瑰畷鐔碱敆閳ь剟鍩€椤掑倸浠遍柡灞剧☉閳藉鈻嶉褌娴烽柕鍥ㄥ姌椤﹀綊鏌熼搹顐疁闁圭锕ュ鍕熼悜姗嗗晫闂傚倷绀侀幉锟犲垂閻撳寒娴栭柕濞у懐鐣堕悗鍏夊亾闁告洦鍓欏▓婊冾渻閵堝懐绠伴悗姘煎枤缁骞掑Δ浣哄幈闂婎偄娲﹂幐楣冨几閸愵煁褰掓偐閼碱剙鈪甸梺璇″灠閸熸潙鐣烽悢纰辨晢濞达綀顕栭崯鈧梻?
      */
     public Map<String, Object> exportSettlementExcel(Long currentUserId, String installerCode, Long dealerId, 
                                                       Date startDate, Date endDate) throws IOException {
-        // 根据当前用户角色确定过滤条件
+        // 闂傚倷绀侀幖顐ょ矓閻戞枻缍栧璺猴功閺嗐倕霉閿濆拋娼熷ù婊冪秺閺岀喖骞嗚閺嗚鲸銇勯妶鍛殗闁哄矉缍侀敐鐐侯敆閳ь剚淇婃禒瀣厱闁冲搫鍊婚妴鎺楁煙閸欏灏︽鐐村浮瀵挳鎮滈崱姗嗘缂傚倷鑳堕搹搴ㄥ矗鎼淬劌绐楅柡宥庡幗閸嬧晠鏌ｉ幇闈涘濞存嚎鍊濋弻娑㈠Ψ閿濆懎顬夋繝娈垮枔閸ㄤ粙寮婚埄鍐ㄧ窞闁糕€崇箰娴滈箖鏌涘▎蹇ｆ▓闁?
         String effectiveInstallerCode = installerCode;
         Long effectiveDealerId = dealerId;
         
@@ -1984,14 +2289,14 @@ public class BillingService {
             if (currentUser != null) {
                 boolean isAdmin = currentUser.getRole() != null && currentUser.getRole() == 3;
                 if (!isAdmin) {
-                    // 装机商只能导出自己关联的数据
+                    // 闂備浇宕甸崰宥囩矆娓氣偓楠炲﹨绠涢幘顖涙暊闂侀€炲苯澧撮柡灞剧洴閹垽鏌ㄧ€ｅ灚顥ｉ柣鐔哥矋婵℃悂宕堕妸銉︾暠闂備浇濮ら敋妞わ缚绮欏畷鐢稿Χ婢跺鍘遍梺纭呮彧婵″洨妲愭导瀛樼厱闁靛牆妫涢惌濠冦亜閺傝法绠荤€规洩绻濋幃娆撳箵閹烘梻鈽夐梻鍌欐祰婢瑰牊銇旂粙娆炬綎閻犲洦绁撮弸鏃堟煙鏉堝墽鐣遍柡瀣╃窔閺岋絽螖閳ь剟鎮ч崱娆戠焾?
                     if (currentUser.getIsInstaller() != null && currentUser.getIsInstaller() == 1 && currentUser.getInstallerId() != null) {
                         Installer installer = installerRepository.selectById(currentUser.getInstallerId());
                         if (installer != null) {
                             effectiveInstallerCode = installer.getInstallerCode();
                         }
                     }
-                    // 经销商只能导出自己关联的数据
+                    // 缂傚倸鍊搁崐椋庣矆娴ｇ儤宕叉慨妞诲亾鐎殿喓鍔戞慨鈧柕鍫濇噽閺屽牓姊虹化鏇炲⒉妞ゃ劌鎳庨埥澶庮樄闁哄被鍊楅埀顒€婀辨慨鐢杆夋径瀣ㄤ簻闁哄浂婢€閹插墽鈧娲橀悷锕傚Χ閿曞倸鍨傛い鏃傜摂閸炲爼鏌ｆ惔鈩冭础妞ゎ厼鐗嗛悾鐑筋敆閸曨偆鐓戦悷婊勬楠炲﹪寮撮姀鐘电潉闂佺鏈粙鎾诲汲閻樼粯鈷戦弶鐐村閸忓苯顭胯椤ㄥ懘鎮?
                     if (currentUser.getIsDealer() != null && currentUser.getIsDealer() == 1 && currentUser.getDealerId() != null) {
                         effectiveDealerId = currentUser.getDealerId();
                     }
@@ -1999,8 +2304,12 @@ public class BillingService {
             }
         }
         
-        log.info("导出结算表: currentUserId={}, installerCode={}, dealerId={}, startDate={}, endDate={}", 
+        log.info("闂備浇顕уù鐑藉极閹间礁鍌ㄧ憸鏂跨暦閻㈠壊鏁囬柣妯兼暩閿涙粓姊虹憴鍕姢濠⒀冮叄瀵娊顢楅崟顒€浠? currentUserId={}, installerCode={}, dealerId={}, startDate={}, endDate={}", 
                 currentUserId, effectiveInstallerCode, effectiveDealerId, startDate, endDate);
+
+        List<String> dealerDeviceIds = effectiveDealerId != null
+                ? resolveDealerDeviceIdsByDealerId(effectiveDealerId)
+                : Collections.emptyList();
 
         QueryWrapper<PaymentOrder> qw = new QueryWrapper<>();
         qw.lambda().eq(PaymentOrder::getStatus, PaymentOrderStatus.PAID);
@@ -2008,7 +2317,17 @@ public class BillingService {
             qw.lambda().eq(PaymentOrder::getInstallerCode, effectiveInstallerCode);
         }
         if (effectiveDealerId != null) {
-            qw.lambda().eq(PaymentOrder::getDealerId, effectiveDealerId);
+            final Long finalDealerId = effectiveDealerId;
+            final List<String> finalDealerDeviceIds = dealerDeviceIds;
+            if (!finalDealerDeviceIds.isEmpty()) {
+                qw.and(wrapper -> wrapper
+                        .eq("dealer_id", finalDealerId)
+                        .or()
+                        .in("device_id", finalDealerDeviceIds)
+                );
+            } else {
+                qw.lambda().eq(PaymentOrder::getDealerId, effectiveDealerId);
+            }
         }
         if (startDate != null) {
             qw.lambda().ge(PaymentOrder::getPaidAt, startDate);
@@ -2019,9 +2338,12 @@ public class BillingService {
         qw.lambda().orderByDesc(PaymentOrder::getPaidAt);
 
         List<PaymentOrder> orders = orderRepository.selectList(qw);
-        boolean isDealerSettlement = dealerId != null;
+        if (effectiveDealerId != null) {
+            applyDealerCommissionSlice(orders, effectiveDealerId);
+        }
+        boolean isDealerSettlement = effectiveDealerId != null;
         
-        byte[] excelData = createSettlementExcel(orders, isDealerSettlement);
+        byte[] excelData = createSettlementExcel(orders, isDealerSettlement, effectiveDealerId);
         
         Map<String, Object> result = new HashMap<>();
         result.put("isZip", false);
@@ -2030,13 +2352,13 @@ public class BillingService {
     }
 
     /**
-     * 创建结算表Excel
+     * 闂傚倷绀侀幉锛勬暜濡ゅ啰鐭欓柟瀵稿Х绾句粙鏌熼幆褍顣崇痪鎯с偢閺岀喖骞嗚椤ｆ娊鏌￠崱鈺佸⒋闁诡喛娉涢埥澶愬箳閸℃ぞ澹曞銇卞懏鐦╡l
      */
-    private byte[] createSettlementExcel(List<PaymentOrder> orders, boolean isDealerSettlement) throws IOException {
+    private byte[] createSettlementExcel(List<PaymentOrder> orders, boolean isDealerSettlement, Long targetDealerId) throws IOException {
         try (Workbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("结算表");
 
-            // 创建标题样式
+            // 闂傚倷绀侀幉锛勬暜濡ゅ啰鐭欓柟瀵稿Х绾句粙鏌熼幑鎰靛殭闁告劏鍋撻梻浣规偠閸庢椽宕滈敃鍌氭辈妞ゆ牜鍋為悡娑氣偓骞垮劚閹冲骸危閼姐倗纾?
             CellStyle headerStyle = workbook.createCellStyle();
             headerStyle.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
             headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
@@ -2049,14 +2371,14 @@ public class BillingService {
             headerFont.setBold(true);
             headerStyle.setFont(headerFont);
 
-            // 创建数据样式
+            // 闂傚倷绀侀幉锛勬暜濡ゅ啰鐭欓柟瀵稿Х绾句粙鏌熼幑鎰靛殭闁哄绶氶弻锝呂旈埀顒勬偋閸℃瑧鐭堥柨鏇炲€归悡娑氣偓骞垮劚閹冲骸危閼姐倗纾?
             CellStyle dataStyle = workbook.createCellStyle();
             dataStyle.setBorderBottom(BorderStyle.THIN);
             dataStyle.setBorderTop(BorderStyle.THIN);
             dataStyle.setBorderLeft(BorderStyle.THIN);
             dataStyle.setBorderRight(BorderStyle.THIN);
 
-            // 创建金额样式
+            // 闂傚倷绀侀幉锛勬暜濡ゅ啰鐭欓柟瀵稿Х绾句粙鏌熼崜褏甯涢柣鎾冲€块弻鐔告綇閹呮В闂佸搫顦板浠嬪蓟閳ユ剚鍚嬮柛娑卞幗浜涚紓?
             CellStyle moneyStyle = workbook.createCellStyle();
             moneyStyle.setBorderBottom(BorderStyle.THIN);
             moneyStyle.setBorderTop(BorderStyle.THIN);
@@ -2065,7 +2387,7 @@ public class BillingService {
             DataFormat format = workbook.createDataFormat();
             moneyStyle.setDataFormat(format.getFormat("#,##0.00"));
 
-            // 写入标题行
+            // 闂傚倷绀侀幉锟犲礉閺嶎厽鍋￠柕澶嗘櫅閻鏌涢埄鍐槈闁告劏鍋撻梻浣规偠閸庢椽宕滈敃鍌氭辈妞ゆ牜鍋為崑?
             Row headerRow = sheet.createRow(0);
             for (int i = 0; i < SETTLEMENT_HEADERS.length; i++) {
                 Cell cell = headerRow.createCell(i);
@@ -2073,10 +2395,13 @@ public class BillingService {
                 cell.setCellStyle(headerStyle);
             }
 
-            // 写入数据行
+            // 闂傚倷绀侀幉锟犲礉閺嶎厽鍋￠柕澶嗘櫅閻鏌涢埄鍐槈闁哄绶氶弻锝呂旈埀顒勬偋閸℃瑧鐭堥柨鏇炲€归崑?
             SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
             int rowNum = 1;
             BigDecimal totalProfit = BigDecimal.ZERO;
+            Map<String, Set<Long>> dealerSettlementMap = isDealerSettlement && targetDealerId != null
+                    ? loadDealerSettlementMap(orders)
+                    : Collections.emptyMap();
             
             for (PaymentOrder order : orders) {
                 Row row = sheet.createRow(rowNum++);
@@ -2094,17 +2419,22 @@ public class BillingService {
                 createTextCell(row, col++, order.getCurrency(), dataStyle);
                 createTextCell(row, col++, order.getPaidAt() != null ? sdf.format(order.getPaidAt()) : "", dataStyle);
                 
-                // 分润金额（根据类型）
+                // 闂傚倷绀侀幉锛勬暜閹烘嚦娑樷枎閹板洦顨嗛幆鏃堝Ω閿旀儳甯撻梻浣侯攰閹活亞鈧潧鐭傚璺好洪鍛弳濠电偞鍨堕…鍥ㄦ櫠濞戙垺鐓熸俊銈勭劍鐏忥附顨ラ悙鏉戠伌妞ゃ垺鐟╅獮鎴﹀箛閸偉鏅ч梻鍌欑劍閹爼宕濆畝鍕垫晞闁瑰濮甸～?
                 BigDecimal profit = isDealerSettlement ? 
                         (order.getDealerAmount() != null ? order.getDealerAmount() : BigDecimal.ZERO) :
                         (order.getInstallerAmount() != null ? order.getInstallerAmount() : BigDecimal.ZERO);
                 createMoneyCell(row, col++, profit, moneyStyle);
                 totalProfit = totalProfit.add(profit);
                 
-                createTextCell(row, col++, order.getIsSettled() != null && order.getIsSettled() == 1 ? "已结算" : "未结算", dataStyle);
+                boolean settled = isDealerSettlement
+                        ? (targetDealerId != null
+                        ? isDealerSliceSettled(order, targetDealerId, dealerSettlementMap)
+                        : isDealerSettled(order))
+                        : isInstallerSettled(order);
+                createTextCell(row, col++, settled ? "已结算" : "未结算", dataStyle);
             }
 
-            // 写入汇总行
+            // 闂傚倷绀侀幉锟犲礉閺嶎厽鍋￠柕澶嗘櫅閻鏌涢埄鍐︿簼鐟滄柨鐣烽崼鏇炍╅柕蹇曞С婢规洟姊洪崫鍕仼婵炲瓨宀稿?
             Row sumRow = sheet.createRow(rowNum);
             Cell sumLabelCell = sumRow.createCell(0);
             sumLabelCell.setCellValue("合计");
@@ -2114,7 +2444,7 @@ public class BillingService {
             sumProfitCell.setCellValue(totalProfit.doubleValue());
             sumProfitCell.setCellStyle(moneyStyle);
 
-            // 自动调整列宽
+            // 闂傚倷鑳堕崢褔銆冩惔銏㈩洸婵犲﹤瀚崣蹇涙煃閸濆嫬鏆為悗姘煎墴閺屾盯骞囬妸锔界彆濠电偛鐗嗛…鐑藉蓟濞戙垹绠抽柟鍨暞閻ｈ泛顪?
             for (int i = 0; i < SETTLEMENT_HEADERS.length; i++) {
                 sheet.autoSizeColumn(i);
                 int width = sheet.getColumnWidth(i);
@@ -2131,3 +2461,4 @@ public class BillingService {
         }
     }
 }
+

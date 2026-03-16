@@ -85,6 +85,14 @@ public class PaymentOrder {
     @TableField("is_settled")
     private Integer isSettled;
 
+    /** 装机商是否已结算：0-未结算 1-已结算 */
+    @TableField("installer_is_settled")
+    private Integer installerIsSettled;
+
+    /** 经销商是否已结算：0-未结算 1-已结算 */
+    @TableField("dealer_is_settled")
+    private Integer dealerIsSettled;
+
     /** 设备上线所属国家 */
     @TableField("online_country")
     private String onlineCountry;

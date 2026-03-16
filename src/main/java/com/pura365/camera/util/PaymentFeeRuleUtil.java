@@ -1,7 +1,6 @@
 package com.pura365.camera.util;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.Locale;
 
 /**
@@ -45,7 +44,7 @@ public final class PaymentFeeRuleUtil {
         }
 
         return fee.compareTo(BigDecimal.ZERO) > 0
-                ? fee.setScale(2, RoundingMode.HALF_UP)
+                ? MoneyScaleUtil.keepTwoDecimals(fee)
                 : BigDecimal.ZERO;
     }
 
@@ -64,7 +63,7 @@ public final class PaymentFeeRuleUtil {
     }
 
     private static BigDecimal percentageFee(BigDecimal amount, BigDecimal rate) {
-        return amount.multiply(rate).divide(HUNDRED, 2, RoundingMode.HALF_UP);
+        return MoneyScaleUtil.percentOf(amount, rate);
     }
 
     private static String normalizeMethod(String paymentMethod) {
