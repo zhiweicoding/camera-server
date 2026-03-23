@@ -48,5 +48,9 @@ public class StorageConfig {
         private String bucket;
         /** 区域 */
         private String region;
+        /** Vultr public base URL */
+        private String publicBaseUrl;
+        /** presigned download URL expiry in seconds */
+        private Long downloadExpireSeconds;
     }
 }

@@ -109,8 +109,9 @@ public class PaymentService {
         }
 
         // 根据商品类型获取价格
+        String paymentMethod = resolvePaymentMethod(request.getPaymentMethod());
         BigDecimal amount;
-        String currency = resolveServerCurrency();
+        String currency = resolveOrderCurrency(paymentMethod);
         CloudPlan plan = null;
         //if (PRODUCT_TYPE_CLOUD_STORAGE.equals(request.getProductType())) {
             plan = findPlanByPlanId(request.getProductId());
@@ -133,8 +134,9 @@ public class PaymentService {
 
         // 订单复用：检查是否有同样的待支付订单
         PaymentOrder existingOrder = findPendingOrder(userId, request.getDeviceId(), 
-                request.getProductType(), request.getProductId());
+                request.getProductType(), request.getProductId(), paymentMethod);
         if (existingOrder != null) {
+            refreshPendingOrderForPaymentMethod(existingOrder, paymentMethod, currency);
             log.info("复用已有订单: orderId={}", existingOrder.getOrderId());
             OrderVO vo = new OrderVO();
             vo.setOrderId(existingOrder.getOrderId());
@@ -150,9 +152,6 @@ public class PaymentService {
         closeOtherPendingOrders(userId, request.getDeviceId());
 
         // 创建新订单
-        String paymentMethod = StringUtils.hasText(request.getPaymentMethod())
-                ? request.getPaymentMethod() : DEFAULT_PAYMENT_METHOD;
-
         PaymentOrder order = new PaymentOrder();
         order.setOrderId(generateOrderId());
         order.setUserId(userId);
@@ -187,15 +186,40 @@ public class PaymentService {
     /**
      * 查找待支付的相同订单（用于复用）
      */
-    private PaymentOrder findPendingOrder(Long userId, String deviceId, String productType, String productId) {
+    private PaymentOrder findPendingOrder(Long userId, String deviceId, String productType, String productId,
+                                          String paymentMethod) {
         LambdaQueryWrapper<PaymentOrder> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(PaymentOrder::getUserId, userId)
                .eq(PaymentOrder::getDeviceId, deviceId)
                .eq(PaymentOrder::getProductType, productType)
                .eq(PaymentOrder::getProductId, productId)
+               .eq(PaymentOrder::getPaymentMethod, paymentMethod)
                .eq(PaymentOrder::getStatus, PaymentOrderStatus.PENDING)
                .last("LIMIT 1");
         return paymentOrderRepository.selectOne(wrapper);
+    }
+
+    private void refreshPendingOrderForPaymentMethod(PaymentOrder order, String paymentMethod, String currency) {
+        boolean currencyChanged = !sameIgnoreCase(currency, order.getCurrency());
+        boolean methodChanged = !sameIgnoreCase(paymentMethod, order.getPaymentMethod());
+        if (!currencyChanged && !methodChanged) {
+            return;
+        }
+
+        order.setCurrency(currency);
+        order.setPaymentMethod(paymentMethod);
+        if (isPaypalPayment(paymentMethod) && currencyChanged) {
+            order.setThirdOrderId(null);
+        }
+        order.setUpdatedAt(new Date());
+        paymentOrderRepository.updateById(order);
+    }
+
+    private boolean sameIgnoreCase(String left, String right) {
+        if (left == null) {
+            return right == null;
+        }
+        return left.equalsIgnoreCase(right);
     }
 
     private void fillOrderCommissionSafely(PaymentOrder order, String scene) {
@@ -305,6 +329,7 @@ public class PaymentService {
         }
 
         // 如果已有 PayPal 订单ID，直接返回
+        prepareOrderForPaypal(order);
         if (StringUtils.hasText(order.getThirdOrderId()) && order.getThirdOrderId().startsWith("paypal_")) {
             String paypalOrderId = order.getThirdOrderId().substring(7);
             String status = paypalService.getOrderStatus(paypalOrderId);
@@ -326,11 +351,11 @@ public class PaymentService {
         }
 
         // 创建 PayPal 订单，使用 USD 货币
-        BigDecimal usdAmount = convertToUsd(order.getAmount(), order.getCurrency());
+        BigDecimal paypalAmount = order.getAmount();
         PaypalService.CreateOrderResult result = paypalService.createOrder(
                 order.getOrderId(),
-                usdAmount,
-                "USD",
+                paypalAmount,
+                order.getCurrency(),
                 description
         );
 
@@ -389,19 +414,18 @@ public class PaymentService {
             return false;
         }
 
-        // 更新订单状态
         if ("COMPLETED".equals(captureResult.getStatus())) {
-            order.setStatus(PaymentOrderStatus.PAID);
-            order.setPaidAt(new Date());
-            order.setUpdatedAt(new Date());
-            fillOrderCommissionSafely(order, "paypal_return");
-            paymentOrderRepository.updateById(order);
-
-            // 激活云存储服务
-            activateCloudService(order);
-
-            log.info("PayPal payment completed for order: {}", orderId);
-            return true;
+            boolean callbackSuccess = paymentCallbackService.handlePaymentSuccess(
+                    order.getOrderId(),
+                    "paypal",
+                    "paypal_" + paypalOrderId
+            );
+            if (callbackSuccess) {
+                log.info("PayPal payment completed for order: {}", orderId);
+            } else {
+                log.error("PayPal payment callback handling failed for order: {}", orderId);
+            }
+            return callbackSuccess;
         }
 
         return false;
@@ -416,10 +440,31 @@ public class PaymentService {
     public void handlePaypalWebhook(String paypalOrderId, String eventType) {
         log.info("Received PayPal webhook: {}, event: {}", paypalOrderId, eventType);
 
+        // Some clients may not reliably hit return-url in WebView.
+        // When order is approved, proactively capture so payment state can still advance.
+        if ("CHECKOUT.ORDER.APPROVED".equals(eventType)) {
+            PaypalService.CaptureResult captureResult = paypalService.captureOrder(paypalOrderId);
+            if (!captureResult.isSuccess()) {
+                log.error("PayPal webhook capture failed for order {}: {}", paypalOrderId, captureResult.getErrorMessage());
+                return;
+            }
+            if (!"COMPLETED".equals(captureResult.getStatus())) {
+                log.warn("PayPal webhook capture not completed for order {}, status={}",
+                        paypalOrderId, captureResult.getStatus());
+                return;
+            }
+            markOrderPaidByPaypalOrderId(paypalOrderId, "paypal_webhook_approved");
+            return;
+        }
+
         if (!"PAYMENT.CAPTURE.COMPLETED".equals(eventType)) {
             return;
         }
 
+        markOrderPaidByPaypalOrderId(paypalOrderId, "paypal_webhook");
+    }
+
+    private void markOrderPaidByPaypalOrderId(String paypalOrderId, String scene) {
         // 根据 PayPal 订单ID 查找业务订单
         LambdaQueryWrapper<PaymentOrder> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(PaymentOrder::getThirdOrderId, "paypal_" + paypalOrderId).last("LIMIT 1");
@@ -435,28 +480,16 @@ public class PaymentService {
             return;
         }
 
-        // 更新订单状态
-        order.setStatus(PaymentOrderStatus.PAID);
-        order.setPaidAt(new Date());
-        order.setUpdatedAt(new Date());
-        fillOrderCommissionSafely(order, "paypal_webhook");
-        paymentOrderRepository.updateById(order);
-
-        // 激活云存储服务
-        activateCloudService(order);
-
-        log.info("Order {} marked as paid via webhook", order.getOrderId());
-    }
-
-    /**
-     * 激活云存储服务
-     */
-    private void activateCloudService(PaymentOrder order) {
-        // TODO: 实现云存储套餐激活逻辑
-        // 1. 根据 order.getProductId() 获取套餐信息
-        // 2. 为 order.getDeviceId() 创建或延长云存储订阅
-        log.info("Activating cloud service for device: {}, plan: {}", 
-                order.getDeviceId(), order.getProductId());
+        boolean callbackSuccess = paymentCallbackService.handlePaymentSuccess(
+                order.getOrderId(),
+                "paypal",
+                "paypal_" + paypalOrderId
+        );
+        if (callbackSuccess) {
+            log.info("Order {} marked as paid via webhook, scene={}", order.getOrderId(), scene);
+        } else {
+            log.error("Failed to mark order {} as paid via webhook, scene={}", order.getOrderId(), scene);
+        }
     }
 
     /**
@@ -478,6 +511,38 @@ public class PaymentService {
             return USD_CURRENCY;
         }
         return DEFAULT_CURRENCY;
+    }
+
+    private String resolvePaymentMethod(String paymentMethod) {
+        if (!StringUtils.hasText(paymentMethod)) {
+            return DEFAULT_PAYMENT_METHOD;
+        }
+        return paymentMethod.trim().toLowerCase();
+    }
+
+    private String resolveOrderCurrency(String paymentMethod) {
+        if (isPaypalPayment(paymentMethod)) {
+            return USD_CURRENCY;
+        }
+        return resolveServerCurrency();
+    }
+
+    private boolean isPaypalPayment(String paymentMethod) {
+        return "paypal".equalsIgnoreCase(paymentMethod);
+    }
+
+    private void prepareOrderForPaypal(PaymentOrder order) {
+        boolean currencyChanged = !USD_CURRENCY.equalsIgnoreCase(order.getCurrency());
+        boolean methodChanged = !isPaypalPayment(order.getPaymentMethod());
+        if (!currencyChanged && !methodChanged) {
+            return;
+        }
+
+        order.setCurrency(USD_CURRENCY);
+        order.setPaymentMethod("paypal");
+        order.setThirdOrderId(null);
+        order.setUpdatedAt(new Date());
+        paymentOrderRepository.updateById(order);
     }
 
     /**
