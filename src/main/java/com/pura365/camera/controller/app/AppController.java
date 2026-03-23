@@ -47,7 +47,7 @@ public class AppController {
     @Value("${app.startup.firebase.android-enabled:false}")
     private boolean firebaseAndroidEnabled;
 
-    @Value("${app.startup.firebase.ios-enabled:true}")
+    @Value("${app.startup.firebase.ios-enabled:false}")
     private boolean firebaseIosEnabled;
 
     /**

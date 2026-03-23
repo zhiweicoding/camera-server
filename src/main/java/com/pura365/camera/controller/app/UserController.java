@@ -6,6 +6,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import com.pura365.camera.domain.User;
 import com.pura365.camera.model.ApiResponse;
 import com.pura365.camera.repository.UserRepository;
+import com.pura365.camera.service.AccountDeletionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,6 +40,9 @@ public class UserController {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Autowired
+    private AccountDeletionService accountDeletionService;
 
     /**
      * 获取当前登录用户信息
@@ -177,6 +181,30 @@ public class UserController {
         } catch (IOException e) {
             log.error("上传头像异常 - userId={}", currentUserId, e);
             return ApiResponse.error(500, "上传失败");
+        }
+    }
+
+    /**
+     * 注销当前账号
+     */
+    @Operation(summary = "注销当前账号", description = "删除当前登录账号及其关联的主要用户数据")
+    @DeleteMapping("/account")
+    public ApiResponse<Map<String, Integer>> deleteCurrentAccount(
+            @RequestAttribute(value = "currentUserId", required = false) Long currentUserId) {
+        log.info("注销账号 - userId={}", currentUserId);
+        if (currentUserId == null) {
+            return ApiResponse.error(401, "未登录");
+        }
+
+        try {
+            Map<String, Integer> result = accountDeletionService.deleteCurrentAccount(currentUserId);
+            return ApiResponse.success(result);
+        } catch (RuntimeException e) {
+            log.warn("注销账号失败 - userId={}, message={}", currentUserId, e.getMessage());
+            return ApiResponse.error(400, e.getMessage());
+        } catch (Exception e) {
+            log.error("注销账号异常 - userId={}", currentUserId, e);
+            return ApiResponse.error(500, "服务器错误");
         }
     }
 
