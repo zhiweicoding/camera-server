@@ -131,8 +131,33 @@ public class PaymentTestController {
      * 
      * 用于生成多条测试数据以验证报表和导出功能
      */
-    @Operation(summary = "批量创建测试订单", 
-               description = "批量创建订单并模拟支付成功，用于测试报表和导出功能")
+    @Operation(summary = "Repair cloud activation",
+               description = "Re-run cloud subscription activation for a paid order")
+    /**
+     * Repair cloud subscription activation for a paid order.
+     */
+    @PostMapping("/repair-cloud/{orderId}")
+    public ApiResponse<MockPaymentResult> repairCloud(
+            @Parameter(description = "订单ID") @PathVariable("orderId") String orderId) {
+
+        if (!testEnabled) {
+            return ApiResponse.error(403, "测试接口已禁用");
+        }
+
+        log.info("【测试】修复云存订阅: orderId={}", orderId);
+
+        boolean success = paymentCallbackService.repairCloudStorageActivation(orderId);
+
+        MockPaymentResult result = new MockPaymentResult();
+        result.setOrderId(orderId);
+        result.setPaymentSuccess(success);
+        result.setMessage(success ? "云存订阅修复成功" : "云存订阅修复失败，请检查订单状态和日志");
+
+        return ApiResponse.success(result);
+    }
+
+    @Operation(summary = "Batch create test orders",
+               description = "Create test orders in batch and simulate successful payments")
     @PostMapping("/batch-create")
     public ApiResponse<BatchMockResult> batchCreate(
             @RequestAttribute("currentUserId") Long currentUserId,

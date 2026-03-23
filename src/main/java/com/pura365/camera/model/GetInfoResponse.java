@@ -23,6 +23,9 @@ public class GetInfoResponse {
     @JsonProperty("S3Region")
     private String S3Region;
 
+    @JsonProperty("S3Bucket")
+    private String S3Bucket;
+
     @JsonProperty("S3SecretKey")
     private String S3SecretKey;
 
@@ -62,6 +65,9 @@ public class GetInfoResponse {
     
     public String getS3Region() { return S3Region; }
     public void setS3Region(String s3Region) { S3Region = s3Region; }
+
+    public String getS3Bucket() { return S3Bucket; }
+    public void setS3Bucket(String s3Bucket) { S3Bucket = s3Bucket; }
     
     public String getS3SecretKey() { return S3SecretKey; }
     public void setS3SecretKey(String s3SecretKey) { S3SecretKey = s3SecretKey; }
@@ -93,13 +99,24 @@ public class GetInfoResponse {
                 ", NormalAI=" + NormalAI +
                 ", S3Hostname='" + S3Hostname + '\'' +
                 ", S3Region='" + S3Region + '\'' +
-                ", S3SecretKey='" + S3SecretKey + '\'' +
-                ", S3AccessKey='" + S3AccessKey + '\'' +
+                ", S3Bucket='" + S3Bucket + '\'' +
+                ", S3SecretKey='" + maskSensitive(S3SecretKey) + '\'' +
+                ", S3AccessKey='" + maskSensitive(S3AccessKey) + '\'' +
                 ", MqttHostname='" + MqttHostname + '\'' +
-                ", MqttPass='" + MqttPass + '\'' +
+                ", MqttPass='" + maskSensitive(MqttPass) + '\'' +
                 ", MqttUser='" + MqttUser + '\'' +
                 ", GPTHostname='" + GPTHostname + '\'' +
-                ", GPTKey='" + GPTKey + '\'' +
+                ", GPTKey='" + maskSensitive(GPTKey) + '\'' +
                 '}';
+    }
+
+    private String maskSensitive(String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        if (value.length() <= 6) {
+            return "***";
+        }
+        return value.substring(0, 3) + "***" + value.substring(value.length() - 3);
     }
 }

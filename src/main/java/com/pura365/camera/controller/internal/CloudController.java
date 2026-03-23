@@ -156,6 +156,13 @@ public class CloudController {
         return lower.startsWith("zh") ? LANG_ZH : LANG_EN;
     }
 
+    private String resolveOrderCurrency(String paymentMethod) {
+        if ("paypal".equalsIgnoreCase(paymentMethod)) {
+            return USD_CURRENCY;
+        }
+        return resolveServerCurrency();
+    }
+
     /**
      * 订阅云存储 - POST /cloud/subscribe
      * 这里只创建支付订单，不直接写入 CloudSubscription（支付成功后再写入）。
@@ -199,7 +206,7 @@ public class CloudController {
         CloudSubscribeResponse response = new CloudSubscribeResponse();
         response.setOrderId(orderId);
         response.setAmount(amount);
-        response.setCurrency(resolveServerCurrency());
+        response.setCurrency(resolveOrderCurrency(paymentMethod));
         response.setPaymentMethod(paymentMethod);
 
         if ("wechat".equalsIgnoreCase(paymentMethod)) {

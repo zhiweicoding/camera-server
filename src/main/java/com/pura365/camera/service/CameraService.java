@@ -446,6 +446,7 @@ public class CameraService {
             // Bucket固定为 cloud-storage，摄像头默认使用
             response.setS3Hostname("s3.cn-south-1.qiniucs.com");
             response.setS3Region("cn-south-1");
+            response.setS3Bucket(qiniuConfig.getBucket());
             response.setS3AccessKey(qiniuConfig.getAccessKey());
             response.setS3SecretKey(qiniuConfig.getSecretKey());
 
@@ -456,6 +457,7 @@ public class CameraService {
             String hostname = vultrConfig.getEndpoint().replace("https://", "").replace("http://", "");
             response.setS3Hostname(hostname);
             response.setS3Region(vultrConfig.getRegion());
+            response.setS3Bucket(vultrConfig.getBucket());
             response.setS3AccessKey(vultrConfig.getAccessKey());
             response.setS3SecretKey(vultrConfig.getSecretKey());
             

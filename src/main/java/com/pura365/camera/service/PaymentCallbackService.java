@@ -5,6 +5,7 @@ import com.pura365.camera.domain.CloudPlan;
 import com.pura365.camera.domain.CloudSubscription;
 import com.pura365.camera.domain.Device;
 import com.pura365.camera.domain.PaymentOrder;
+import com.pura365.camera.enums.CloudPlanType;
 import com.pura365.camera.enums.PaymentOrderStatus;
 import com.pura365.camera.repository.CloudPlanRepository;
 import com.pura365.camera.repository.CloudSubscriptionRepository;
@@ -33,6 +34,8 @@ import java.util.Date;
 public class PaymentCallbackService {
 
     private static final Logger logger = LoggerFactory.getLogger(PaymentCallbackService.class);
+    private static final String PAYPAL_PAYMENT_METHOD = "paypal";
+    private static final String USD_CURRENCY = "USD";
 
     private final PaymentOrderRepository paymentOrderRepository;
     private final CloudSubscriptionRepository cloudSubscriptionRepository;
@@ -86,6 +89,9 @@ public class PaymentCallbackService {
         if (paymentMethod != null && !paymentMethod.trim().isEmpty()) {
             order.setPaymentMethod(paymentMethod.trim());
         }
+        if (PAYPAL_PAYMENT_METHOD.equalsIgnoreCase(paymentMethod)) {
+            order.setCurrency(USD_CURRENCY);
+        }
         order.setThirdOrderId(transactionId);
         order.setPaidAt(new Date());
         order.setUpdatedAt(new Date());
@@ -104,7 +110,7 @@ public class PaymentCallbackService {
 
         // 根据商品类型处理业务逻辑
         boolean success = false;
-        if ("cloud_storage".equals(order.getProductType())) {
+        if (requiresCloudStorageActivation(order)) {
             success = activateCloudStorage(order);
         }
 
@@ -118,17 +124,74 @@ public class PaymentCallbackService {
     }
 
     /**
+     * Repair cloud storage activation for an already paid order.
+     * Intended for historical orders that were marked paid before subscription activation was wired up.
+     */
+    @Transactional
+    public boolean repairCloudStorageActivation(String orderId) {
+        logger.info("Repair cloud storage activation: orderId={}", orderId);
+
+        LambdaQueryWrapper<PaymentOrder> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(PaymentOrder::getOrderId, orderId);
+        PaymentOrder order = paymentOrderRepository.selectOne(wrapper);
+
+        if (order == null) {
+            logger.error("Repair failed, order not found: orderId={}", orderId);
+            return false;
+        }
+        if (PaymentOrderStatus.PAID != order.getStatus()) {
+            logger.warn("Repair skipped, order is not paid yet: orderId={}, status={}", orderId, order.getStatus());
+            return false;
+        }
+        if (!requiresCloudStorageActivation(order)) {
+            logger.warn("Repair skipped, unsupported product type: orderId={}, productType={}",
+                    orderId, order.getProductType());
+            return false;
+        }
+
+        return activateCloudStorage(order);
+    }
+
+    private boolean requiresCloudStorageActivation(PaymentOrder order) {
+        if (order == null) {
+            return false;
+        }
+        if (isCloudStorageProductType(order.getProductType())) {
+            return true;
+        }
+
+        CloudPlan plan = findPlanByPlanId(order.getProductId());
+        return plan != null && isCloudStorageProductType(plan.getType());
+    }
+
+    private boolean isCloudStorageProductType(String productType) {
+        if (productType == null) {
+            return false;
+        }
+        if ("cloud_storage".equalsIgnoreCase(productType)) {
+            return true;
+        }
+
+        CloudPlanType planType = CloudPlanType.fromCode(productType);
+        return planType == CloudPlanType.MOTION || planType == CloudPlanType.FULLTIME;
+    }
+
+    private CloudPlan findPlanByPlanId(String planId) {
+        if (planId == null || planId.trim().isEmpty()) {
+            return null;
+        }
+        LambdaQueryWrapper<CloudPlan> planWrapper = new LambdaQueryWrapper<>();
+        planWrapper.eq(CloudPlan::getPlanId, planId);
+        return cloudPlanRepository.selectOne(planWrapper);
+    }
+
+    /**
      * 激活云存储套餐
      */
     private boolean activateCloudStorage(PaymentOrder order) {
         try {
             // 查询套餐信息以获取周期
-            CloudPlan plan = null;
-            if (order.getProductId() != null) {
-                LambdaQueryWrapper<CloudPlan> planWrapper = new LambdaQueryWrapper<>();
-                planWrapper.eq(CloudPlan::getPlanId, order.getProductId());
-                plan = cloudPlanRepository.selectOne(planWrapper);
-            }
+            CloudPlan plan = findPlanByPlanId(order.getProductId());
 
             // 查询现有订阅，如果存在则延长有效期（按到期时间降序取最新的一条）
             LambdaQueryWrapper<CloudSubscription> subWrapper = new LambdaQueryWrapper<>();

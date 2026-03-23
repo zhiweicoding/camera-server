@@ -22,6 +22,7 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
@@ -35,6 +36,8 @@ import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
 import software.amazon.awssdk.services.s3.model.S3Error;
 import software.amazon.awssdk.services.s3.model.CommonPrefix;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
+import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequest;
 
@@ -88,6 +91,105 @@ public class CloudStorageService {
         return r.equals("cn") || r.equals("china") || r.startsWith("cn-");
     }
 
+    private String buildVultrDownloadUrl(String key) {
+        return buildVultrDownloadUrl(vultrConfig.getBucket(), key);
+    }
+
+    private String buildVultrDownloadUrl(String bucket, String key) {
+        if (bucket == null || bucket.trim().isEmpty() || key == null || key.trim().isEmpty()) {
+            return key;
+        }
+
+        String publicBaseUrl = normalizeBaseUrl(vultrConfig.getPublicBaseUrl());
+        if (publicBaseUrl != null) {
+            return publicBaseUrl + "/" + key;
+        }
+
+        try (S3Presigner presigner = createVultrPresigner()) {
+            if (presigner == null) {
+                return buildVultrObjectUrl(key);
+            }
+
+            GetObjectRequest objectRequest = GetObjectRequest.builder()
+                .bucket(bucket)
+                .key(key)
+                .build();
+
+            GetObjectPresignRequest presignRequest = GetObjectPresignRequest.builder()
+                .signatureDuration(Duration.ofSeconds(resolveVultrDownloadExpireSeconds()))
+                .getObjectRequest(objectRequest)
+                .build();
+
+            PresignedGetObjectRequest presignedRequest = presigner.presignGetObject(presignRequest);
+            return presignedRequest.url().toString();
+        } catch (Exception e) {
+            log.warn("Failed to build Vultr download url, fallback to object url - key: {}", key, e);
+            return buildVultrObjectUrl(bucket, key);
+        }
+    }
+
+    private String buildVultrObjectUrl(String key) {
+        return buildVultrObjectUrl(vultrConfig.getBucket(), key);
+    }
+
+    private String buildVultrObjectUrl(String bucket, String key) {
+        if (bucket == null || bucket.trim().isEmpty() || key == null || key.trim().isEmpty()) {
+            return key;
+        }
+
+        String publicBaseUrl = normalizeBaseUrl(vultrConfig.getPublicBaseUrl());
+        if (publicBaseUrl != null) {
+            return publicBaseUrl + "/" + key;
+        }
+
+        String endpoint = normalizeBaseUrl(vultrConfig.getEndpoint());
+        if (endpoint == null) {
+            return key;
+        }
+        return endpoint + "/" + bucket + "/" + key;
+    }
+
+    private S3Presigner createVultrPresigner() {
+        String endpoint = normalizeBaseUrl(vultrConfig.getEndpoint());
+        if (endpoint == null
+                || vultrConfig.getRegion() == null || vultrConfig.getRegion().trim().isEmpty()
+                || vultrConfig.getAccessKey() == null || vultrConfig.getAccessKey().trim().isEmpty()
+                || vultrConfig.getSecretKey() == null || vultrConfig.getSecretKey().trim().isEmpty()) {
+            return null;
+        }
+
+        AwsBasicCredentials credentials = AwsBasicCredentials.create(
+            vultrConfig.getAccessKey(),
+            vultrConfig.getSecretKey()
+        );
+
+        return S3Presigner.builder()
+            .region(Region.of(vultrConfig.getRegion()))
+            .endpointOverride(URI.create(endpoint))
+            .credentialsProvider(StaticCredentialsProvider.create(credentials))
+            .build();
+    }
+
+    private long resolveVultrDownloadExpireSeconds() {
+        Long configured = vultrConfig.getDownloadExpireSeconds();
+        if (configured == null || configured < 60) {
+            return 3600;
+        }
+        return Math.min(configured, 604800L);
+    }
+
+    private String normalizeBaseUrl(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+
+        String trimmed = value.trim();
+        if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+            trimmed = "https://" + trimmed;
+        }
+        return trimmed.replaceAll("/$", "");
+    }
+    
     /**
      * 获取设备的云存储配置
      * 返回给摄像头用于上传视频
@@ -115,6 +217,8 @@ public class CloudStorageService {
             config.put("endpoint", vultrConfig.getEndpoint());
             config.put("bucket", vultrConfig.getBucket());
             config.put("region", vultrConfig.getRegion());
+            config.put("public_base_url", vultrConfig.getPublicBaseUrl());
+            config.put("download_expire_seconds", resolveVultrDownloadExpireSeconds());
         }
 
         log.info("获取设备云存储配置 - deviceId: {}, provider: {}", deviceId, config.get("provider"));
@@ -221,7 +325,7 @@ public class CloudStorageService {
                 video.setVideoUrl("https://" + qiniuConfig.getDomain() + "/" + key);
             } else {
                 // Vultr：使用S3 URL
-                video.setVideoUrl(vultrConfig.getEndpoint() + "/" + vultrConfig.getBucket() + "/" + key);
+                video.setVideoUrl(buildVultrObjectUrl(key));
             }
             
             // 缩略图（如果提供）
@@ -410,7 +514,7 @@ public class CloudStorageService {
         if (isQiniu) {
             videoUrl = buildQiniuSignedDownloadUrl(key);
         } else {
-            videoUrl = vultrConfig.getEndpoint() + "/" + vultrConfig.getBucket() + "/" + key;
+            videoUrl = buildVultrDownloadUrl(key);
         }
         video.put("video_url", videoUrl);
 
@@ -966,7 +1070,7 @@ public class CloudStorageService {
                 if (china) {
                     url = "https://" + qiniuConfig.getDomain() + "/" + key;
                 } else {
-                    url = endpoint.replaceAll("/$", "") + "/" + bucket + "/" + key;
+                    url = buildVultrObjectUrl(bucket, key);
                 }
                 
                 log.info("上传设备预览图成功 - deviceId: {}, key: {}, url: {}", deviceId, key, url);
@@ -1066,7 +1170,7 @@ public class CloudStorageService {
                 }
             } else {
                 if (endpoint != null && !endpoint.trim().isEmpty()) {
-                    url = endpoint.replaceAll("/$", "") + "/" + bucketToUse + "/" + keyToUse;
+                    url = buildVultrDownloadUrl(bucketToUse, keyToUse);
                 }
             }
             resp.setUrl(url);
