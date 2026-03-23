@@ -60,25 +60,15 @@ public class JPushService {
     }
 
     public boolean pushToUser(Long userId, String title, String content, Map<String, String> extras) {
-        logger.info("Push dispatch prepare source=message_service userId={} title={} contentLength={}",
-                userId,
-                title,
-                content == null ? 0 : content.length());
         List<UserPushToken> tokens = getUserPushTokens(userId);
         if (tokens.isEmpty()) {
-            logger.error("User {} has no enabled push tokens, skip push", userId);
+            logger.warn("用户 {} 没有注册可用推送token", userId);
             return false;
         }
         logger.info("Push token snapshot userId={} tokens={}", userId, summarizeTokens(tokens));
 
-        List<String> registrationIds = extractRegistrationIds(tokens);
-        if (registrationIds.isEmpty()) {
-            logger.warn("User {} has no valid registration_id after filtering", userId);
-            return false;
-        }
-
-        return pushByProvider(registrationIds, title, content, extras,
-                "userId=" + userId + ", tokenCount=" + registrationIds.size());
+        return pushByTokenProviders(tokens, title, content, extras,
+                "userId=" + userId + ", tokenCount=" + tokens.size());
     }
 
     public boolean pushToUsers(List<Long> userIds, String title, String content, Map<String, String> extras) {
@@ -86,60 +76,67 @@ public class JPushService {
             return false;
         }
 
-        logger.info("Push token source=user_push_token_table queryType=batch users={}", userIds);
         LambdaQueryWrapper<UserPushToken> wrapper = new LambdaQueryWrapper<>();
         wrapper.in(UserPushToken::getUserId, userIds)
                 .eq(UserPushToken::getEnabled, EnableStatus.ENABLED);
         List<UserPushToken> tokens = userPushTokenRepository.selectList(wrapper);
 
         if (tokens.isEmpty()) {
-            logger.warn("鐢ㄦ埛鍒楄〃 {} 娌℃湁鍙敤鎺ㄩ€乼oken", userIds);
+            logger.warn("用户列表 {} 没有可用推送token", userIds);
             return false;
         }
         logger.info("Push token snapshot userIds={} tokens={}", userIds, summarizeTokens(tokens));
 
-        List<String> registrationIds = extractRegistrationIds(tokens);
-        if (registrationIds.isEmpty()) {
-            logger.warn("Users {} have no valid registration_id after filtering", userIds);
+        return pushByTokenProviders(tokens, title, content, extras,
+                "userCount=" + userIds.size() + ", tokenCount=" + tokens.size());
+    }
+
+    private boolean pushByTokenProviders(List<UserPushToken> tokens,
+                                         String title,
+                                         String content,
+                                         Map<String, String> extras,
+                                         String context) {
+        if (tokens == null || tokens.isEmpty()) {
             return false;
         }
 
-        return pushByProvider(registrationIds, title, content, extras,
-                "userCount=" + userIds.size() + ", tokenCount=" + registrationIds.size());
-    }
+        List<String> jpushRegistrationIds = new ArrayList<>();
+        List<String> fcmTokens = new ArrayList<>();
 
-    private boolean pushByProvider(List<String> registrationIds,
-                                   String title,
-                                   String content,
-                                   Map<String, String> extras,
-                                   String context) {
-        String provider = normalizeProvider(pushProvider);
-        boolean useHybrid = isHybridProvider(provider);
-        boolean useFirebase = useHybrid || isFirebaseProvider(provider);
-        boolean useJPush = useHybrid || isJPushProvider(provider);
-
-        if (!useFirebase && !useJPush) {
-            logger.warn("Unknown push.provider={}, fallback to jpush", pushProvider);
-            useJPush = true;
+        for (UserPushToken token : tokens) {
+            if (token == null || !StringUtils.hasText(token.getRegistrationId())) {
+                continue;
+            }
+            String registrationId = token.getRegistrationId().trim();
+            if (shouldUseFcm(token)) {
+                fcmTokens.add(registrationId);
+            } else {
+                jpushRegistrationIds.add(registrationId);
+            }
         }
 
-        boolean jPushSuccess = false;
-        if (useJPush) {
-            logger.info("JPush push start {}, provider={}, apnsProduction={}",
-                    context, provider, jPushConfig.getApnsProduction());
-            jPushSuccess = pushToRegistrationIds(registrationIds, title, content, extras);
+        jpushRegistrationIds = new ArrayList<>(new LinkedHashSet<>(jpushRegistrationIds));
+        fcmTokens = new ArrayList<>(new LinkedHashSet<>(fcmTokens));
+
+        if (jpushRegistrationIds.isEmpty() && fcmTokens.isEmpty()) {
+            logger.warn("推送失败，所有token为空或无效: {}", context);
+            return false;
         }
 
-        boolean firebaseSuccess = false;
-        if (useFirebase) {
-            logger.info("Firebase push start {}, provider={}", context, provider);
-            firebaseSuccess = firebasePushService.pushToTokens(registrationIds, title, content, extras);
+        boolean anySuccess = false;
+
+        if (!jpushRegistrationIds.isEmpty()) {
+            logger.info("JPush push start {}, tokenCount={}, apnsProduction={}",
+                    context, jpushRegistrationIds.size(), jPushConfig.getApnsProduction());
+            anySuccess = pushToRegistrationIds(jpushRegistrationIds, title, content, extras) || anySuccess;
         }
 
-        boolean success = jPushSuccess || firebaseSuccess;
-        logger.info("Push dispatch finish {}, provider={}, jpushSuccess={}, firebaseSuccess={}, overallSuccess={}",
-                context, provider, jPushSuccess, firebaseSuccess, success);
-        return success;
+        if (!fcmTokens.isEmpty()) {
+            logger.info("Firebase push start {}, tokenCount={}", context, fcmTokens.size());
+            anySuccess = firebasePushService.pushToTokens(fcmTokens, title, content, extras) || anySuccess;
+        }
+
+        return anySuccess;
     }
 
     private boolean pushToRegistrationIds(List<String> registrationIds,
@@ -149,9 +146,6 @@ public class JPushService {
         if (registrationIds == null || registrationIds.isEmpty()) {
             return false;
         }
-        logger.info("Push dispatch target registrationIdsCount={} samples={}",
-                registrationIds.size(),
-                summarizeRegistrationIds(registrationIds));
         if (jPushClient == null) {
             logger.error("JPush client is not initialized while provider={}.", pushProvider);
             return false;
@@ -238,31 +232,10 @@ public class JPushService {
     }
 
     private List<UserPushToken> getUserPushTokens(Long userId) {
-        logger.info("Push token source=user_push_token_table queryType=single userId={}", userId);
         LambdaQueryWrapper<UserPushToken> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(UserPushToken::getUserId, userId)
                 .eq(UserPushToken::getEnabled, EnableStatus.ENABLED);
-        List<UserPushToken> tokens = userPushTokenRepository.selectList(wrapper);
-        logger.info("Push token source=user_push_token_table queryResult userId={} enabledTokenCount={}",
-                userId, tokens == null ? 0 : tokens.size());
-        return tokens;
-    }
-
-    private List<String> extractRegistrationIds(List<UserPushToken> tokens) {
-        if (tokens == null || tokens.isEmpty()) {
-            return Collections.emptyList();
-        }
-        List<String> registrationIds = tokens.stream()
-                .map(UserPushToken::getRegistrationId)
-                .filter(StringUtils::hasText)
-                .map(String::trim)
-                .distinct()
-                .collect(Collectors.toList());
-        logger.info("Push token extract summary rawTokenCount={} validRegistrationIdCount={} samples={}",
-                tokens.size(),
-                registrationIds.size(),
-                summarizeRegistrationIds(registrationIds));
-        return registrationIds;
+        return userPushTokenRepository.selectList(wrapper);
     }
 
     private List<List<String>> partition(List<String> registrationIds, int batchSize) {
@@ -278,23 +251,33 @@ public class JPushService {
         return result;
     }
 
-    private String normalizeProvider(String provider) {
+    private boolean shouldUseFcm(UserPushToken token) {
+        String provider = normalizeProvider(token.getProvider());
         if (!StringUtils.hasText(provider)) {
-            return "jpush";
+            provider = normalizeProvider(token.getChannel());
         }
-        return provider.trim().toLowerCase();
+
+        if (!StringUtils.hasText(provider)) {
+            if (StringUtils.hasText(pushProvider)) {
+                provider = normalizeProvider(pushProvider);
+            }
+        }
+
+        return "fcm".equals(provider);
     }
 
-    private boolean isFirebaseProvider(String provider) {
-        return "firebase".equals(provider) || "fcm".equals(provider);
-    }
-
-    private boolean isJPushProvider(String provider) {
-        return "jpush".equals(provider);
-    }
-
-    private boolean isHybridProvider(String provider) {
-        return "hybrid".equals(provider) || "both".equals(provider) || "all".equals(provider);
+    private String normalizeProvider(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return null;
+        }
+        String normalized = raw.trim().toLowerCase();
+        if ("firebase".equals(normalized)) {
+            return "fcm";
+        }
+        if ("fcm".equals(normalized) || "jpush".equals(normalized)) {
+            return normalized;
+        }
+        return null;
     }
 
     private String maskRegistrationId(String registrationId) {
@@ -306,16 +289,6 @@ public class JPushService {
             return value;
         }
         return value.substring(0, 4) + "..." + value.substring(value.length() - 4);
-    }
-
-    private String summarizeRegistrationIds(List<String> registrationIds) {
-        if (registrationIds == null || registrationIds.isEmpty()) {
-            return "[]";
-        }
-        return registrationIds.stream()
-                .limit(5)
-                .map(this::maskRegistrationId)
-                .collect(Collectors.joining(", ", "[", registrationIds.size() > 5 ? ", ...]" : "]"));
     }
 
     private String summarizeTokens(List<UserPushToken> tokens) {
@@ -336,8 +309,9 @@ public class JPushService {
         return "id=" + tokenId
                 + ",userId=" + userId
                 + ",deviceType=" + deviceType
+                + ",provider=" + (StringUtils.hasText(token.getProvider()) ? token.getProvider().trim() : "unknown")
+                + ",channel=" + (StringUtils.hasText(token.getChannel()) ? token.getChannel().trim() : "unknown")
                 + ",appVersion=" + appVersion
                 + ",registrationId=" + maskRegistrationId(token.getRegistrationId());
     }
 }
-

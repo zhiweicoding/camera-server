@@ -14,6 +14,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 
 import java.text.SimpleDateFormat;
@@ -43,6 +44,12 @@ public class AppController {
     @Autowired
     private AppVersionRepository appVersionRepository;
 
+    @Value("${app.startup.firebase.android-enabled:false}")
+    private boolean firebaseAndroidEnabled;
+
+    @Value("${app.startup.firebase.ios-enabled:true}")
+    private boolean firebaseIosEnabled;
+
     /**
      * 版本检查
      * GET /api/app/version?platform=ios&current_version=1.0.0
@@ -64,6 +71,7 @@ public class AppController {
         if (!"android".equals(normalizedPlatform) && !"ios".equals(normalizedPlatform)) {
             return ApiResponse.error(400, "platform 仅支持 android 或 ios");
         }
+        boolean enableFirebase = isFirebaseEnabled(normalizedPlatform);
 
         LambdaQueryWrapper<AppVersion> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper
@@ -90,6 +98,7 @@ public class AppController {
             data.put("apk_url", "");
             data.put("app_store_url", "");
             data.put("platform", normalizedPlatform);
+            data.put("enable_firebase", enableFirebase);
             return ApiResponse.success(data);
         }
 
@@ -123,7 +132,15 @@ public class AppController {
         data.put("app_store_url", appStoreUrl);
         data.put("release_date", releaseDate);
         data.put("platform", normalizedPlatform);
+        data.put("enable_firebase", enableFirebase);
         return ApiResponse.success(data);
+    }
+
+    private boolean isFirebaseEnabled(String normalizedPlatform) {
+        if ("ios".equals(normalizedPlatform)) {
+            return firebaseIosEnabled;
+        }
+        return firebaseAndroidEnabled;
     }
 
     private String sanitizeVersion(String version, String fallback) {

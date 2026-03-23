@@ -28,9 +28,17 @@ public class UserPushToken {
     @TableField("device_type")
     private String deviceType;
 
-    /** 极光推送Registration ID */
+    /** 推送Registration ID（JPush regId 或 FCM token） */
     @TableField("registration_id")
     private String registrationId;
+
+    /** 推送提供方: jpush/fcm */
+    @TableField("provider")
+    private String provider;
+
+    /** 推送通道: jpush/fcm（兼容字段） */
+    @TableField("channel")
+    private String channel;
 
     /** APP版本号 */
     @TableField("app_version")
@@ -39,14 +47,6 @@ public class UserPushToken {
     /** 设备型号 */
     @TableField("device_model")
     private String deviceModel;
-
-    /** 推送提供者 (jpush, firebase, hybrid) */
-    @TableField("provider")
-    private String provider;
-
-    /** 渠道 (当前与 provider 相同) */
-    @TableField("channel")
-    private String channel;
 
     /** 系统版本 */
     @TableField("os_version")

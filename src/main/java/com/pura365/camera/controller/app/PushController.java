@@ -13,18 +13,17 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.util.StringUtils;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Date;
 
-@Tag(name = "Push", description = "Push token register/unregister APIs")
+/**
+ * 推送管理接口
+ */
+@Tag(name = "推送管理", description = "推送Token注册、注销接口")
 @RestController
 @RequestMapping("/api/app/push")
 public class PushController {
-
-    @Value("${push.provider:jpush}")
-    private String pushProvider;
 
     private static final Logger log = LoggerFactory.getLogger(PushController.class);
 
@@ -37,127 +36,112 @@ public class PushController {
         this.messageService = messageService;
     }
 
-    @Operation(summary = "Register push token", description = "Register or refresh push token from app")
+    /**
+     * 注册推送Token
+     * 
+     * 客户端在APP启动或用户登录后调用此接口，注册推送通道的 token 到服务端
+     */
+    @Operation(summary = "注册推送Token", description = "客户端注册或更新推送Token")
     @PostMapping("/register")
     public ApiResponse<Void> registerPushToken(
             @RequestAttribute("currentUserId") Long currentUserId,
             @RequestBody RegisterPushTokenRequest request) {
-        String normalizedDeviceType = normalizeText(request.getDeviceType());
-        String normalizedRegistrationId = normalizeText(request.getRegistrationId());
-        String normalizedAppVersion = normalizeText(request.getAppVersion());
-        String normalizedDeviceModel = normalizeText(request.getDeviceModel());
-        String normalizedOsVersion = normalizeText(request.getOsVersion());
+        log.info("注册推送Token - userId={}, deviceType={}, provider={}, channel={}, registrationId={}, deviceModel={}, osVersion={}, appVersion={}",
+                currentUserId, request.getDeviceType(), request.getProvider(), request.getChannel(), request.getRegistrationId(),
+                request.getDeviceModel(), request.getOsVersion(), request.getAppVersion());
 
-        log.info("Push token source=app_register_api userId={} registrationId={} rawRegistrationIdLength={} deviceType={} appVersion={} deviceModel={} osVersion={}",
-                currentUserId,
-                maskRegistrationId(normalizedRegistrationId),
-                request.getRegistrationId() == null ? 0 : request.getRegistrationId().length(),
-                normalizedDeviceType,
-                normalizedAppVersion,
-                normalizedDeviceModel,
-                normalizedOsVersion);
-
-        if (!StringUtils.hasText(normalizedDeviceType)) {
-            log.warn("Push token register failed: empty device_type userId={}", currentUserId);
+        if (!StringUtils.hasText(request.getDeviceType())) {
+            log.warn("注册推送Token失败，device_type为空 - userId={}", currentUserId);
             return ApiResponse.error(400, "device_type 不能为空");
         }
-        if (!StringUtils.hasText(normalizedRegistrationId)) {
-            log.warn("Push token register failed: empty registration_id userId={}", currentUserId);
+        if (!StringUtils.hasText(request.getRegistrationId())) {
+            log.warn("注册推送Token失败，registration_id为空 - userId={}", currentUserId);
             return ApiResponse.error(400, "registration_id 不能为空");
         }
+        String normalizedProvider = normalizeProvider(request.getProvider(), request.getChannel());
+        String normalizedChannel = normalizeChannel(request.getChannel(), normalizedProvider);
 
-        LambdaQueryWrapper<UserPushToken> regWrapper = new LambdaQueryWrapper<>();
-        regWrapper.eq(UserPushToken::getUserId, currentUserId)
-                .eq(UserPushToken::getProvider, pushProvider);
-        UserPushToken existingToken = userPushTokenRepository.selectOne(regWrapper);
+        // 检查是否已存在
+        LambdaQueryWrapper<UserPushToken> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(UserPushToken::getUserId, currentUserId)
+               .eq(UserPushToken::getRegistrationId, request.getRegistrationId());
+        UserPushToken existingToken = userPushTokenRepository.selectOne(wrapper);
 
         if (existingToken != null) {
-            existingToken.setDeviceType(normalizedDeviceType);
-            // Registration ID may rotate after app reinstall or system refresh.
-            existingToken.setRegistrationId(normalizedRegistrationId);
-            existingToken.setAppVersion(normalizedAppVersion);
-            existingToken.setDeviceModel(normalizedDeviceModel);
-            existingToken.setOsVersion(normalizedOsVersion);
-            // Re-register should always restore token to enabled state.
+            // 更新现有记录
+            existingToken.setDeviceType(request.getDeviceType());
+            existingToken.setProvider(normalizedProvider);
+            existingToken.setChannel(normalizedChannel);
+            existingToken.setAppVersion(request.getAppVersion());
+            existingToken.setDeviceModel(request.getDeviceModel());
+            existingToken.setOsVersion(request.getOsVersion());
             existingToken.setEnabled(EnableStatus.ENABLED);
-            existingToken.setProvider(pushProvider);
-            existingToken.setChannel(pushProvider);
             existingToken.setUpdatedAt(new Date());
             userPushTokenRepository.updateById(existingToken);
-
-            log.info("Push token source=user_push_token_table action=update userId={} tokenId={} registrationId={} enabled={} enabledTokenCount={}",
-                    currentUserId,
-                    existingToken.getId(),
-                    maskRegistrationId(existingToken.getRegistrationId()),
-                    existingToken.getEnabled(),
-                    countEnabledTokens(currentUserId));
+            log.info("更新推送Token成功 - userId={}, tokenId={}", currentUserId, existingToken.getId());
         } else {
+            // 创建新记录
             UserPushToken token = new UserPushToken();
             token.setUserId(currentUserId);
-            token.setDeviceType(normalizedDeviceType);
-            token.setRegistrationId(normalizedRegistrationId);
-            token.setAppVersion(normalizedAppVersion);
-            token.setDeviceModel(normalizedDeviceModel);
-            token.setOsVersion(normalizedOsVersion);
+            token.setDeviceType(request.getDeviceType());
+            token.setRegistrationId(request.getRegistrationId());
+            token.setProvider(normalizedProvider);
+            token.setChannel(normalizedChannel);
+            token.setAppVersion(request.getAppVersion());
+            token.setDeviceModel(request.getDeviceModel());
+            token.setOsVersion(request.getOsVersion());
             token.setEnabled(EnableStatus.ENABLED);
-            token.setProvider(pushProvider);
-            token.setChannel(pushProvider);
             token.setCreatedAt(new Date());
             token.setUpdatedAt(new Date());
             userPushTokenRepository.insert(token);
-
-            log.info("Push token source=user_push_token_table action=insert userId={} tokenId={} registrationId={} enabled={} enabledTokenCount={}",
-                    currentUserId,
-                    token.getId(),
-                    maskRegistrationId(token.getRegistrationId()),
-                    token.getEnabled(),
-                    countEnabledTokens(currentUserId));
+            log.info("新增推送Token成功 - userId={}, tokenId={}", currentUserId, token.getId());
         }
 
         return ApiResponse.success("注册成功", null);
     }
 
-    @Operation(summary = "Unregister push token", description = "Disable push token from app")
+    /**
+     * 注销推送Token
+     * 
+     * 用户退出登录或删除APP时，客户端调用此接口注销推送Token
+     */
+    @Operation(summary = "注销推送Token", description = "客户端注销推送Token")
     @DeleteMapping("/unregister")
     public ApiResponse<Void> unregisterPushToken(
             @RequestAttribute("currentUserId") Long currentUserId,
             @RequestParam("registration_id") String registrationId) {
-        String normalizedRegistrationId = normalizeText(registrationId);
+        log.info("注销推送Token - userId={}, registrationId={}", currentUserId, registrationId);
 
-        log.info("Push token source=app_unregister_api userId={} registrationId={} rawRegistrationIdLength={}",
-                currentUserId,
-                maskRegistrationId(normalizedRegistrationId),
-                registrationId == null ? 0 : registrationId.length());
-
-        if (!StringUtils.hasText(normalizedRegistrationId)) {
-            log.warn("Push token unregister failed: empty registration_id userId={}", currentUserId);
+        if (!StringUtils.hasText(registrationId)) {
+            log.warn("注销推送Token失败，registration_id为空 - userId={}", currentUserId);
             return ApiResponse.error(400, "registration_id 不能为空");
         }
 
+        // 禁用或删除token
         LambdaUpdateWrapper<UserPushToken> wrapper = new LambdaUpdateWrapper<>();
         wrapper.eq(UserPushToken::getUserId, currentUserId)
-                .eq(UserPushToken::getRegistrationId, normalizedRegistrationId)
-                .set(UserPushToken::getEnabled, EnableStatus.DISABLED)
-                .set(UserPushToken::getUpdatedAt, new Date());
-
-        int affectedRows = userPushTokenRepository.update(null, wrapper);
-        log.info("Push token source=user_push_token_table action=disable userId={} registrationId={} affectedRows={} enabledTokenCount={}",
-                currentUserId,
-                maskRegistrationId(normalizedRegistrationId),
-                affectedRows,
-                countEnabledTokens(currentUserId));
+               .eq(UserPushToken::getRegistrationId, registrationId)
+               .set(UserPushToken::getEnabled, EnableStatus.DISABLED);
+        
+        userPushTokenRepository.update(null, wrapper);
+        log.info("注销推送Token成功 - userId={}, registrationId={}", currentUserId, registrationId);
 
         return ApiResponse.success("注销成功", null);
     }
 
-    @Operation(summary = "Test push", description = "Trigger one test push message to current user")
+    /**
+     * 测试推送
+     * 
+     * 手动触发一条推送消息到当前用户，用于测试推送功能是否正常
+     */
+    @Operation(summary = "测试推送", description = "手动触发一条测试推送消息到当前用户")
     @PostMapping("/test")
     public ApiResponse<Long> testPush(
             @RequestAttribute("currentUserId") Long currentUserId,
             @RequestParam(value = "device_id", required = false) String deviceId,
             @RequestParam(value = "title", required = false, defaultValue = "测试推送") String title,
             @RequestParam(value = "content", required = false, defaultValue = "这是一条测试消息") String content) {
-        log.info("Test push trigger userId={} deviceId={} title={} content={}",
+        log.info("测试推送 - userId={}, deviceId={}, title={}, content={}",
                 currentUserId, deviceId, title, content);
 
         try {
@@ -169,37 +153,46 @@ public class PushController {
                     content,
                     null,
                     null);
-            log.info("Test push success userId={} messageId={}", currentUserId, messageId);
+            log.info("测试推送成功 - userId={}, messageId={}", currentUserId, messageId);
             return ApiResponse.success("推送成功", messageId);
         } catch (Exception e) {
-            log.error("Test push failed userId={}", currentUserId, e);
+            log.error("测试推送失败 - userId={}", currentUserId, e);
             return ApiResponse.error(500, "推送失败: " + e.getMessage());
         }
     }
 
-    private long countEnabledTokens(Long userId) {
-        LambdaQueryWrapper<UserPushToken> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(UserPushToken::getUserId, userId)
-                .eq(UserPushToken::getEnabled, EnableStatus.ENABLED);
-        Long count = userPushTokenRepository.selectCount(wrapper);
-        return count == null ? 0L : count;
+    private String normalizeProvider(String provider, String channel) {
+        if (StringUtils.hasText(provider)) {
+            String normalized = provider.trim().toLowerCase();
+            if ("firebase".equals(normalized)) {
+                return "fcm";
+            }
+            if ("fcm".equals(normalized) || "jpush".equals(normalized)) {
+                return normalized;
+            }
+        }
+        if (StringUtils.hasText(channel)) {
+            String normalizedChannel = channel.trim().toLowerCase();
+            if ("firebase".equals(normalizedChannel)) {
+                return "fcm";
+            }
+            if ("fcm".equals(normalizedChannel) || "jpush".equals(normalizedChannel)) {
+                return normalizedChannel;
+            }
+        }
+        return "jpush";
     }
 
-    private String normalizeText(String value) {
-        if (!StringUtils.hasText(value)) {
-            return null;
+    private String normalizeChannel(String channel, String provider) {
+        if (StringUtils.hasText(channel)) {
+            String normalized = channel.trim().toLowerCase();
+            if ("firebase".equals(normalized)) {
+                return "fcm";
+            }
+            if ("fcm".equals(normalized) || "jpush".equals(normalized)) {
+                return normalized;
+            }
         }
-        return value.trim();
-    }
-
-    private String maskRegistrationId(String registrationId) {
-        if (!StringUtils.hasText(registrationId)) {
-            return "EMPTY";
-        }
-        String value = registrationId.trim();
-        if (value.length() <= 8) {
-            return value;
-        }
-        return value.substring(0, 4) + "..." + value.substring(value.length() - 4);
+        return provider;
     }
 }
