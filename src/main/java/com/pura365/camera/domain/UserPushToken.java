@@ -28,15 +28,15 @@ public class UserPushToken {
     @TableField("device_type")
     private String deviceType;
 
-    /** 推送Registration ID（JPush regId 或 FCM token） */
+    /** 推送Registration ID（JPush regId / FCM token / APNs device token） */
     @TableField("registration_id")
     private String registrationId;
 
-    /** 推送提供方: jpush/fcm */
+    /** 推送提供方: jpush/fcm/apns */
     @TableField("provider")
     private String provider;
 
-    /** 推送通道: jpush/fcm（兼容字段） */
+    /** 推送通道: jpush/fcm/apns（兼容字段） */
     @TableField("channel")
     private String channel;
 

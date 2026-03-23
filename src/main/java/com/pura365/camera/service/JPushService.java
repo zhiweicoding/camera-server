@@ -45,18 +45,24 @@ public class JPushService {
     private final JPushConfig jPushConfig;
     private final UserPushTokenRepository userPushTokenRepository;
     private final FirebasePushService firebasePushService;
+    private final ApnsPushService apnsPushService;
     private final String pushProvider;
+    private final String iosPushProvider;
 
     public JPushService(@Autowired(required = false) JPushClient jPushClient,
                         JPushConfig jPushConfig,
                         UserPushTokenRepository userPushTokenRepository,
                         FirebasePushService firebasePushService,
-                        @Value("${push.provider:jpush}") String pushProvider) {
+                        ApnsPushService apnsPushService,
+                        @Value("${push.provider:jpush}") String pushProvider,
+                        @Value("${push.ios-provider:apns}") String iosPushProvider) {
         this.jPushClient = jPushClient;
         this.jPushConfig = jPushConfig;
         this.userPushTokenRepository = userPushTokenRepository;
         this.firebasePushService = firebasePushService;
+        this.apnsPushService = apnsPushService;
         this.pushProvider = pushProvider;
+        this.iosPushProvider = iosPushProvider;
     }
 
     public boolean pushToUser(Long userId, String title, String content, Map<String, String> extras) {
@@ -102,14 +108,18 @@ public class JPushService {
 
         List<String> jpushRegistrationIds = new ArrayList<>();
         List<String> fcmTokens = new ArrayList<>();
+        List<String> apnsTokens = new ArrayList<>();
 
         for (UserPushToken token : tokens) {
             if (token == null || !StringUtils.hasText(token.getRegistrationId())) {
                 continue;
             }
             String registrationId = token.getRegistrationId().trim();
-            if (shouldUseFcm(token)) {
+            String provider = resolveProvider(token);
+            if ("fcm".equals(provider)) {
                 fcmTokens.add(registrationId);
+            } else if ("apns".equals(provider)) {
+                apnsTokens.add(registrationId);
             } else {
                 jpushRegistrationIds.add(registrationId);
             }
@@ -117,8 +127,9 @@ public class JPushService {
 
         jpushRegistrationIds = new ArrayList<>(new LinkedHashSet<>(jpushRegistrationIds));
         fcmTokens = new ArrayList<>(new LinkedHashSet<>(fcmTokens));
+        apnsTokens = new ArrayList<>(new LinkedHashSet<>(apnsTokens));
 
-        if (jpushRegistrationIds.isEmpty() && fcmTokens.isEmpty()) {
+        if (jpushRegistrationIds.isEmpty() && fcmTokens.isEmpty() && apnsTokens.isEmpty()) {
             logger.warn("推送失败，所有token为空或无效: {}", context);
             return false;
         }
@@ -134,6 +145,11 @@ public class JPushService {
         if (!fcmTokens.isEmpty()) {
             logger.info("Firebase push start {}, tokenCount={}", context, fcmTokens.size());
             anySuccess = firebasePushService.pushToTokens(fcmTokens, title, content, extras) || anySuccess;
+        }
+
+        if (!apnsTokens.isEmpty()) {
+            logger.info("APNs push start {}, tokenCount={}", context, apnsTokens.size());
+            anySuccess = apnsPushService.pushToTokens(apnsTokens, title, content, extras) || anySuccess;
         }
 
         return anySuccess;
@@ -251,19 +267,31 @@ public class JPushService {
         return result;
     }
 
-    private boolean shouldUseFcm(UserPushToken token) {
+    private String resolveProvider(UserPushToken token) {
         String provider = normalizeProvider(token.getProvider());
         if (!StringUtils.hasText(provider)) {
             provider = normalizeProvider(token.getChannel());
         }
 
         if (!StringUtils.hasText(provider)) {
-            if (StringUtils.hasText(pushProvider)) {
-                provider = normalizeProvider(pushProvider);
+            if (StringUtils.hasText(token.getDeviceType()) && "ios".equalsIgnoreCase(token.getDeviceType().trim())) {
+                provider = normalizeProvider(iosPushProvider);
             }
         }
 
-        return "fcm".equals(provider);
+        if (!StringUtils.hasText(provider) && StringUtils.hasText(pushProvider)) {
+            provider = normalizeProvider(pushProvider);
+        }
+
+        if (!StringUtils.hasText(provider)) {
+            if (StringUtils.hasText(token.getDeviceType()) && "ios".equalsIgnoreCase(token.getDeviceType().trim())) {
+                provider = "apns";
+            } else {
+                provider = "jpush";
+            }
+        }
+
+        return provider;
     }
 
     private String normalizeProvider(String raw) {
@@ -274,7 +302,10 @@ public class JPushService {
         if ("firebase".equals(normalized)) {
             return "fcm";
         }
-        if ("fcm".equals(normalized) || "jpush".equals(normalized)) {
+        if ("apple".equals(normalized) || "ios".equals(normalized)) {
+            return "apns";
+        }
+        if ("fcm".equals(normalized) || "jpush".equals(normalized) || "apns".equals(normalized)) {
             return normalized;
         }
         return null;

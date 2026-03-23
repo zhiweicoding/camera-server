@@ -554,10 +554,29 @@ public class PaymentService {
             return result;
         }
 
+        CloudPlan plan = findPlanByPlanId(order.getProductId());
+        if (plan == null) {
+            result.setErrorCode(404);
+            result.setErrorMessage("Cloud plan not found");
+            return result;
+        }
+
+        if (!StringUtils.hasText(plan.getAppleProductId())) {
+            result.setErrorCode(400);
+            result.setErrorMessage("Apple Product ID is not configured for this plan");
+            return result;
+        }
+
         ApplePayService.AppleReceiptVerifyResult verifyResult = applePayService.verifyReceipt(request.getReceiptData());
         if (!verifyResult.isSuccess()) {
             result.setErrorCode(400);
             result.setErrorMessage("Apple receipt verify failed: " + verifyResult.getErrorMessage());
+            return result;
+        }
+
+        if (!plan.getAppleProductId().equals(verifyResult.getProductId())) {
+            result.setErrorCode(400);
+            result.setErrorMessage("Apple product id does not match cloud plan");
             return result;
         }
 

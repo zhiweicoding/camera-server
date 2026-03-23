@@ -81,6 +81,10 @@ public class CloudPlan {
     @TableField("auto_renew")
     private Integer autoRenew;
 
+    /** Apple 自动续费订阅商品 ID */
+    @TableField("apple_product_id")
+    private String appleProductId;
+
     /** 排序序号 */
     @TableField("sort_order")
     private Integer sortOrder;

@@ -16,20 +16,20 @@ public class RegisterPushTokenRequest {
     @JsonAlias({"deviceType"})
     private String deviceType;
 
-    /** 推送Registration ID（JPush regId 或 FCM token） */
-    @Schema(description = "推送Registration ID", required = true)
+    /** 推送Registration ID（JPush regId / FCM token / APNs device token） */
+    @Schema(description = "推送Registration ID（JPush regId / FCM token / APNs device token）", required = true)
     @JsonProperty("registration_id")
     @JsonAlias({"registrationId"})
     private String registrationId;
 
-    /** 推送提供方: jpush/fcm */
-    @Schema(description = "推送提供方", example = "jpush")
+    /** 推送提供方: jpush/fcm/apns */
+    @Schema(description = "推送提供方", example = "apns")
     @JsonProperty("provider")
     @JsonAlias({"push_provider", "pushProvider"})
     private String provider;
 
-    /** 推送通道: jpush/fcm（兼容字段） */
-    @Schema(description = "推送通道", example = "jpush")
+    /** 推送通道: jpush/fcm/apns（兼容字段） */
+    @Schema(description = "推送通道", example = "apns")
     @JsonProperty("channel")
     @JsonAlias({"push_channel", "pushChannel"})
     private String channel;

@@ -58,7 +58,7 @@ public class PushController {
             log.warn("注册推送Token失败，registration_id为空 - userId={}", currentUserId);
             return ApiResponse.error(400, "registration_id 不能为空");
         }
-        String normalizedProvider = normalizeProvider(request.getProvider(), request.getChannel());
+        String normalizedProvider = normalizeProvider(request.getDeviceType(), request.getProvider(), request.getChannel());
         String normalizedChannel = normalizeChannel(request.getChannel(), normalizedProvider);
 
         // 检查是否已存在
@@ -161,14 +161,17 @@ public class PushController {
         }
     }
 
-    private String normalizeProvider(String provider, String channel) {
+    private String normalizeProvider(String deviceType, String provider, String channel) {
         if (StringUtils.hasText(provider)) {
             String normalized = provider.trim().toLowerCase();
             if ("firebase".equals(normalized)) {
                 return "fcm";
             }
-            if ("fcm".equals(normalized) || "jpush".equals(normalized)) {
+            if ("fcm".equals(normalized) || "jpush".equals(normalized) || "apns".equals(normalized)) {
                 return normalized;
+            }
+            if ("apple".equals(normalized) || "ios".equals(normalized)) {
+                return "apns";
             }
         }
         if (StringUtils.hasText(channel)) {
@@ -176,9 +179,15 @@ public class PushController {
             if ("firebase".equals(normalizedChannel)) {
                 return "fcm";
             }
-            if ("fcm".equals(normalizedChannel) || "jpush".equals(normalizedChannel)) {
+            if ("fcm".equals(normalizedChannel) || "jpush".equals(normalizedChannel) || "apns".equals(normalizedChannel)) {
                 return normalizedChannel;
             }
+            if ("apple".equals(normalizedChannel) || "ios".equals(normalizedChannel)) {
+                return "apns";
+            }
+        }
+        if (StringUtils.hasText(deviceType) && "ios".equalsIgnoreCase(deviceType.trim())) {
+            return "apns";
         }
         return "jpush";
     }
@@ -189,8 +198,11 @@ public class PushController {
             if ("firebase".equals(normalized)) {
                 return "fcm";
             }
-            if ("fcm".equals(normalized) || "jpush".equals(normalized)) {
+            if ("fcm".equals(normalized) || "jpush".equals(normalized) || "apns".equals(normalized)) {
                 return normalized;
+            }
+            if ("apple".equals(normalized) || "ios".equals(normalized)) {
+                return "apns";
             }
         }
         return provider;

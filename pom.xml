@@ -159,6 +159,13 @@
             <version>3.7.3</version>
         </dependency>
 
+        <!-- APNs direct push -->
+        <dependency>
+            <groupId>com.eatthepath</groupId>
+            <artifactId>pushy</artifactId>
+            <version>0.15.4</version>
+        </dependency>
+
         <!-- Redis 支持 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
