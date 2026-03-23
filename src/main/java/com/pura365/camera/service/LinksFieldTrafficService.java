@@ -2,7 +2,10 @@ package com.pura365.camera.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import okhttp3.*;
+import okhttp3.HttpUrl;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,7 +25,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 /**
- * LinksField 4G 流量查询服务
+ * LinksField 4G traffic query service.
  */
 @Service
 public class LinksFieldTrafficService {
@@ -41,7 +44,7 @@ public class LinksFieldTrafficService {
     @Value("${linksfield.api-version:2.0}")
     private String apiVersion;
 
-    @Value("${linksfield.signature-type:1.0}")
+    @Value("${linksfield.signature-type:2.0}")
     private String signatureType;
 
     @Value("${linksfield.accept-language:zh-CN}")
@@ -53,7 +56,8 @@ public class LinksFieldTrafficService {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
-     * 查询指定 SIM 的实时剩余流量
+     * Query SIM remaining data.
+     * Try "/remaining_data" first, fallback to "/bundles" for diagnostics.
      */
     public Map<String, Object> queryRemainingData(String simId) {
         if (!StringUtils.hasText(simId)) {
@@ -61,11 +65,40 @@ public class LinksFieldTrafficService {
         }
         validateConfig();
 
+        OkHttpClient client = new OkHttpClient.Builder()
+                .connectTimeout(requestTimeoutSeconds, TimeUnit.SECONDS)
+                .readTimeout(requestTimeoutSeconds, TimeUnit.SECONDS)
+                .writeTimeout(requestTimeoutSeconds, TimeUnit.SECONDS)
+                .build();
+
+        RuntimeException remainingError = null;
+        try {
+            return queryRemainingDataByPath(client, simId, "remaining_data");
+        } catch (RuntimeException e) {
+            remainingError = e;
+            log.warn("LinksField remaining_data query failed, fallback to bundles, simId={}", simId, e);
+        }
+
+        try {
+            return queryRemainingDataByPath(client, simId, "bundles");
+        } catch (RuntimeException e) {
+            log.error("LinksField bundles query failed, simId={}", simId, e);
+            String remainingMsg = remainingError == null ? "unknown" : remainingError.getMessage();
+            throw new RuntimeException("查询4G流量失败: remaining_data=" + remainingMsg + "; bundles=" + e.getMessage());
+        }
+    }
+
+    private Map<String, Object> queryRemainingDataByPath(OkHttpClient client, String simId, String pathSegment) {
         long timestamp = System.currentTimeMillis();
         int nonce = ThreadLocalRandom.current().nextInt(1, Integer.MAX_VALUE);
-        String signUri = String.format("/cube/v4/sims/%s/remaining_data", simId);
+        boolean includeTimestampAsQuery = "remaining_data".equals(pathSegment);
+        Map<String, Object> queryParams = includeTimestampAsQuery
+                ? buildTimestampNonceQueryParams(timestamp, nonce)
+                : Collections.emptyMap();
+        String signUriBase = String.format("/cube/v4/sims/%s/%s", simId, pathSegment);
+        String signUri = signUriBase;
 
-        Map<String, Object> signData = buildSignData(signUri, Collections.emptyMap(), null, timestamp, nonce);
+        Map<String, Object> signData = buildSignData(signUri, queryParams, null, timestamp, nonce);
         String signPayloadJson = toJson(signData);
         String sign = signPayload(signPayloadJson);
         String authorization = "LF " + accessKeyId + "/" + sign;
@@ -74,17 +107,16 @@ public class LinksFieldTrafficService {
         if (baseUrl == null) {
             throw new RuntimeException("linksfield.api-base-url 配置无效");
         }
-        HttpUrl requestUrl = baseUrl.newBuilder()
+        HttpUrl.Builder urlBuilder = baseUrl.newBuilder()
                 .addPathSegments("cube/v4/sims")
                 .addPathSegment(simId)
-                .addPathSegment("remaining_data")
-                .build();
-
-        OkHttpClient client = new OkHttpClient.Builder()
-                .connectTimeout(requestTimeoutSeconds, TimeUnit.SECONDS)
-                .readTimeout(requestTimeoutSeconds, TimeUnit.SECONDS)
-                .writeTimeout(requestTimeoutSeconds, TimeUnit.SECONDS)
-                .build();
+                .addPathSegment(pathSegment);
+        for (Map.Entry<String, Object> entry : queryParams.entrySet()) {
+            if (entry.getValue() != null) {
+                urlBuilder.addQueryParameter(entry.getKey(), String.valueOf(entry.getValue()));
+            }
+        }
+        HttpUrl requestUrl = urlBuilder.build();
 
         Request request = new Request.Builder()
                 .url(requestUrl)
@@ -96,22 +128,31 @@ public class LinksFieldTrafficService {
                 .addHeader("X-LF-Signature-Type", signatureType)
                 .addHeader("timestamp", String.valueOf(timestamp))
                 .addHeader("nonce", String.valueOf(nonce))
+                .addHeader("x-lf-timestamp", String.valueOf(timestamp))
+                .addHeader("x-lf-nonce", String.valueOf(nonce))
                 .build();
 
         try (Response response = client.newCall(request).execute()) {
-            if (!response.isSuccessful() || response.body() == null) {
-                throw new RuntimeException("LinksField 请求失败，HTTP " + response.code());
+            String responseText = response.body() == null ? "" : response.body().string();
+            if (!response.isSuccessful()) {
+                throw new RuntimeException("LinksField 请求失败，HTTP " + response.code()
+                        + ", body=" + abbreviate(responseText, 500));
             }
-            String responseText = response.body().string();
+            if (!StringUtils.hasText(responseText)) {
+                throw new RuntimeException("LinksField 返回空响应");
+            }
+
             Map<String, Object> result = objectMapper.readValue(
                     responseText,
-                    new TypeReference<Map<String, Object>>() {}
+                    new TypeReference<Map<String, Object>>() {
+                    }
             );
             validateThirdResponse(result);
             return result;
+        } catch (RuntimeException e) {
+            throw e;
         } catch (Exception e) {
-            log.error("LinksField 查询剩余流量失败 - simId={}", simId, e);
-            throw new RuntimeException("查询4G流量失败: " + e.getMessage());
+            throw new RuntimeException("LinksField 请求异常: " + e.getMessage(), e);
         }
     }
 
@@ -125,11 +166,11 @@ public class LinksFieldTrafficService {
     }
 
     /**
-     * 构造签名数据：
-     * - 查询参数
-     * - body 参数
+     * Build signature payload:
+     * - query params
+     * - body params
      * - timestamp / nonce / x-sign-uri
-     * 排序后 JSON.stringify
+     * Sorted then JSON serialized.
      */
     private Map<String, Object> buildSignData(String signUri,
                                               Map<String, Object> queryParams,
@@ -181,10 +222,9 @@ public class LinksFieldTrafficService {
     }
 
     private String resolveSignAlgorithm(String signType) {
-        if (signType != null && signType.trim().startsWith("1")) {
-            return "SHA1withRSA";
-        }
-        return "SHA256withRSA";
+        // LinksField v2 doc states "sign=Sign(data, algo=sha1withRSA, key=privateKey)".
+        // Existing v1 APIs are also compatible with SHA1withRSA in current integration.
+        return "SHA1withRSA";
     }
 
     private PrivateKey parsePrivateKey(String input) throws Exception {
@@ -208,8 +248,8 @@ public class LinksFieldTrafficService {
 
         Object codeObj = response.get("code");
         if (codeObj != null && !isSuccessCode(String.valueOf(codeObj))) {
-            String message = String.valueOf(response.get("message"));
-            throw new RuntimeException("LinksField 返回失败: code=" + codeObj + ", msg=" + message);
+            Object topMsg = response.containsKey("message") ? response.get("message") : response.get("msg");
+            throw new RuntimeException("LinksField 返回失败: code=" + codeObj + ", msg=" + topMsg);
         }
 
         Object statusObj = response.get("status");
@@ -217,7 +257,7 @@ public class LinksFieldTrafficService {
             Map<String, Object> statusMap = (Map<String, Object>) statusObj;
             Object thirdCode = statusMap.get("code");
             if (thirdCode != null && !isSuccessCode(String.valueOf(thirdCode))) {
-                Object msg = statusMap.get("msg");
+                Object msg = statusMap.containsKey("message") ? statusMap.get("message") : statusMap.get("msg");
                 throw new RuntimeException("LinksField 返回失败: code=" + thirdCode + ", msg=" + msg);
             }
         }
@@ -228,6 +268,29 @@ public class LinksFieldTrafficService {
             return false;
         }
         String normalized = code.trim();
-        return "0".equals(normalized) || "200".equals(normalized) || "success".equalsIgnoreCase(normalized);
+        return "0".equals(normalized)
+                || "200".equals(normalized)
+                || "success".equalsIgnoreCase(normalized)
+                || "ok".equalsIgnoreCase(normalized)
+                || "CB-00-0000".equalsIgnoreCase(normalized);
     }
+
+    private String abbreviate(String text, int maxLength) {
+        if (text == null) {
+            return "";
+        }
+        String normalized = text.replace("\r", " ").replace("\n", " ").trim();
+        if (normalized.length() <= maxLength) {
+            return normalized;
+        }
+        return normalized.substring(0, maxLength) + "...";
+    }
+
+    private Map<String, Object> buildTimestampNonceQueryParams(long timestamp, int nonce) {
+        Map<String, Object> queryParams = new TreeMap<String, Object>();
+        queryParams.put("timestamp", String.valueOf(timestamp));
+        queryParams.put("nonce", String.valueOf(nonce));
+        return queryParams;
+    }
+
 }

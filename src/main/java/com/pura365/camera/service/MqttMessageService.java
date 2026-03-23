@@ -394,6 +394,9 @@ public class MqttMessageService {
             if (msg.getVer() != null) {
                 device.setFirmwareVersion(msg.getVer());
             }
+            if (msg.getIccid() != null && !msg.getIccid().trim().isEmpty()) {
+                device.setIccid(msg.getIccid().trim());
+            }
             
             // 更新WiFi信号强度
             if (msg.getWifirssi() != null) {

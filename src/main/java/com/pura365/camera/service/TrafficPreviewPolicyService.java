@@ -25,7 +25,6 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -35,16 +34,20 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Evaluate whether current user can preview a device under 4G traffic rules.
+ * Evaluate whether current user can use 4G package abilities for a device.
  */
 @Service
 public class TrafficPreviewPolicyService {
 
-    private static final int TRIAL_DAYS = 3;
+    private static final int TRIAL_DAYS = 7;
     private static final double WARN_THRESHOLD = 80.0;
     private static final double BLOCK_THRESHOLD = 100.0;
     private static final Pattern NUMBER_PATTERN = Pattern.compile("(-?\\d+(?:\\.\\d+)?)");
     private static final long BYTES_PER_GB = 1024L * 1024L * 1024L;
+    private static final String FREE_TRIAL_MESSAGE = "当前免费送7天体验功能";
+    private static final String RECHARGE_MESSAGE = "未购买套餐，暂不支持预览视频及云存，请尽快充值套餐";
+    private static final String TRAFFIC_WARN_MESSAGE = "当月流量即将耗尽";
+    private static final String TRAFFIC_EXHAUSTED_MESSAGE = "当月流量已用完，不能预览视频及云存";
 
     @Autowired
     private UserDeviceRepository userDeviceRepository;
@@ -74,9 +77,9 @@ public class TrafficPreviewPolicyService {
         if (!StringUtils.hasText(deviceId)) {
             return PolicyEvaluation.error(400, "device_id 不能为空");
         }
-        if (!hasUserDevice(currentUserId, deviceId)) {
-            return PolicyEvaluation.error(403, "无权查看该设备");
-        }
+//        if (!hasUserDevice(currentUserId, deviceId)) {
+//            return PolicyEvaluation.error(403, "无权查看该设备");
+//        }
 
         Device device = deviceRepository.selectById(deviceId);
         if (device == null) {
@@ -85,27 +88,27 @@ public class TrafficPreviewPolicyService {
 
         String simId = findSimId(deviceId);
         ManufacturedDevice manufacturedDevice = findManufacturedDevice(deviceId);
-        boolean is4gDevice = is4GDevice(device, manufacturedDevice, simId);
+        boolean is4gDevice = is4GDevice(deviceId);
 
         Map<String, Object> policy = createBasePolicy(deviceId, is4gDevice, simId);
         boolean isOnline = device.getStatus() == DeviceOnlineStatus.ONLINE;
         policy.put("is_online", isOnline);
 
         if (!is4gDevice) {
-            allow(policy, "OK_NON_4G_DEVICE", "非4G设备，不受4G流量策略限制");
+            allow(policy, "OK_NON_4G_DEVICE", "非4G设备，不受4G套餐策略限制");
             return PolicyEvaluation.success(policy);
         }
 
-        if (!isOnline) {
-            deny(policy, "DEVICE_OFFLINE", "设备离线，暂时无法预览");
-            return PolicyEvaluation.success(policy);
-        }
+//        if (!isOnline) {
+//            deny(policy, "DEVICE_OFFLINE", "设备离线，暂时无法预览");
+//            return PolicyEvaluation.success(policy);
+//        }
 
         ActiveTrafficSubscription activeTraffic = findActiveTrafficSubscription(deviceId);
         policy.put("has_active_traffic_plan", activeTraffic != null);
 
         if (activeTraffic == null) {
-            applyNoRechargePolicy(policy, device, manufacturedDevice);
+            applyNoRechargePolicy(policy, deviceId, device, manufacturedDevice);
             return PolicyEvaluation.success(policy);
         }
 
@@ -119,6 +122,8 @@ public class TrafficPreviewPolicyService {
         policy.put("is_4g_device", is4gDevice);
         policy.put("sim_id", simId);
         policy.put("can_preview", true);
+        policy.put("can_cloud_storage", true);
+        policy.put("can_use_package_feature", true);
         policy.put("need_recharge", false);
         policy.put("limit_required", false);
         policy.put("reason_code", "UNKNOWN");
@@ -131,28 +136,32 @@ public class TrafficPreviewPolicyService {
         return policy;
     }
 
-    private void applyNoRechargePolicy(Map<String, Object> policy, Device device, ManufacturedDevice manufacturedDevice) {
-        LocalDateTime activatedAt = resolveActivatedAt(device, manufacturedDevice);
-        if (activatedAt == null) {
-            allow(policy, "TRIAL_UNCHECKED", "未检测到激活时间，暂按可预览处理");
+    private void applyNoRechargePolicy(Map<String, Object> policy,
+                                       String deviceId,
+                                       Device device,
+                                       ManufacturedDevice manufacturedDevice) {
+        LocalDateTime trialStartAt = resolveTrialStartAt(deviceId, device, manufacturedDevice);
+        if (trialStartAt == null) {
+            allow(policy, "TRIAL_FREE_PREVIEW", FREE_TRIAL_MESSAGE);
             policy.put("need_recharge", true);
+            policy.put("trial_days_left", TRIAL_DAYS);
             return;
         }
 
-        policy.put("activated_at", formatIsoTime(toDate(activatedAt)));
+        policy.put("activated_at", formatIsoTime(toDate(trialStartAt)));
 
-        long elapsedHours = Duration.between(activatedAt, LocalDateTime.now()).toHours();
+        long elapsedHours = Duration.between(trialStartAt, LocalDateTime.now()).toHours();
         long remainingHours = (TRIAL_DAYS * 24L) - elapsedHours;
         int trialDaysLeft = remainingHours <= 0 ? 0 : (int) Math.ceil(remainingHours / 24.0);
         policy.put("trial_days_left", trialDaysLeft);
 
         if (elapsedHours < TRIAL_DAYS * 24L) {
-            allow(policy, "TRIAL_FREE_PREVIEW", "设备未充值流量，激活3天内可预览");
+            allow(policy, "TRIAL_FREE_PREVIEW", FREE_TRIAL_MESSAGE);
             policy.put("need_recharge", true);
             return;
         }
 
-        deny(policy, "UNRECHARGED_TRIAL_EXPIRED", "未充值流量，不能观看视频，请充值");
+        deny(policy, "UNRECHARGED_TRIAL_EXPIRED", RECHARGE_MESSAGE);
         policy.put("need_recharge", true);
     }
 
@@ -168,13 +177,13 @@ public class TrafficPreviewPolicyService {
         }
 
         if (!StringUtils.hasText(simId)) {
-            allow(policy, "SUBSCRIPTION_ACTIVE_NO_SIM", "流量套餐已生效，设备未配置SIM-ID，暂按可预览处理");
+            allow(policy, "SUBSCRIPTION_ACTIVE_NO_SIM", "已购买套餐，支持套餐功能");
             return;
         }
 
-        Integer trafficQuotaGb = (Integer) policy.get("traffic_quota_gb");
-        if (trafficQuotaGb == null || trafficQuotaGb <= 0) {
-            allow(policy, "SUBSCRIPTION_ACTIVE_NO_QUOTA", "流量套餐已生效，可预览");
+        Integer trafficQuotaGb = toPositiveInteger(policy.get("traffic_quota_gb"));
+        if (trafficQuotaGb == null) {
+            allow(policy, "SUBSCRIPTION_ACTIVE_NO_QUOTA", "已购买套餐，支持套餐功能");
             return;
         }
 
@@ -188,24 +197,36 @@ public class TrafficPreviewPolicyService {
             }
 
             if (usage.usagePercent == null) {
-                allow(policy, "SUBSCRIPTION_ACTIVE", "流量套餐已生效，可预览");
+                allow(policy, "SUBSCRIPTION_ACTIVE", "已购买套餐，支持套餐功能");
                 return;
             }
 
             if (usage.usagePercent >= BLOCK_THRESHOLD) {
-                deny(policy, "TRAFFIC_EXHAUSTED", "当月流量已用完，不能预览视频");
+                deny(policy, "TRAFFIC_EXHAUSTED", TRAFFIC_EXHAUSTED_MESSAGE);
                 return;
             }
             if (usage.usagePercent >= WARN_THRESHOLD) {
-                allow(policy, "TRAFFIC_NEAR_EXHAUSTION", "当月流量即将耗尽，预览会卡顿");
+                allow(policy, "TRAFFIC_NEAR_EXHAUSTION", TRAFFIC_WARN_MESSAGE);
                 policy.put("limit_required", true);
                 return;
             }
 
-            allow(policy, "SUBSCRIPTION_ACTIVE", "流量套餐已生效，可预览");
+            allow(policy, "SUBSCRIPTION_ACTIVE", "已购买套餐，支持套餐功能");
         } catch (Exception e) {
-            allow(policy, "SUBSCRIPTION_ACTIVE_QUERY_FAILED", "流量套餐已生效，可预览（流量查询失败）");
+            allow(policy, "SUBSCRIPTION_ACTIVE_QUERY_FAILED", "已购买套餐，支持套餐功能（流量查询失败）");
             policy.put("traffic_query_error", e.getMessage());
+        }
+    }
+
+    private Integer toPositiveInteger(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            int parsed = Integer.parseInt(String.valueOf(value));
+            return parsed > 0 ? parsed : null;
+        } catch (Exception e) {
+            return null;
         }
     }
 
@@ -222,12 +243,10 @@ public class TrafficPreviewPolicyService {
         if (usedBytes == null && remainingBytes != null) {
             usedBytes = Math.max(0, quotaBytes - remainingBytes);
         }
-        if (usedBytes == null) {
+        if (usedBytes == null || quotaBytes <= 0) {
             return new TrafficUsage(null);
         }
-        if (quotaBytes <= 0) {
-            return new TrafficUsage(null);
-        }
+
         double percent = (usedBytes / quotaBytes) * 100.0;
         if (percent < 0) {
             percent = 0;
@@ -256,7 +275,6 @@ public class TrafficPreviewPolicyService {
             return candidates;
         }
 
-        // Prefer reasonable values close to quota range first.
         Collections.sort(candidates, (a, b) -> {
             double da = distanceToQuota(a.valueInBytes, quotaBytes);
             double db = distanceToQuota(b.valueInBytes, quotaBytes);
@@ -342,6 +360,15 @@ public class TrafficPreviewPolicyService {
             }
             return;
         }
+        if (current instanceof Iterable<?>) {
+            int index = 0;
+            for (Object item : (Iterable<?>) current) {
+                String nextPrefix = prefix + "[" + index + "]";
+                flattenMap(nextPrefix, item, out);
+                index++;
+            }
+            return;
+        }
         out.put(prefix, current);
     }
 
@@ -389,7 +416,7 @@ public class TrafficPreviewPolicyService {
         }
         String normalized = value.trim().toLowerCase(Locale.ROOT);
         return "traffic".equals(normalized)
-                || normalized.startsWith("4g")
+                || normalized.startsWith("4G")
                 || normalized.contains("traffic");
     }
 
@@ -414,21 +441,12 @@ public class TrafficPreviewPolicyService {
         }
     }
 
-    private boolean is4GDevice(Device device, ManufacturedDevice manufacturedDevice, String simId) {
-        if (device != null && StringUtils.hasText(device.getNetworkType())) {
-            String networkType = device.getNetworkType().trim().toLowerCase(Locale.ROOT);
-            if ("4g".equals(networkType) || networkType.startsWith("4g")) {
-                return true;
-            }
+    private boolean is4GDevice(String deviceId) {
+        if (!StringUtils.hasText(deviceId)) {
+            return false;
         }
-        if (StringUtils.hasText(simId)) {
-            return true;
-        }
-        if (manufacturedDevice != null && StringUtils.hasText(manufacturedDevice.getNetworkLens())) {
-            String networkLens = manufacturedDevice.getNetworkLens().trim().toUpperCase(Locale.ROOT);
-            return networkLens.startsWith("C");
-        }
-        return false;
+        char prefix = Character.toUpperCase(deviceId.trim().charAt(0));
+        return prefix == 'C' || prefix == 'D' || prefix == 'E' || prefix == 'F' || prefix == 'G';
     }
 
     private ManufacturedDevice findManufacturedDevice(String deviceId) {
@@ -437,7 +455,11 @@ public class TrafficPreviewPolicyService {
         return manufacturedDeviceRepository.selectOne(queryWrapper);
     }
 
-    private LocalDateTime resolveActivatedAt(Device device, ManufacturedDevice manufacturedDevice) {
+    private LocalDateTime resolveTrialStartAt(String deviceId, Device device, ManufacturedDevice manufacturedDevice) {
+        LocalDateTime firstBindAt = findFirstBindAt(deviceId);
+        if (firstBindAt != null) {
+            return firstBindAt;
+        }
         if (manufacturedDevice != null && manufacturedDevice.getActivatedAt() != null) {
             return toLocalDateTime(manufacturedDevice.getActivatedAt());
         }
@@ -447,14 +469,33 @@ public class TrafficPreviewPolicyService {
         return null;
     }
 
+    private LocalDateTime findFirstBindAt(String deviceId) {
+        if (!StringUtils.hasText(deviceId)) {
+            return null;
+        }
+        QueryWrapper<UserDevice> query = new QueryWrapper<>();
+        query.lambda().eq(UserDevice::getDeviceId, deviceId)
+                .orderByAsc(UserDevice::getCreatedAt)
+                .last("LIMIT 1");
+        UserDevice firstBinding = userDeviceRepository.selectOne(query);
+        if (firstBinding == null || firstBinding.getCreatedAt() == null) {
+            return null;
+        }
+        return toLocalDateTime(firstBinding.getCreatedAt());
+    }
+
     private void allow(Map<String, Object> policy, String code, String message) {
         policy.put("can_preview", true);
+        policy.put("can_cloud_storage", true);
+        policy.put("can_use_package_feature", true);
         policy.put("reason_code", code);
         policy.put("reason_message", message);
     }
 
     private void deny(Map<String, Object> policy, String code, String message) {
         policy.put("can_preview", false);
+        policy.put("can_cloud_storage", false);
+        policy.put("can_use_package_feature", false);
         policy.put("reason_code", code);
         policy.put("reason_message", message);
     }
@@ -467,6 +508,10 @@ public class TrafficPreviewPolicyService {
     }
 
     private String findSimId(String deviceId) {
+        Device device = deviceRepository.selectById(deviceId);
+        if (device != null && StringUtils.hasText(device.getIccid())) {
+            return device.getIccid().trim();
+        }
         QueryWrapper<DeviceTrafficSim> query = new QueryWrapper<>();
         query.lambda().eq(DeviceTrafficSim::getDeviceId, deviceId);
         DeviceTrafficSim mapping = deviceTrafficSimRepository.selectOne(query);

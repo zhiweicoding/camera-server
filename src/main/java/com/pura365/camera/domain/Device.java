@@ -104,6 +104,9 @@ public class Device {
     @TableField("network_type")
     private String networkType;
 
+    @TableField("iccid")
+    private String iccid;
+
     /** WiFi信号强度(RSSI) */
     @TableField("wifi_rssi")
     private Integer wifiRssi;

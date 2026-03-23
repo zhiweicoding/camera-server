@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.time.LocalDateTime;
 
 /**
  * 4G 流量接口（后端代理 LinksField）
@@ -133,6 +134,10 @@ public class TrafficController {
             return ApiResponse.error(400, "sim_id 不能为空");
         }
 
+        device.setIccid(simId);
+        device.setUpdatedAt(LocalDateTime.now());
+        deviceRepository.updateById(device);
+
         QueryWrapper<DeviceTrafficSim> qw = new QueryWrapper<DeviceTrafficSim>();
         qw.lambda().eq(DeviceTrafficSim::getDeviceId, deviceId);
         DeviceTrafficSim existing = deviceTrafficSimRepository.selectOne(qw);
@@ -165,6 +170,10 @@ public class TrafficController {
     }
 
     private String findSimId(String deviceId) {
+        Device device = deviceRepository.selectById(deviceId);
+        if (device != null && StringUtils.hasText(device.getIccid())) {
+            return device.getIccid().trim();
+        }
         QueryWrapper<DeviceTrafficSim> query = new QueryWrapper<DeviceTrafficSim>();
         query.lambda().eq(DeviceTrafficSim::getDeviceId, deviceId);
         DeviceTrafficSim mapping = deviceTrafficSimRepository.selectOne(query);

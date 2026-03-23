@@ -17,6 +17,9 @@ public class MqttDeviceInfoMessage extends MqttBaseMessage {
     
     @JsonProperty("ver")
     private String ver;
+
+    @JsonProperty("iccid")
+    private String iccid;
     
     @JsonProperty("sdstate")
     private Integer sdstate; // 0: 无TF卡, 1: 有TF卡
@@ -54,6 +57,9 @@ public class MqttDeviceInfoMessage extends MqttBaseMessage {
     
     public String getVer() { return ver; }
     public void setVer(String ver) { this.ver = ver; }
+
+    public String getIccid() { return iccid; }
+    public void setIccid(String iccid) { this.iccid = iccid; }
     
     public Integer getSdstate() { return sdstate; }
     public void setSdstate(Integer sdstate) { this.sdstate = sdstate; }
