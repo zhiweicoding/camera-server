@@ -129,23 +129,50 @@ public class PaymentController {
     }
 
     /**
-     * Apple Pay payment.
+     * 创建 Apple IAP 订单
      */
-    @Operation(summary = "Apple Pay", description = "Verify Apple IAP receipt and complete payment")
+    @Operation(summary = "创建 Apple 内购订单", description = "创建或复用 Apple IAP 订单，并返回 order_id 与 apple_product_id")
     @PostMapping("/apple")
-    public ApiResponse<ApplePayVO> applePay(
+    public ApiResponse<java.util.Map<String, Object>> applePay(
             @RequestAttribute("currentUserId") Long currentUserId,
-            @RequestBody(required = false) ApplePayRequest request) {
-        String orderId = request != null ? request.getOrderId() : null;
-        log.info("Apple pay - userId={}, orderId={}", currentUserId, orderId);
+            @RequestBody(required = false) CreateOrderRequest request) {
+        log.info("Create Apple pay order - userId={}, productType={}, productId={}, deviceId={}",
+                currentUserId,
+                request != null ? request.getProductType() : null,
+                request != null ? request.getProductId() : null,
+                request != null ? request.getDeviceId() : null);
 
-        PaymentService.ApplePayResult result = paymentService.applePayV2(currentUserId, request);
+        PaymentService.CreateAppleOrderResult result = paymentService.createApplePayOrder(currentUserId, request);
         if (!result.isSuccess()) {
-            log.warn("Apple pay failed - userId={}, orderId={}, error={}", currentUserId, orderId, result.getErrorMessage());
+            log.warn("Create Apple pay order failed - userId={}, error={}", currentUserId, result.getErrorMessage());
             return ApiResponse.error(result.getErrorCode(), result.getErrorMessage());
         }
 
-        log.info("Apple pay success - userId={}, orderId={}", currentUserId, orderId);
+        log.info("Create Apple pay order success - userId={}, orderId={}",
+                currentUserId,
+                result.getData() != null ? result.getData().get("order_id") : null);
+        return ApiResponse.success(result.getData());
+    }
+
+    /**
+     * Apple IAP 收据校验并完成支付
+     */
+    @Operation(summary = "校验 Apple 内购收据", description = "使用 order_id 与 receipt_data 完成 Apple IAP 支付")
+    @PostMapping("/apple/verify")
+    public ApiResponse<ApplePayVO> verifyApplePay(
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @RequestBody(required = false) ApplePayRequest request) {
+        String orderId = request != null ? request.getOrderId() : null;
+        log.info("Verify Apple pay - userId={}, orderId={}", currentUserId, orderId);
+
+        PaymentService.ApplePayResult result = paymentService.applePayV2(currentUserId, request);
+        if (!result.isSuccess()) {
+            log.warn("Verify Apple pay failed - userId={}, orderId={}, error={}",
+                    currentUserId, orderId, result.getErrorMessage());
+            return ApiResponse.error(result.getErrorCode(), result.getErrorMessage());
+        }
+
+        log.info("Verify Apple pay success - userId={}, orderId={}", currentUserId, orderId);
         return ApiResponse.success(result.getData());
     }
 
@@ -162,4 +189,3 @@ public class PaymentController {
         return null;
     }
 }
-

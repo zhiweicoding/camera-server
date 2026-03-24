@@ -15,9 +15,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.util.HashMap;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Date;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -580,6 +582,47 @@ public class PaymentService {
 
     // ============== 私有方法 ==============
 
+    public CreateAppleOrderResult createApplePayOrder(Long userId, CreateOrderRequest request) {
+        CreateAppleOrderResult result = new CreateAppleOrderResult();
+
+        if (request == null) {
+            result.setErrorCode(400);
+            result.setErrorMessage("request cannot be empty");
+            return result;
+        }
+
+        request.setPaymentMethod("apple");
+        CreateOrderResult createOrderResult = createOrder(userId, request);
+        if (!createOrderResult.isSuccess()) {
+            result.setErrorCode(createOrderResult.getErrorCode());
+            result.setErrorMessage(createOrderResult.getErrorMessage());
+            return result;
+        }
+
+        CloudPlan plan = findPlanByPlanId(request.getProductId());
+        if (plan == null) {
+            result.setErrorCode(404);
+            result.setErrorMessage("Cloud plan not found");
+            return result;
+        }
+        String appleProductId = resolveAppleProductId(plan);
+        if (!StringUtils.hasText(appleProductId)) {
+            result.setErrorCode(400);
+            result.setErrorMessage("Apple Product ID is not configured for this plan");
+            return result;
+        }
+
+        Map<String, Object> data = new HashMap<>();
+        data.put("order_id", createOrderResult.getOrder().getOrderId());
+        data.put("apple_product_id", appleProductId);
+        data.put("amount", createOrderResult.getOrder().getAmount());
+        data.put("currency", createOrderResult.getOrder().getCurrency());
+
+        result.setSuccess(true);
+        result.setData(data);
+        return result;
+    }
+
     /**
      * 根据订单ID和用户ID获取订单（权限校验）
      */
@@ -626,7 +669,8 @@ public class PaymentService {
             return result;
         }
 
-        if (!StringUtils.hasText(plan.getAppleProductId())) {
+        String appleProductId = resolveAppleProductId(plan);
+        if (!StringUtils.hasText(appleProductId)) {
             result.setErrorCode(400);
             result.setErrorMessage("Apple Product ID is not configured for this plan");
             return result;
@@ -639,13 +683,16 @@ public class PaymentService {
             return result;
         }
 
-        if (!plan.getAppleProductId().equals(verifyResult.getProductId())) {
+        if (!appleProductId.equals(verifyResult.getProductId())) {
             result.setErrorCode(400);
             result.setErrorMessage("Apple product id does not match cloud plan");
             return result;
         }
 
-        String transactionId = verifyResult.getTransactionId();
+        String transactionId = request.getTransactionId();
+        if (!StringUtils.hasText(transactionId)) {
+            transactionId = verifyResult.getTransactionId();
+        }
         if (!StringUtils.hasText(transactionId)) {
             transactionId = "apple_" + order.getOrderId();
         }
@@ -675,6 +722,19 @@ public class PaymentService {
             return null;
         }
         return order;
+    }
+
+    private String resolveAppleProductId(CloudPlan plan) {
+        if (plan == null) {
+            return null;
+        }
+        if (StringUtils.hasText(plan.getAppleProductId())) {
+            return plan.getAppleProductId().trim();
+        }
+        if (StringUtils.hasText(plan.getPlanId())) {
+            return plan.getPlanId().trim();
+        }
+        return null;
     }
 
     /**
@@ -872,6 +932,45 @@ public class PaymentService {
 
         public void setOrder(OrderVO order) {
             this.order = order;
+        }
+
+        public int getErrorCode() {
+            return errorCode;
+        }
+
+        public void setErrorCode(int errorCode) {
+            this.errorCode = errorCode;
+        }
+
+        public String getErrorMessage() {
+            return errorMessage;
+        }
+
+        public void setErrorMessage(String errorMessage) {
+            this.errorMessage = errorMessage;
+        }
+    }
+
+    public static class CreateAppleOrderResult {
+        private boolean success;
+        private Map<String, Object> data;
+        private int errorCode;
+        private String errorMessage;
+
+        public boolean isSuccess() {
+            return success;
+        }
+
+        public void setSuccess(boolean success) {
+            this.success = success;
+        }
+
+        public Map<String, Object> getData() {
+            return data;
+        }
+
+        public void setData(Map<String, Object> data) {
+            this.data = data;
         }
 
         public int getErrorCode() {

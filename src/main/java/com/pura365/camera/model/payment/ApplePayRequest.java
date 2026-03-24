@@ -24,6 +24,13 @@ public class ApplePayRequest {
     @JsonProperty("receipt_data")
     private String receiptData;
 
+    /**
+     * Apple 交易ID
+     */
+    @Schema(description = "Apple交易ID", required = false)
+    @JsonProperty("transaction_id")
+    private String transactionId;
+
     public String getOrderId() {
         return orderId;
     }
@@ -38,5 +45,13 @@ public class ApplePayRequest {
 
     public void setReceiptData(String receiptData) {
         this.receiptData = receiptData;
+    }
+
+    public String getTransactionId() {
+        return transactionId;
+    }
+
+    public void setTransactionId(String transactionId) {
+        this.transactionId = transactionId;
     }
 }
