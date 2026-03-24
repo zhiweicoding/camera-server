@@ -7,6 +7,7 @@ import com.pura365.camera.domain.UserDevice;
 import com.pura365.camera.domain.WifiHistory;
 import com.pura365.camera.enums.DeviceBindingStatus;
 import com.pura365.camera.enums.DeviceOnlineStatus;
+import com.pura365.camera.enums.DeviceSharePermission;
 import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.enums.UserDeviceRole;
 import com.pura365.camera.model.wifi.BindDeviceRequest;
@@ -200,6 +201,7 @@ public class WifiService {
         ud.setUserId(userId);
         ud.setDeviceId(deviceSn);
         ud.setRole(UserDeviceRole.OWNER);
+        ud.setPermission(DeviceSharePermission.FULL_CONTROL);
         userDeviceRepository.insert(ud);
     }
 

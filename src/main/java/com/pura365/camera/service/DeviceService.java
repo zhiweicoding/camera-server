@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.*;
 import com.pura365.camera.enums.DeviceBindingStatus;
 import com.pura365.camera.enums.DeviceOnlineStatus;
+import com.pura365.camera.enums.DeviceSharePermission;
 import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.enums.UserDeviceRole;
 import com.pura365.camera.model.device.*;
@@ -255,6 +256,7 @@ public class DeviceService {
         ud.setUserId(userId);
         ud.setDeviceId(deviceId);
         ud.setRole(UserDeviceRole.OWNER);
+        ud.setPermission(DeviceSharePermission.FULL_CONTROL);
         userDeviceRepository.insert(ud);
 
         return buildDeviceVO(device);
@@ -545,6 +547,7 @@ public class DeviceService {
         ud.setUserId(userId);
         ud.setDeviceId(deviceId);
         ud.setRole(UserDeviceRole.OWNER);
+        ud.setPermission(DeviceSharePermission.FULL_CONTROL);
         userDeviceRepository.insert(ud);
     }
 
