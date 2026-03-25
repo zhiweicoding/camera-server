@@ -17,6 +17,7 @@ import com.pura365.camera.config.JPushConfig;
 import com.pura365.camera.domain.UserPushToken;
 import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.repository.UserPushTokenRepository;
+import com.pura365.camera.util.PushProviderUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -55,7 +56,7 @@ public class JPushService {
                         FirebasePushService firebasePushService,
                         ApnsPushService apnsPushService,
                         @Value("${push.provider:jpush}") String pushProvider,
-                        @Value("${push.ios-provider:apns}") String iosPushProvider) {
+                        @Value("${push.ios-provider:}") String iosPushProvider) {
         this.jPushClient = jPushClient;
         this.jPushConfig = jPushConfig;
         this.userPushTokenRepository = userPushTokenRepository;
@@ -268,58 +269,12 @@ public class JPushService {
     }
 
     private String resolveProvider(UserPushToken token) {
-        String provider = normalizeProvider(token.getProvider());
-        if (!StringUtils.hasText(provider)) {
-            provider = normalizeProvider(token.getChannel());
-        }
-
-        if (!StringUtils.hasText(provider)) {
-            if (StringUtils.hasText(token.getDeviceType()) && "ios".equalsIgnoreCase(token.getDeviceType().trim())) {
-                provider = normalizeProvider(iosPushProvider);
-            }
-        }
-
-        if (!StringUtils.hasText(provider) && StringUtils.hasText(pushProvider)) {
-            provider = normalizeProvider(pushProvider);
-        }
-
-        if (!StringUtils.hasText(provider)) {
-            if (StringUtils.hasText(token.getDeviceType()) && "ios".equalsIgnoreCase(token.getDeviceType().trim())) {
-                provider = "apns";
-            } else {
-                provider = "jpush";
-            }
-        }
-
-        return provider;
-    }
-
-    private String normalizeProvider(String raw) {
-        if (!StringUtils.hasText(raw)) {
-            return null;
-        }
-        String normalized = raw.trim().toLowerCase();
-        if ("firebase".equals(normalized)) {
-            return "fcm";
-        }
-        if ("apple".equals(normalized) || "ios".equals(normalized)) {
-            return "apns";
-        }
-        if ("fcm".equals(normalized) || "jpush".equals(normalized) || "apns".equals(normalized)) {
-            return normalized;
-        }
-        return null;
+        return PushProviderUtil.resolvePreferredProvider(
+                token.getDeviceType(), token.getProvider(), token.getChannel(), pushProvider, iosPushProvider);
     }
 
     private String maskRegistrationId(String registrationId) {
-        if (!StringUtils.hasText(registrationId)) {
-            return "EMPTY";
-        }
-        String value = registrationId.trim();
-        if (value.length() <= 8) {
-            return value;
-        }
-        return value.substring(0, 4) + "..." + value.substring(value.length() - 4);
+        return PushProviderUtil.maskToken(registrationId);
     }
 
     private String summarizeTokens(List<UserPushToken> tokens) {
