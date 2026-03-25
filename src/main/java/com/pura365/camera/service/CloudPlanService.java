@@ -166,7 +166,7 @@ public class CloudPlanService {
         }
         String normalizedDeviceModel = normalizeDeviceModel(plan.getDeviceModel());
         plan.setDeviceModel(normalizedDeviceModel);
-        syncAppleProductId(plan, null);
+        applyAppleProductId(plan, null);
         validateType(plan.getType());
         validateTypeModelAndTraffic(plan.getType(), normalizedDeviceModel, plan.getTrafficGb());
         validatePeriod(plan.getPeriod(), plan.getPeriodNum());
@@ -224,7 +224,7 @@ public class CloudPlanService {
         if (plan.getDeviceModel() != null) {
             plan.setDeviceModel(effectiveDeviceModel);
         }
-        syncAppleProductId(plan, existing);
+        applyAppleProductId(plan, existing);
         Integer effectiveTrafficGb = plan.getTrafficGb() != null ? plan.getTrafficGb() : existing.getTrafficGb();
 
         validateType(effectiveType);
@@ -411,14 +411,47 @@ public class CloudPlanService {
         }
     }
 
-    private void syncAppleProductId(CloudPlan incoming, CloudPlan existing) {
+    private String normalizeAppleProductId(String appleProductId) {
+        if (appleProductId == null) {
+            return null;
+        }
+        String normalized = appleProductId.trim();
+        return normalized.isEmpty() ? null : normalized;
+    }
+
+    private void validateAppleProductId(String appleProductId) {
+        if (!StringUtils.hasText(appleProductId)) {
+            return;
+        }
+        if (!PLAN_ID_PATTERN.matcher(appleProductId).matches()) {
+            throw new RuntimeException("Apple Product ID仅允许字母、数字、下划线和句点");
+        }
+    }
+
+    private void applyAppleProductId(CloudPlan incoming, CloudPlan existing) {
         if (incoming == null) {
             return;
         }
+
         String effectivePlanId = incoming.getPlanId() != null
                 ? normalizePlanId(incoming.getPlanId())
                 : existing != null ? normalizePlanId(existing.getPlanId()) : null;
-        incoming.setAppleProductId(effectivePlanId);
+
+        String effectiveAppleProductId;
+        if (incoming.getAppleProductId() != null) {
+            effectiveAppleProductId = normalizeAppleProductId(incoming.getAppleProductId());
+        } else if (existing != null) {
+            effectiveAppleProductId = normalizeAppleProductId(existing.getAppleProductId());
+        } else {
+            effectiveAppleProductId = null;
+        }
+
+        if (!StringUtils.hasText(effectiveAppleProductId)) {
+            effectiveAppleProductId = effectivePlanId;
+        }
+
+        validateAppleProductId(effectiveAppleProductId);
+        incoming.setAppleProductId(effectiveAppleProductId);
     }
 
     private void validateAppleAutoRenew(CloudPlan incoming, CloudPlan existing) {
@@ -426,11 +459,18 @@ public class CloudPlanService {
                 ? incoming.getAutoRenew()
                 : existing != null ? existing.getAutoRenew() : null;
         String effectiveAppleProductId = incoming.getAppleProductId() != null
-                ? normalizePlanId(incoming.getAppleProductId())
+                ? normalizeAppleProductId(incoming.getAppleProductId())
+                : existing != null ? normalizeAppleProductId(existing.getAppleProductId()) : null;
+        String effectivePlanId = incoming.getPlanId() != null
+                ? normalizePlanId(incoming.getPlanId())
                 : existing != null ? normalizePlanId(existing.getPlanId()) : null;
 
+        if (!StringUtils.hasText(effectiveAppleProductId)) {
+            effectiveAppleProductId = effectivePlanId;
+        }
+
         if (effectiveAutoRenew != null && effectiveAutoRenew == 1 && !StringUtils.hasText(effectiveAppleProductId)) {
-            throw new RuntimeException("开启自动续费时，套餐ID不能为空");
+            throw new RuntimeException("开启自动续费时，Apple Product ID 或套餐ID不能为空");
         }
 
         if (StringUtils.hasText(effectiveAppleProductId)) {
