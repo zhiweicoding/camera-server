@@ -29,6 +29,7 @@ public class MessageService {
     private static final DateTimeFormatter ISO_FORMATTER = 
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC);
     private static final String TYPE_DEVICE_STATUS = "device_status";
+    private static final String TYPE_EVENT = "event";
     private static final Set<String> STATUS_NOTIFICATION_TITLES = Collections.unmodifiableSet(
             new HashSet<>(Arrays.asList("设备离线通知", "设备上线通知"))
     );
@@ -123,7 +124,7 @@ public class MessageService {
             lambda.eq(AppMessage::getDeviceId, deviceId);
         }
         String normalizedType = StringUtils.hasText(type) ? type.trim() : null;
-        if (StringUtils.hasText(normalizedType)) {
+        if (StringUtils.hasText(normalizedType) && !isAllMessageAlias(normalizedType)) {
             lambda.eq(AppMessage::getType, normalizedType);
         }
         if (StringUtils.hasText(date)) {
@@ -139,6 +140,13 @@ public class MessageService {
 
     private boolean isDeviceStatusType(String type) {
         return StringUtils.hasText(type) && TYPE_DEVICE_STATUS.equalsIgnoreCase(type.trim());
+    }
+
+    /**
+     * APP 端历史上固定传 type=event，这里兼容为“查看全部消息”。
+     */
+    private boolean isAllMessageAlias(String type) {
+        return StringUtils.hasText(type) && TYPE_EVENT.equalsIgnoreCase(type.trim());
     }
 
     private void excludeStatusNotifications(QueryWrapper<AppMessage> queryWrapper) {
