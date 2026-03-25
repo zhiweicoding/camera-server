@@ -3,13 +3,11 @@ package com.pura365.camera.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pura365.camera.domain.Device;
-import com.pura365.camera.domain.UserDevice;
 import com.pura365.camera.enums.DeviceOnlineStatus;
 import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.enums.SdCardStatus;
 import com.pura365.camera.model.mqtt.*;
 import com.pura365.camera.repository.DeviceRepository;
-import com.pura365.camera.repository.UserDeviceRepository;
 import com.pura365.camera.util.TimeValidator;
 import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
@@ -33,7 +31,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 /**
  * MQTT 消息服务
@@ -67,15 +64,6 @@ public class MqttMessageService {
     
     @Autowired
     private NetworkPairingStatusService pairingStatusService;
-    
-    @Autowired
-    private JPushService jPushService;
-    
-    @Autowired
-    private UserDeviceRepository userDeviceRepository;
-
-    @Autowired
-    private MessageService messageService;
     
     // 缓存 WebRTC Offer：sid -> WebRtcMessage（最近一次）
     private final Map<String, WebRtcMessage> webrtcOfferCache = new ConcurrentHashMap<>();
@@ -308,55 +296,7 @@ public class MqttMessageService {
             pairingStatusService.setSuccess(deviceId);
         }
         
-        // 发送设备上线通知给绑定该设备的所有用户
-        sendDeviceOnlineNotification(deviceId, deviceName);
-    }
-    
-    /**
-     * 发送设备上线通知给绑定该设备的所有用户
-     */
-    private void sendDeviceOnlineNotification(String deviceId, String deviceName) {
-        try {
-            // 查询绑定该设备的所有用户
-            LambdaQueryWrapper<UserDevice> queryWrapper = new LambdaQueryWrapper<>();
-            queryWrapper.eq(UserDevice::getDeviceId, deviceId);
-            List<UserDevice> userDevices = userDeviceRepository.selectList(queryWrapper);
-            
-            if (userDevices == null || userDevices.isEmpty()) {
-                log.info("设备 {} 没有绑定用户，跳过上线通知", deviceId);
-                return;
-            }
-            
-            // 获取所有用户ID
-            List<Long> userIds = userDevices.stream()
-                    .map(UserDevice::getUserId)
-                    .distinct()
-                    .collect(Collectors.toList());
-            
-            // 构建通知内容
-            String displayName = (deviceName != null && !deviceName.isEmpty()) ? deviceName : deviceId;
-            String title = "设备上线通知";
-            String content = "您的设备 " + displayName + " 已上线";
-            
-            // 构建附加数据
-            Map<String, String> extras = new HashMap<>();
-            extras.put("type", "device_online");
-            extras.put("deviceId", deviceId);
-            extras.put("time", String.valueOf(System.currentTimeMillis()));
-            if (deviceName != null) {
-                extras.put("deviceName", deviceName);
-            }
-            
-            // 发送推送通知
-            boolean success = jPushService.pushToUsers(userIds, title, content, extras);
-            if (success) {
-                log.info("已发送设备 {} 上线通知给 {} 个用户", deviceId, userIds.size());
-            } else {
-                log.warn("发送设备 {} 上线通知失败", deviceId);
-            }
-        } catch (Exception e) {
-            log.error("发送设备 {} 上线通知异常", deviceId, e);
-        }
+        log.info("设备 {} 上线状态已更新，不再发送上线推送通知", deviceId);
     }
     
     /**
@@ -725,7 +665,7 @@ public class MqttMessageService {
     // ==================== 设备离线检测 ====================
     
     /**
-     * 标记设备离线并发送推送通知
+     * 标记设备离线。
      * 触发场景：1. 收到CODE20遗言  2. 发送CODE11后3秒内无响应
      */
     public void markDeviceOffline(String deviceId) {
@@ -740,76 +680,11 @@ public class MqttMessageService {
                 device.setUpdatedAt(LocalDateTime.now());
                 deviceRepository.updateById(device);
                 log.info("已标记设备 {} 为离线", deviceId);
-                
-                // 发送离线推送通知
-                sendOfflineNotification(device);
             } else {
-                LocalDateTime now = LocalDateTime.now();
-                if (device.getUpdatedAt() != null && device.getUpdatedAt().isAfter(now.minusMinutes(30))) {
-                    log.info("Skip offline notification for device {} due cooldown", deviceId);
-                    return;
-                }
-                device.setUpdatedAt(now);
-                deviceRepository.updateById(device);
-                log.info("Device {} already offline, send offline notification after cooldown window", deviceId);
-                sendOfflineNotification(device);
+                log.info("设备 {} 已经是离线状态，跳过重复离线通知逻辑", deviceId);
             }
         } catch (Exception e) {
             log.error("标记设备 {} 离线失败", deviceId, e);
-        }
-    }
-    
-    /**
-     * 发送设备离线推送通知
-     */
-    private void sendOfflineNotification(Device device) {
-        try {
-            // 查找该设备关联的所有用户
-            LambdaQueryWrapper<UserDevice> wrapper = new LambdaQueryWrapper<>();
-            wrapper.eq(UserDevice::getDeviceId, device.getId());
-            List<UserDevice> userDevices = userDeviceRepository.selectList(wrapper);
-
-            if (userDevices.isEmpty()) {
-                log.info("设备 {} 没有关联用户，跳过推送", device.getId());
-                return;
-            }
-
-            List<Long> userIds = userDevices.stream()
-                    .map(UserDevice::getUserId)
-                    .distinct()
-                    .collect(Collectors.toList());
-
-            String deviceName = device.getName() != null ? device.getName() : device.getId();
-            String title = "设备离线通知";
-            String content = "您的设备 " + deviceName + " 已离线，请检查设备网络连接";
-
-            int dispatchCount = 0;
-            for (Long userId : userIds) {
-                try {
-                    messageService.createMessageAndPush(
-                            userId,
-                            device.getId(),
-                            "device_status",
-                            title,
-                            content,
-                            null,
-                            null,
-                            true
-                    );
-                    dispatchCount++;
-                } catch (Exception ex) {
-                    log.error("设备 {} 离线通知发送异常，userId={}", device.getId(), userId, ex);
-                }
-            }
-
-            if (dispatchCount > 0) {
-                log.info("设备 {} 离线通知已通过消息中心链路发送，完成用户: {}/{}, 用户列表: {}",
-                        device.getId(), dispatchCount, userIds.size(), userIds);
-            } else {
-                log.warn("设备 {} 离线通知发送失败，用户列表: {}", device.getId(), userIds);
-            }
-        } catch (Exception e) {
-            log.error("发送设备 {} 离线通知失败", device.getId(), e);
         }
     }
     
