@@ -26,6 +26,7 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,6 +40,24 @@ import java.util.Locale;
 public class CameraService {
     
     private static final Logger log = LoggerFactory.getLogger(CameraService.class);
+
+    @Value("${device.mqtt.cn.hostname:mqtts://cam.pura365.cn:8883}")
+    private String chinaMqttHostname;
+
+    @Value("${device.mqtt.cn.username:camera_test}")
+    private String chinaMqttUsername;
+
+    @Value("${device.mqtt.cn.password:123456}")
+    private String chinaMqttPassword;
+
+    @Value("${device.mqtt.oversea.hostname:mqtts://sp.pura365.cn:8883}")
+    private String overseaMqttHostname;
+
+    @Value("${device.mqtt.oversea.username:camera_test}")
+    private String overseaMqttUsername;
+
+    @Value("${device.mqtt.oversea.password:123456}")
+    private String overseaMqttPassword;
     
     // 自注入，用于调用事务方法（使用@Lazy避免循环依赖）
     @Autowired
@@ -74,6 +93,9 @@ public class CameraService {
     
     @Autowired
     private ManufacturedDeviceRepository manufacturedDeviceRepository;
+
+    @Autowired
+    private RegionRoutingService regionRoutingService;
     
     /**
      * 获取设备信息
@@ -116,22 +138,21 @@ public class CameraService {
                 log.info("新设备入库成功 - ID: {}, MAC: {}", info.getId(), info.getMac());
             } else {
                 // 设备已存在，更新信息
-                boolean needUpdate = false;
+                boolean profileChanged = false;
                 if (info.getMac() != null && !info.getMac().isEmpty() && !info.getMac().equals(device.getMac())) {
                     device.setMac(info.getMac());
-                    needUpdate = true;
+                    profileChanged = true;
                 }
                 if (info.getRegion() != null && !info.getRegion().equals(device.getRegion())) {
                     device.setRegion(info.getRegion());
-                    needUpdate = true;
+                    profileChanged = true;
                 }
                 device.setStatus(DeviceOnlineStatus.ONLINE);
                 device.setUpdatedAt(LocalDateTime.now());
                 device.setLastOnlineTime(LocalDateTime.now());
                 device.setLastHeartbeatTime(LocalDateTime.now());
-                if (needUpdate) {
-                    device.setUpdatedAt(LocalDateTime.now());
-                    deviceRepository.updateById(device);
+                deviceRepository.updateById(device);
+                if (profileChanged) {
                     log.info("设备信息已更新 - ID: {}, MAC: {}, Region: {}", info.getId(), info.getMac(), info.getRegion());
                 }
             }
@@ -144,10 +165,8 @@ public class CameraService {
         response.setDeviceID(info.getId());
         response.setDeviceEnable(true);
         
-        // MQTT 配置
-        response.setMqttHostname("mqtts://cam.pura365.cn:8883");
-        response.setMqttUser("camera_test");
-        response.setMqttPass("123456");
+        // MQTT 配置：优先设备级覆盖，否则按地区返回国内/国外默认配置
+        configureMqtt(device, manufacturedDevice, info, response);
         
         // 检查云存储订阅状态并配置S3凭证和AI配置
         if (device != null) {
@@ -159,6 +178,42 @@ public class CameraService {
         }
         
         return response;
+    }
+
+    private void configureMqtt(Device device, ManufacturedDevice manufacturedDevice, GetInfoRequest info,
+                               GetInfoResponse response) {
+        if (hasCompleteCustomMqttConfig(device)) {
+            response.setMqttHostname(device.getMqttHostname());
+            response.setMqttUser(device.getMqttUsername());
+            response.setMqttPass(device.getMqttPassword());
+            log.info("设备 {} 使用设备级 MQTT 配置 - host={}", info.getId(), device.getMqttHostname());
+            return;
+        }
+
+        String region = regionRoutingService.resolveRegion(
+                info != null ? info.getRegion() : null,
+                device != null ? device.getRegion() : null,
+                manufacturedDevice != null ? manufacturedDevice.getCountry() : null
+        );
+        if (regionRoutingService.isChina(region)) {
+            response.setMqttHostname(chinaMqttHostname);
+            response.setMqttUser(chinaMqttUsername);
+            response.setMqttPass(chinaMqttPassword);
+        } else {
+            response.setMqttHostname(overseaMqttHostname);
+            response.setMqttUser(overseaMqttUsername);
+            response.setMqttPass(overseaMqttPassword);
+        }
+
+        log.info("设备 {} 按地区返回 MQTT 配置 - region={}, host={}",
+                info.getId(), region, response.getMqttHostname());
+    }
+
+    private boolean hasCompleteCustomMqttConfig(Device device) {
+        return device != null
+                && StringUtils.hasText(device.getMqttHostname())
+                && StringUtils.hasText(device.getMqttUsername())
+                && StringUtils.hasText(device.getMqttPassword());
     }
 
     /**
@@ -438,7 +493,7 @@ public class CameraService {
         
         // 无论是否有订阅，都返回S3配置信息
         // 判断设备区域
-        boolean isChina = isChina(device.getRegion());
+        boolean isChina = regionRoutingService.isChina(device.getRegion());
         
         if (isChina) {
             // 国内：使用七牛云S3兼容配置（当前先写死华南-广东）
@@ -527,16 +582,5 @@ public class CameraService {
             log.error("兼容校验设备ID失败 - deviceId: {}", trimmedDeviceId, e);
             return null;
         }
-    }
-    
-    /**
-     * 判断设备是否在国内
-     */
-    private boolean isChina(String region) {
-        if (region == null || region.isEmpty()) {
-            return true; // 默认国内
-        }
-        String r = region.toLowerCase();
-        return r.equals("cn") || r.equals("china") || r.startsWith("cn-");
     }
 }

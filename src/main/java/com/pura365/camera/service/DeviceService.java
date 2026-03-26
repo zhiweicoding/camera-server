@@ -15,6 +15,7 @@ import com.pura365.camera.service.NetworkPairingStatusService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -36,6 +37,9 @@ import java.util.stream.Collectors;
 public class DeviceService {
 
     private static final Logger log = LoggerFactory.getLogger(DeviceService.class);
+
+    @Value("${device.list.refresh-wait-timeout-ms:5000}")
+    private long listRefreshWaitTimeoutMs;
 
 
     /**
@@ -91,12 +95,13 @@ public class DeviceService {
     /**
      * 获取用户的设备列表
      * 异步发送CODE11探测，不等待响应，直接返回数据库中的状态
-     * 设备响应后会更新状态，3秒无响应则标记离线并推送
+     * 默认会对当前离线设备短等最新探测结果，尽量让本次返回更接近实时状态
      *
      * @param userId 用户ID
+     * @param forceRefresh 是否手动刷新
      * @return 设备列表
      */
-    public List<DeviceListItemVO> listDevices(Long userId) {
+    public List<DeviceListItemVO> listDevices(Long userId, boolean forceRefresh) {
         // 查询用户绑定的设备
         LambdaQueryWrapper<UserDevice> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(UserDevice::getUserId, userId);
@@ -111,15 +116,30 @@ public class DeviceService {
                 .map(UserDevice::getDeviceId)
                 .distinct()
                 .collect(Collectors.toList());
-        
+
+        List<Device> devices = loadDevices(deviceIds);
+
         // 异步发送CODE11探测（不等待），3秒后检查响应
         mqttMessageService.probeDevicesAsync(deviceIds);
-        
-        // 直接返回数据库中的状态
-        List<Device> devices = deviceIds.stream()
-                .map(deviceRepository::selectById)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toList());
+
+        if (forceRefresh) {
+            List<String> offlineDeviceIds = devices.stream()
+                    .filter(Objects::nonNull)
+                    .filter(device -> device.getStatus() != DeviceOnlineStatus.ONLINE)
+                    .map(Device::getId)
+                    .collect(Collectors.toList());
+
+            if (!offlineDeviceIds.isEmpty()) {
+                Map<String, Boolean> refreshResult =
+                        mqttMessageService.requestDeviceInfoBatchAndWait(offlineDeviceIds, listRefreshWaitTimeoutMs);
+                long respondedCount = refreshResult.values().stream()
+                        .filter(Boolean.TRUE::equals)
+                        .count();
+                log.info("手动刷新设备列表 - userId={}, offlineCount={}, respondedCount={}, timeoutMs={}",
+                        userId, offlineDeviceIds.size(), respondedCount, listRefreshWaitTimeoutMs);
+                devices = loadDevices(deviceIds);
+            }
+        }
 
         // 构建设备列表响应
         return devices.stream()
@@ -406,6 +426,13 @@ public class DeviceService {
         vo.setBulbsEn(device.getBulbsEn());
 
         return vo;
+    }
+
+    private List<Device> loadDevices(List<String> deviceIds) {
+        return deviceIds.stream()
+                .map(deviceRepository::selectById)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
     }
 
     /**

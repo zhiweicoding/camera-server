@@ -77,18 +77,17 @@ public class CloudStorageService {
     @Autowired
     private CloudSubscriptionRepository cloudSubscriptionRepository;
 
-@Autowired
+    @Autowired
     private CloudPlanRepository cloudPlanRepository;
+
+    @Autowired
+    private RegionRoutingService regionRoutingService;
 
     /**
      * 判断设备是否在国内
      */
     private boolean isChina(String region) {
-        if (region == null || region.isEmpty()) {
-            return true; // 默认国内
-        }
-        String r = region.toLowerCase();
-        return r.equals("cn") || r.equals("china") || r.startsWith("cn-");
+        return regionRoutingService.isChina(region);
     }
 
     private String buildVultrDownloadUrl(String key) {

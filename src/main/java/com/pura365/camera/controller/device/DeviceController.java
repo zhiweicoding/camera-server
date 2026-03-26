@@ -107,15 +107,22 @@ public class DeviceController {
      * 获取当前用户的设备列表
      *
      * @param currentUserId 当前登录用户ID（由拦截器注入）
+     * @param forceRefresh 手动刷新时传true，离线设备会短暂等待最新探测结果
+     * @param refresh forceRefresh 的兼容别名
      * @return 设备列表
      */
     @Operation(summary = "获取设备列表", description = "获取当前用户绑定的所有设备")
     @GetMapping
     public ApiResponse<List<DeviceListItemVO>> listDevices(
-            @RequestAttribute("currentUserId") Long currentUserId) {
-        log.info("获取设备列表 - userId={}", currentUserId);
-        List<DeviceListItemVO> devices = deviceService.listDevices(currentUserId);
-        log.info("获取设备列表成功 - userId={}, count={}", currentUserId, devices.size());
+            @RequestAttribute("currentUserId") Long currentUserId,
+            @Parameter(description = "默认会短等当前离线设备的最新探测结果，传false可跳过等待")
+            @RequestParam(value = "forceRefresh", required = false, defaultValue = "true") Boolean forceRefresh,
+            @Parameter(description = "forceRefresh 的兼容别名")
+            @RequestParam(value = "refresh", required = false) Boolean refresh) {
+        boolean shouldForceRefresh = Boolean.TRUE.equals(forceRefresh) || Boolean.TRUE.equals(refresh);
+        log.info("获取设备列表 - userId={}, forceRefresh={}", currentUserId, shouldForceRefresh);
+        List<DeviceListItemVO> devices = deviceService.listDevices(currentUserId, shouldForceRefresh);
+        log.info("获取设备列表成功 - userId={}, count={}, forceRefresh={}", currentUserId, devices.size(), shouldForceRefresh);
         return ApiResponse.success(devices);
     }
 

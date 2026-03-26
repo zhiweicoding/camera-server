@@ -40,8 +40,8 @@ public class DeviceHealthCheckService implements DisposableBean {
     @Value("${device.health.check-interval:60000}")
     private long checkInterval;
 
-    /** CODE11响应超时时间(毫秒)，默认3秒 */
-    @Value("${device.health.response-timeout:3000}")
+    /** CODE11响应超时时间(毫秒)，默认5秒 */
+    @Value("${device.health.response-timeout:5000}")
     private long responseTimeoutMs;
 
     /** 是否启用健康检查（默认禁用） */
@@ -70,7 +70,7 @@ public class DeviceHealthCheckService implements DisposableBean {
 
     /**
      * 向所有在线设备发送CODE11探测
-     * 如果3秒内没有响应则标记为离线
+     * 如果没有响应则记一次探测失败，连续失败达到阈值后再标记为离线
      */
     private void sendHeartbeatToOnlineDevices() {
         // 查询所有在线设备
@@ -90,11 +90,11 @@ public class DeviceHealthCheckService implements DisposableBean {
 
         for (Device device : onlineDevices) {
             try {
-                // 发送CODE11并等待响应，超时则标记离线
+                // 发送CODE11并等待响应，超时则累计一次失败
                 boolean responded = mqttMessageService.requestDeviceInfoAndWait(device.getId(), responseTimeoutMs);
                 if (!responded) {
-                    log.info("设备 {} CODE11响应超时({}ms)，标记为离线", device.getId(), responseTimeoutMs);
-                    mqttMessageService.markDeviceOffline(device.getId());
+                    log.info("设备 {} CODE11响应超时({}ms)，累计一次探测失败", device.getId(), responseTimeoutMs);
+                    mqttMessageService.handleProbeTimeout(device.getId(), "健康检查");
                 }
             } catch (Exception e) {
                 log.warn("向设备 {} 发送心跳请求失败: {}", device.getId(), e.getMessage());

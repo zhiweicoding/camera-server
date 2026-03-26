@@ -20,8 +20,11 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -52,6 +55,18 @@ public class MqttMessageService {
     
     @Value("${mqtt.password:123456}")
     private String password;
+
+    @Value("${device.health.offline-threshold:90}")
+    private long offlineThresholdSeconds;
+
+    @Value("${device.probe.min-interval-ms:10000}")
+    private long probeMinIntervalMs;
+
+    @Value("${device.probe.offline-failure-threshold:3}")
+    private int offlineFailureThreshold;
+
+    @Value("${device.probe.response-timeout-ms:5000}")
+    private long probeTimeoutMs;
     
     @Autowired
     private MqttEncryptService encryptService;
@@ -69,12 +84,16 @@ public class MqttMessageService {
     private final Map<String, WebRtcMessage> webrtcOfferCache = new ConcurrentHashMap<>();
     // 缓存 WebRTC Candidate：sid -> List<WebRtcMessage>（待拉取的远端 Candidate）
     private final Map<String, List<WebRtcMessage>> webrtcCandidateCache = new ConcurrentHashMap<>();
-    // 等待设备响应的 Future：deviceId -> CompletableFuture
-    private final Map<String, CompletableFuture<Boolean>> deviceInfoWaiters = new ConcurrentHashMap<>();
+    // 等待设备响应的 Future：deviceId -> multiple waiters
+    private final Map<String, List<CompletableFuture<Boolean>>> deviceInfoWaiters = new ConcurrentHashMap<>();
     // 等待灯泡配置响应的 Future
     private final Map<String, CompletableFuture<MqttBulbConfigMessage>> bulbConfigWaiters = new ConcurrentHashMap<>();
     // 正在等待CODE11响应的设备（用于3秒超时检测）
     private final Set<String> pendingProbeDevices = ConcurrentHashMap.newKeySet();
+    // 最近一次发送探测的时间（用于节流，避免频繁刷新导致状态抖动）
+    private final Map<String, Long> lastProbeTimestamps = new ConcurrentHashMap<>();
+    // 连续探测失败次数，达到阈值后才判定离线
+    private final Map<String, Integer> probeFailureCounts = new ConcurrentHashMap<>();
     // 延时任务调度器
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
     
@@ -288,6 +307,8 @@ public class MqttMessageService {
         } catch (Exception e) {
             log.error("更新设备 {} 在线状态失败", deviceId, e);
         }
+
+        completeDeviceInfoWaiters(deviceId, true);
         
         // 如果status=1（配网后首次连接），更新配网状态为成功
         if (msg.getStatus() != null && msg.getStatus() == 1) {
@@ -388,11 +409,7 @@ public class MqttMessageService {
             }
             
             // 通知等待者设备已响应
-            CompletableFuture<Boolean> waiter = deviceInfoWaiters.remove(deviceId);
-            if (waiter != null) {
-                waiter.complete(true);
-                log.debug("设备 {} 响应已通知等待者", deviceId);
-            }
+            completeDeviceInfoWaiters(deviceId, true);
             
             // 记录TF卡容量信息(用于调试)
             if (msg.getSdstate() != null && msg.getSdstate() == 1) {
@@ -472,6 +489,7 @@ public class MqttMessageService {
      * 设备断开MQTT连接时由Broker发布，立即标记设备离线
      */
     private void handleDeviceWill(String deviceId) {
+        pendingProbeDevices.remove(deviceId);
         log.info("收到设备 {} 遗言消息，立即标记为离线", deviceId);
         markDeviceOffline(deviceId);
     }
@@ -587,13 +605,8 @@ public class MqttMessageService {
     // ==================== 设备在线探测 ====================
     
     /**
-     * CODE11响应超时时间（3秒）
-     */
-    private static final long PROBE_TIMEOUT_MS = 3000;
-    
-    /**
      * 异步探测多个设备的在线状态
-     * 发送CODE11后，3秒内无响应则标记离线并推送
+     * 发送CODE11后异步等待响应，避免列表查询时阻塞接口返回
      * 
      * @param deviceIds 设备ID列表
      */
@@ -609,7 +622,7 @@ public class MqttMessageService {
     
     /**
      * 异步探测单个设备的在线状态
-     * 发送CODE11后，3秒内无响应则标记离线并推送
+     * 发送CODE11后，在配置的超时时间内无响应记一次失败；连续失败达到阈值才标记离线
      * 
      * @param deviceId 设备ID
      */
@@ -630,23 +643,27 @@ public class MqttMessageService {
             log.debug("设备 {} 已在探测中，跳过", deviceId);
             return;
         }
+
+        if (isProbeCoolingDown(deviceId)) {
+            log.debug("设备 {} 距离上次探测不足 {}ms，跳过本次重复探测", deviceId, probeMinIntervalMs);
+            return;
+        }
         
         // 标记设备正在等待响应
         pendingProbeDevices.add(deviceId);
+        lastProbeTimestamps.put(deviceId, System.currentTimeMillis());
         
         try {
             // 发送CODE11探测
             requestDeviceInfo(deviceId);
             log.info("已发送CODE11探测到设备 {}", deviceId);
             
-            // 3秒后检查是否收到响应
+            // 超时后检查是否收到响应
             scheduler.schedule(() -> {
                 if (pendingProbeDevices.remove(deviceId)) {
-                    // 仍在等待列表中，说明未收到响应，标记离线
-                    log.info("设备 {} CODE11响应超时(3秒)，标记为离线", deviceId);
-                    markDeviceOffline(deviceId);
+                    handleProbeTimeout(deviceId, "列表探测");
                 }
-            }, PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            }, probeTimeoutMs, TimeUnit.MILLISECONDS);
             
         } catch (Exception e) {
             pendingProbeDevices.remove(deviceId);
@@ -660,6 +677,34 @@ public class MqttMessageService {
      */
     private void onDeviceResponded(String deviceId) {
         pendingProbeDevices.remove(deviceId);
+        probeFailureCounts.remove(deviceId);
+    }
+
+    /**
+     * 处理一次探测超时。
+     * 近期有成功响应时忽略本次失败；否则累计失败次数，达到阈值后再标记离线。
+     */
+    public void handleProbeTimeout(String deviceId, String source) {
+        Device device = deviceRepository.selectById(deviceId);
+        if (device != null && wasSeenRecently(device)) {
+            log.info("设备 {} {}超时，但最近 {} 秒内有成功响应，忽略本次失败", deviceId, source, offlineThresholdSeconds);
+            return;
+        }
+
+        int threshold = getOfflineFailureThreshold();
+        int failureCount = probeFailureCounts.merge(deviceId, 1, Integer::sum);
+        if (failureCount > threshold) {
+            failureCount = threshold;
+            probeFailureCounts.put(deviceId, threshold);
+        }
+
+        if (failureCount < threshold) {
+            log.info("设备 {} {}超时，连续失败 {}/{}，暂不标记离线", deviceId, source, failureCount, threshold);
+            return;
+        }
+
+        log.info("设备 {} {}超时，连续失败 {}/{}，标记为离线", deviceId, source, failureCount, threshold);
+        markDeviceOffline(deviceId);
     }
     
     // ==================== 设备离线检测 ====================
@@ -686,6 +731,35 @@ public class MqttMessageService {
         } catch (Exception e) {
             log.error("标记设备 {} 离线失败", deviceId, e);
         }
+    }
+
+    private boolean isProbeCoolingDown(String deviceId) {
+        if (probeMinIntervalMs <= 0) {
+            return false;
+        }
+
+        Long lastProbeAt = lastProbeTimestamps.get(deviceId);
+        return lastProbeAt != null && (System.currentTimeMillis() - lastProbeAt) < probeMinIntervalMs;
+    }
+
+    private boolean wasSeenRecently(Device device) {
+        if (offlineThresholdSeconds <= 0) {
+            return false;
+        }
+
+        LocalDateTime lastSeenAt = device.getLastHeartbeatTime();
+        if (lastSeenAt == null) {
+            lastSeenAt = device.getLastOnlineTime();
+        }
+        if (lastSeenAt == null) {
+            return false;
+        }
+
+        return Duration.between(lastSeenAt, LocalDateTime.now()).getSeconds() < offlineThresholdSeconds;
+    }
+
+    private int getOfflineFailureThreshold() {
+        return Math.max(offlineFailureThreshold, 1);
     }
     
     /**
@@ -736,11 +810,8 @@ public class MqttMessageService {
      * @return true=设备已响应，false=超时或失败
      */
     public boolean requestDeviceInfoAndWait(String deviceId, long timeoutMs) {
+        CompletableFuture<Boolean> future = registerDeviceInfoWaiter(deviceId);
         try {
-            // 创建等待 Future
-            CompletableFuture<Boolean> future = new CompletableFuture<>();
-            deviceInfoWaiters.put(deviceId, future);
-            
             // 发送请求
             requestDeviceInfo(deviceId);
             
@@ -748,9 +819,119 @@ public class MqttMessageService {
             return future.get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             log.debug("设备 {} 响应超时或失败: {}", deviceId, e.getMessage());
-            deviceInfoWaiters.remove(deviceId);
+            return false;
+        } finally {
+            removeDeviceInfoWaiter(deviceId, future);
+        }
+    }
+
+    /**
+     * 为多个设备发送CODE11并并发等待响应。
+     * 主要用于手动刷新时短等当前离线设备，让本次列表返回更接近实时状态。
+     */
+    public Map<String, Boolean> requestDeviceInfoBatchAndWait(List<String> deviceIds, long timeoutMs) {
+        if (deviceIds == null || deviceIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<String, CompletableFuture<Boolean>> futures = new LinkedHashMap<>();
+        long deadline = System.currentTimeMillis() + Math.max(timeoutMs, 0L);
+
+        for (String deviceId : deviceIds) {
+            if (!isProbeableDevice(deviceId)) {
+                continue;
+            }
+
+            CompletableFuture<Boolean> future = registerDeviceInfoWaiter(deviceId);
+            futures.put(deviceId, future);
+
+            if (pendingProbeDevices.contains(deviceId)) {
+                log.debug("设备 {} 已有探测进行中，手动刷新直接等待已有结果", deviceId);
+                continue;
+            }
+
+            pendingProbeDevices.add(deviceId);
+            lastProbeTimestamps.put(deviceId, System.currentTimeMillis());
+
+            try {
+                requestDeviceInfo(deviceId);
+                log.info("手动刷新已发送CODE11探测到设备 {}", deviceId);
+                scheduler.schedule(() -> {
+                    if (pendingProbeDevices.remove(deviceId)) {
+                        handleProbeTimeout(deviceId, "手动刷新");
+                    }
+                }, probeTimeoutMs, TimeUnit.MILLISECONDS);
+            } catch (Exception e) {
+                pendingProbeDevices.remove(deviceId);
+                log.error("手动刷新发送CODE11探测失败 - deviceId={}", deviceId, e);
+                future.complete(false);
+            }
+        }
+
+        Map<String, Boolean> result = new LinkedHashMap<>();
+        for (Map.Entry<String, CompletableFuture<Boolean>> entry : futures.entrySet()) {
+            String deviceId = entry.getKey();
+            CompletableFuture<Boolean> future = entry.getValue();
+
+            try {
+                long remainingMs = deadline - System.currentTimeMillis();
+                if (remainingMs <= 0) {
+                    result.put(deviceId, false);
+                } else {
+                    result.put(deviceId, future.get(remainingMs, TimeUnit.MILLISECONDS));
+                }
+            } catch (Exception e) {
+                log.debug("手动刷新等待设备 {} 响应超时或失败: {}", deviceId, e.getMessage());
+                result.put(deviceId, false);
+            } finally {
+                removeDeviceInfoWaiter(deviceId, future);
+            }
+        }
+
+        return result;
+    }
+
+    private CompletableFuture<Boolean> registerDeviceInfoWaiter(String deviceId) {
+        CompletableFuture<Boolean> future = new CompletableFuture<>();
+        deviceInfoWaiters.compute(deviceId, (key, waiters) -> {
+            List<CompletableFuture<Boolean>> nextWaiters =
+                    waiters != null ? waiters : new CopyOnWriteArrayList<>();
+            nextWaiters.add(future);
+            return nextWaiters;
+        });
+        return future;
+    }
+
+    private void removeDeviceInfoWaiter(String deviceId, CompletableFuture<Boolean> future) {
+        deviceInfoWaiters.computeIfPresent(deviceId, (key, waiters) -> {
+            waiters.remove(future);
+            return waiters.isEmpty() ? null : waiters;
+        });
+    }
+
+    private void completeDeviceInfoWaiters(String deviceId, boolean result) {
+        List<CompletableFuture<Boolean>> waiters = deviceInfoWaiters.remove(deviceId);
+        if (waiters == null || waiters.isEmpty()) {
+            return;
+        }
+
+        for (CompletableFuture<Boolean> waiter : waiters) {
+            waiter.complete(result);
+        }
+        log.debug("设备 {} 响应已通知 {} 个等待者", deviceId, waiters.size());
+    }
+
+    private boolean isProbeableDevice(String deviceId) {
+        if (deviceId == null) {
             return false;
         }
+
+        Device device = deviceRepository.selectById(deviceId);
+        if (device == null || device.getSsid() == null || device.getSsid().isEmpty()) {
+            log.debug("设备 {} ssid为空，跳过等待探测", deviceId);
+            return false;
+        }
+        return true;
     }
     
     /**
