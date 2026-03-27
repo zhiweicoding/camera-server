@@ -47,6 +47,7 @@ public class JPushService {
     private final UserPushTokenRepository userPushTokenRepository;
     private final FirebasePushService firebasePushService;
     private final ApnsPushService apnsPushService;
+    private final RegionRoutingService regionRoutingService;
     private final String pushProvider;
     private final String iosPushProvider;
 
@@ -55,6 +56,7 @@ public class JPushService {
                         UserPushTokenRepository userPushTokenRepository,
                         FirebasePushService firebasePushService,
                         ApnsPushService apnsPushService,
+                        RegionRoutingService regionRoutingService,
                         @Value("${push.provider:jpush}") String pushProvider,
                         @Value("${push.ios-provider:}") String iosPushProvider) {
         this.jPushClient = jPushClient;
@@ -62,6 +64,7 @@ public class JPushService {
         this.userPushTokenRepository = userPushTokenRepository;
         this.firebasePushService = firebasePushService;
         this.apnsPushService = apnsPushService;
+        this.regionRoutingService = regionRoutingService;
         this.pushProvider = pushProvider;
         this.iosPushProvider = iosPushProvider;
     }
@@ -130,28 +133,72 @@ public class JPushService {
         fcmTokens = new ArrayList<>(new LinkedHashSet<>(fcmTokens));
         apnsTokens = new ArrayList<>(new LinkedHashSet<>(apnsTokens));
 
+        String pushRegion = regionRoutingService.resolveRegion();
+        String routePolicy = resolveRoutePolicy();
+        if (regionRoutingService.hasExplicitOverride()) {
+            if ("jpush-only".equals(routePolicy)) {
+                if (!fcmTokens.isEmpty()) {
+                    logger.info("Push region policy active region={}, policy={}, skipFirebaseTargets={}",
+                            pushRegion, routePolicy, summarizeRegistrationIds(fcmTokens));
+                }
+                if (!apnsTokens.isEmpty()) {
+                    logger.info("Push region policy active region={}, policy={}, skipApnsTargets={}",
+                            pushRegion, routePolicy, summarizeRegistrationIds(apnsTokens));
+                }
+                fcmTokens = Collections.emptyList();
+                apnsTokens = Collections.emptyList();
+            } else if ("fcm-only".equals(routePolicy)) {
+                if (!jpushRegistrationIds.isEmpty()) {
+                    logger.info("Push region policy active region={}, policy={}, skipJPushTargets={}",
+                            pushRegion, routePolicy, summarizeRegistrationIds(jpushRegistrationIds));
+                }
+                if (!apnsTokens.isEmpty()) {
+                    logger.info("Push region policy active region={}, policy={}, skipApnsTargets={}",
+                            pushRegion, routePolicy, summarizeRegistrationIds(apnsTokens));
+                }
+                jpushRegistrationIds = Collections.emptyList();
+                apnsTokens = Collections.emptyList();
+            }
+        }
+
         if (jpushRegistrationIds.isEmpty() && fcmTokens.isEmpty() && apnsTokens.isEmpty()) {
-            logger.warn("推送失败，所有token为空或无效: {}", context);
+            logger.warn("推送失败，当前地区策略过滤后没有可用token: context={}, region={}, policy={}",
+                    context, pushRegion, routePolicy);
             return false;
         }
 
+        logger.info("Push route resolved {}, region={}, policy={}, routes={}",
+                context, pushRegion, routePolicy, buildRouteSummary(jpushRegistrationIds, fcmTokens, apnsTokens));
+
         boolean anySuccess = false;
+        boolean jpushSuccess = false;
+        boolean firebaseSuccess = false;
+        boolean apnsSuccess = false;
 
         if (!jpushRegistrationIds.isEmpty()) {
-            logger.info("JPush push start {}, tokenCount={}, apnsProduction={}",
-                    context, jpushRegistrationIds.size(), jPushConfig.getApnsProduction());
-            anySuccess = pushToRegistrationIds(jpushRegistrationIds, title, content, extras) || anySuccess;
+            logger.info("JPush push start {}, tokenCount={}, apnsProduction={}, targets={}",
+                    context, jpushRegistrationIds.size(), jPushConfig.getApnsProduction(),
+                    summarizeRegistrationIds(jpushRegistrationIds));
+            jpushSuccess = pushToRegistrationIds(jpushRegistrationIds, title, content, extras);
+            anySuccess = jpushSuccess || anySuccess;
         }
 
         if (!fcmTokens.isEmpty()) {
-            logger.info("Firebase push start {}, tokenCount={}", context, fcmTokens.size());
-            anySuccess = firebasePushService.pushToTokens(fcmTokens, title, content, extras) || anySuccess;
+            logger.info("Firebase push start {}, tokenCount={}, targets={}",
+                    context, fcmTokens.size(), summarizeRegistrationIds(fcmTokens));
+            firebaseSuccess = firebasePushService.pushToTokens(fcmTokens, title, content, extras);
+            anySuccess = firebaseSuccess || anySuccess;
         }
 
         if (!apnsTokens.isEmpty()) {
-            logger.info("APNs push start {}, tokenCount={}", context, apnsTokens.size());
-            anySuccess = apnsPushService.pushToTokens(apnsTokens, title, content, extras) || anySuccess;
+            logger.info("APNs push start {}, tokenCount={}, targets={}",
+                    context, apnsTokens.size(), summarizeRegistrationIds(apnsTokens));
+            apnsSuccess = apnsPushService.pushToTokens(apnsTokens, title, content, extras);
+            anySuccess = apnsSuccess || anySuccess;
         }
+
+        logger.info("Push route finished {}, region={}, policy={}, result={}",
+                context, pushRegion, routePolicy, buildResultSummary(jpushSuccess, firebaseSuccess, apnsSuccess, anySuccess));
 
         return anySuccess;
     }
@@ -299,5 +346,44 @@ public class JPushService {
                 + ",channel=" + (StringUtils.hasText(token.getChannel()) ? token.getChannel().trim() : "unknown")
                 + ",appVersion=" + appVersion
                 + ",registrationId=" + maskRegistrationId(token.getRegistrationId());
+    }
+
+    private String summarizeRegistrationIds(List<String> registrationIds) {
+        if (registrationIds == null || registrationIds.isEmpty()) {
+            return "[]";
+        }
+        return registrationIds.stream()
+                .map(this::maskRegistrationId)
+                .collect(Collectors.joining(", ", "[", "]"));
+    }
+
+    private String buildRouteSummary(List<String> jpushRegistrationIds,
+                                     List<String> fcmTokens,
+                                     List<String> apnsTokens) {
+        return "{jpush=" + jpushRegistrationIds.size()
+                + ",firebase=" + fcmTokens.size()
+                + ",apns=" + apnsTokens.size()
+                + ",jpushTargets=" + summarizeRegistrationIds(jpushRegistrationIds)
+                + ",firebaseTargets=" + summarizeRegistrationIds(fcmTokens)
+                + ",apnsTargets=" + summarizeRegistrationIds(apnsTokens)
+                + "}";
+    }
+
+    private String buildResultSummary(boolean jpushSuccess,
+                                      boolean firebaseSuccess,
+                                      boolean apnsSuccess,
+                                      boolean anySuccess) {
+        return "{jpushSuccess=" + jpushSuccess
+                + ",firebaseSuccess=" + firebaseSuccess
+                + ",apnsSuccess=" + apnsSuccess
+                + ",anySuccess=" + anySuccess
+                + "}";
+    }
+
+    private String resolveRoutePolicy() {
+        if (!regionRoutingService.hasExplicitOverride()) {
+            return "token-provider";
+        }
+        return regionRoutingService.isChina() ? "jpush-only" : "fcm-only";
     }
 }

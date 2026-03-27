@@ -26,6 +26,7 @@ import java.util.stream.Collectors;
 @Service
 public class MessageService {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MessageService.class);
     private static final DateTimeFormatter ISO_FORMATTER = 
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC);
     private static final String TYPE_DEVICE_STATUS = "device_status";
@@ -251,26 +252,26 @@ public class MessageService {
         message.setCreatedAt(new Date());
         
         appMessageRepository.insert(message);
+        log.info("创建消息并准备推送 - messageId={}, userId={}, deviceId={}, type={}, title={}",
+                message.getId(), userId, deviceId, type, title);
         
 //        boolean deviceOnline = isDeviceOnline(deviceId);
 //        if (!ignoreDeviceOnlineCheck && !deviceOnline) {
-//            org.slf4j.LoggerFactory.getLogger(MessageService.class)
-//                .info("设备 {} 不在线，跳过推送", deviceId);
+//            log.info("设备 {} 不在线，跳过推送", deviceId);
 //            return message.getId();
 //        }
         if (ignoreDeviceOnlineCheck) {
-            org.slf4j.LoggerFactory.getLogger(MessageService.class)
-                    .info("设备 {} 不在线，ignoreDeviceOnlineCheck=true，继续推送", deviceId);
+            log.info("设备 {} 不在线，ignoreDeviceOnlineCheck=true，继续推送", deviceId);
         }
 
         if (shouldSkipPushByCooldown(userId, deviceId, type)) {
-            org.slf4j.LoggerFactory.getLogger(MessageService.class)
-                    .info("命中推送冷却窗口，跳过推送 userId={}, deviceId={}, type={}", userId, deviceId, type);
+            log.info("命中推送冷却窗口，跳过推送 userId={}, deviceId={}, type={}, messageId={}",
+                    userId, deviceId, type, message.getId());
             return message.getId();
         }
 
         // 触发极光推送
-        pushMessageToUser(userId, deviceId, title, content, thumbnailUrl, videoUrl);
+        pushMessageToUser(message.getId(), userId, deviceId, type, title, content, thumbnailUrl, videoUrl);
         
         return message.getId();
     }
@@ -307,8 +308,8 @@ public class MessageService {
     /**
      * 推送消息给用户
      */
-    private void pushMessageToUser(Long userId, String deviceId, String title,
-                                    String content, String thumbnailUrl, String videoUrl) {
+    private void pushMessageToUser(Long messageId, Long userId, String deviceId, String type, String title,
+                                   String content, String thumbnailUrl, String videoUrl) {
         try {
             Map<String, String> extras = new java.util.HashMap<>();
             if (deviceId != null) {
@@ -320,18 +321,25 @@ public class MessageService {
             if (videoUrl != null) {
                 extras.put("video_url", videoUrl);
             }
+            extras.put("message_id", String.valueOf(messageId));
+            if (StringUtils.hasText(type)) {
+                extras.put("message_type", type);
+            }
+
+            log.info("开始执行消息推送 - messageId={}, userId={}, deviceId={}, type={}, title={}, extrasKeys={}",
+                    messageId, userId, deviceId, type, title, new TreeSet<>(extras.keySet()));
             
             boolean success = jPushService.pushToUser(userId, title, content, extras);
             if (success) {
-                org.slf4j.LoggerFactory.getLogger(MessageService.class)
-                    .info("已向用户 {} 推送消息: {}", userId, title);
+                log.info("消息推送完成 - messageId={}, userId={}, deviceId={}, type={}, title={}, success=true",
+                        messageId, userId, deviceId, type, title);
             } else {
-                org.slf4j.LoggerFactory.getLogger(MessageService.class)
-                    .warn("向用户 {} 推送消息返回false: title={}, deviceId={}", userId, title, deviceId);
+                log.warn("消息推送完成 - messageId={}, userId={}, deviceId={}, type={}, title={}, success=false",
+                        messageId, userId, deviceId, type, title);
             }
         } catch (Exception e) {
-            org.slf4j.LoggerFactory.getLogger(MessageService.class)
-                .error("推送消息给用户 {} 失败", userId, e);
+            log.error("推送消息给用户失败 - messageId={}, userId={}, deviceId={}, type={}, title={}",
+                    messageId, userId, deviceId, type, title, e);
         }
     }
 }

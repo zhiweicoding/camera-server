@@ -16,6 +16,14 @@ public class RegionRoutingService {
     @Value("${app.region.override:auto}")
     private String regionOverride;
 
+    public boolean hasExplicitOverride() {
+        return !AUTO.equals(normalizeOverride(regionOverride));
+    }
+
+    public String getOverrideRegion() {
+        return normalizeOverride(regionOverride);
+    }
+
     public String resolveRegion(String... regionCandidates) {
         String override = normalizeOverride(regionOverride);
         if (!AUTO.equals(override)) {

@@ -1,6 +1,5 @@
 package com.pura365.camera.controller.app;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.pura365.camera.domain.UserPushToken;
 import com.pura365.camera.enums.EnableStatus;
@@ -17,6 +16,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
+import java.sql.SQLIntegrityConstraintViolationException;
 import java.util.Date;
 
 /**
@@ -33,15 +33,18 @@ public class PushController {
     private final MessageService messageService;
     private final String pushProvider;
     private final String iosPushProvider;
+    private final boolean enableBothProviders;
 
     public PushController(UserPushTokenRepository userPushTokenRepository,
                           MessageService messageService,
                           @Value("${push.provider:jpush}") String pushProvider,
-                          @Value("${push.ios-provider:}") String iosPushProvider) {
+                          @Value("${push.ios-provider:}") String iosPushProvider,
+                          @Value("${push.enable-both-providers:true}") boolean enableBothProviders) {
         this.userPushTokenRepository = userPushTokenRepository;
         this.messageService = messageService;
         this.pushProvider = pushProvider;
         this.iosPushProvider = iosPushProvider;
+        this.enableBothProviders = enableBothProviders;
     }
 
     /**
@@ -64,51 +67,50 @@ public class PushController {
             return ApiResponse.error(400, "registration_id 不能为空");
         }
         String normalizedProvider = PushProviderUtil.resolvePreferredProvider(
-                request.getDeviceType(), request.getProvider(), request.getChannel(), pushProvider, iosPushProvider);
+                request.getDeviceType(), request.getProvider(), request.getChannel(),
+                pushProvider, iosPushProvider, enableBothProviders);
         String normalizedChannel = PushProviderUtil.resolveChannel(request.getChannel(), normalizedProvider);
         String canonicalDeviceType = PushProviderUtil.canonicalDeviceType(request.getDeviceType());
+
+        logProviderOverrideIfNeeded(currentUserId, request.getDeviceType(), request.getProvider(),
+                request.getChannel(), normalizedProvider);
 
         log.info("注册推送Token - userId={}, deviceType={}, provider={}, channel={}, registrationId={}, deviceModel={}, osVersion={}, appVersion={}",
                 currentUserId, canonicalDeviceType, normalizedProvider, normalizedChannel,
                 PushProviderUtil.maskToken(normalizedRegistrationId), request.getDeviceModel(), request.getOsVersion(),
                 request.getAppVersion());
 
-        LambdaQueryWrapper<UserPushToken> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(UserPushToken::getUserId, currentUserId)
-               .eq(UserPushToken::getRegistrationId, normalizedRegistrationId)
-               .eq(UserPushToken::getProvider, normalizedProvider);
-        UserPushToken existingToken = userPushTokenRepository.selectOne(wrapper);
-
-        if (existingToken != null) {
-            existingToken.setDeviceType(canonicalDeviceType);
-            existingToken.setRegistrationId(normalizedRegistrationId);
-            existingToken.setProvider(normalizedProvider);
-            existingToken.setChannel(normalizedChannel);
-            existingToken.setAppVersion(request.getAppVersion());
-            existingToken.setDeviceModel(request.getDeviceModel());
-            existingToken.setOsVersion(request.getOsVersion());
-            existingToken.setEnabled(EnableStatus.ENABLED);
-            existingToken.setUpdatedAt(new Date());
-            userPushTokenRepository.updateById(existingToken);
-            log.info("更新推送Token成功 - userId={}, tokenId={}, provider={}, registrationId={}",
-                    currentUserId, existingToken.getId(), normalizedProvider,
+        Date now = new Date();
+        int affectedRows = updatePushTokenByUniqueKey(currentUserId, normalizedRegistrationId, normalizedProvider,
+                canonicalDeviceType, normalizedChannel, request, now);
+        if (affectedRows > 0) {
+            log.info("更新推送Token成功 - userId={}, affectedRows={}, provider={}, registrationId={}",
+                    currentUserId, affectedRows, normalizedProvider,
                     PushProviderUtil.maskToken(normalizedRegistrationId));
-        } else {
-            UserPushToken token = new UserPushToken();
-            token.setUserId(currentUserId);
-            token.setDeviceType(canonicalDeviceType);
-            token.setRegistrationId(normalizedRegistrationId);
-            token.setProvider(normalizedProvider);
-            token.setChannel(normalizedChannel);
-            token.setAppVersion(request.getAppVersion());
-            token.setDeviceModel(request.getDeviceModel());
-            token.setOsVersion(request.getOsVersion());
-            token.setEnabled(EnableStatus.ENABLED);
-            token.setCreatedAt(new Date());
-            token.setUpdatedAt(new Date());
+            return ApiResponse.success("注册成功", null);
+        }
+
+        try {
+            UserPushToken token = buildPushToken(currentUserId, canonicalDeviceType, normalizedRegistrationId,
+                    normalizedProvider, normalizedChannel, request, now);
             userPushTokenRepository.insert(token);
             log.info("新增推送Token成功 - userId={}, tokenId={}, provider={}, registrationId={}",
                     currentUserId, token.getId(), normalizedProvider,
+                    PushProviderUtil.maskToken(normalizedRegistrationId));
+        } catch (RuntimeException e) {
+            if (!isDuplicatePushTokenException(e)) {
+                throw e;
+            }
+
+            log.warn("注册推送Token遇到并发重复键，回退为更新 - userId={}, provider={}, registrationId={}",
+                    currentUserId, normalizedProvider, PushProviderUtil.maskToken(normalizedRegistrationId));
+            int fallbackRows = updatePushTokenByUniqueKey(currentUserId, normalizedRegistrationId, normalizedProvider,
+                    canonicalDeviceType, normalizedChannel, request, now);
+            if (fallbackRows <= 0) {
+                throw e;
+            }
+            log.info("并发更新推送Token成功 - userId={}, affectedRows={}, provider={}, registrationId={}",
+                    currentUserId, fallbackRows, normalizedProvider,
                     PushProviderUtil.maskToken(normalizedRegistrationId));
         }
 
@@ -132,7 +134,7 @@ public class PushController {
         String normalizedProvider = null;
         if (StringUtils.hasText(provider) || StringUtils.hasText(channel) || StringUtils.hasText(deviceType)) {
             normalizedProvider = PushProviderUtil.resolvePreferredProvider(
-                    deviceType, provider, channel, pushProvider, iosPushProvider);
+                    deviceType, provider, channel, pushProvider, iosPushProvider, enableBothProviders);
         }
 
         log.info("注销推送Token - userId={}, provider={}, registrationId={}",
@@ -157,6 +159,85 @@ public class PushController {
                 currentUserId, affectedRows, normalizedProvider, PushProviderUtil.maskToken(normalizedRegistrationId));
 
         return ApiResponse.success("注销成功", null);
+    }
+
+    private void logProviderOverrideIfNeeded(Long userId,
+                                             String deviceType,
+                                             String requestProvider,
+                                             String requestChannel,
+                                             String resolvedProvider) {
+        if (enableBothProviders) {
+            return;
+        }
+
+        String rawProvider = PushProviderUtil.normalizeProvider(requestProvider);
+        String rawChannel = PushProviderUtil.normalizeProvider(requestChannel);
+        String requestedProvider = rawProvider != null ? rawProvider : rawChannel;
+        if (requestedProvider == null || requestedProvider.equals(resolvedProvider)) {
+            return;
+        }
+
+        log.info("推送provider已按配置强制覆盖 - userId={}, deviceType={}, requestedProvider={}, resolvedProvider={}, configuredProvider={}, configuredIosProvider={}",
+                userId, PushProviderUtil.canonicalDeviceType(deviceType), requestedProvider, resolvedProvider,
+                pushProvider, iosPushProvider);
+    }
+
+    private int updatePushTokenByUniqueKey(Long userId,
+                                           String registrationId,
+                                           String provider,
+                                           String deviceType,
+                                           String channel,
+                                           RegisterPushTokenRequest request,
+                                           Date now) {
+        LambdaUpdateWrapper<UserPushToken> updateWrapper = new LambdaUpdateWrapper<>();
+        updateWrapper.eq(UserPushToken::getUserId, userId)
+                .eq(UserPushToken::getRegistrationId, registrationId)
+                .eq(UserPushToken::getProvider, provider)
+                .set(UserPushToken::getDeviceType, deviceType)
+                .set(UserPushToken::getChannel, channel)
+                .set(UserPushToken::getAppVersion, request.getAppVersion())
+                .set(UserPushToken::getDeviceModel, request.getDeviceModel())
+                .set(UserPushToken::getOsVersion, request.getOsVersion())
+                .set(UserPushToken::getEnabled, EnableStatus.ENABLED)
+                .set(UserPushToken::getUpdatedAt, now);
+        return userPushTokenRepository.update(null, updateWrapper);
+    }
+
+    private UserPushToken buildPushToken(Long userId,
+                                         String deviceType,
+                                         String registrationId,
+                                         String provider,
+                                         String channel,
+                                         RegisterPushTokenRequest request,
+                                         Date now) {
+        UserPushToken token = new UserPushToken();
+        token.setUserId(userId);
+        token.setDeviceType(deviceType);
+        token.setRegistrationId(registrationId);
+        token.setProvider(provider);
+        token.setChannel(channel);
+        token.setAppVersion(request.getAppVersion());
+        token.setDeviceModel(request.getDeviceModel());
+        token.setOsVersion(request.getOsVersion());
+        token.setEnabled(EnableStatus.ENABLED);
+        token.setCreatedAt(now);
+        token.setUpdatedAt(now);
+        return token;
+    }
+
+    private boolean isDuplicatePushTokenException(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof SQLIntegrityConstraintViolationException) {
+                return true;
+            }
+            String message = current.getMessage();
+            if (message != null && message.contains("uk_user_registration_provider")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     /**

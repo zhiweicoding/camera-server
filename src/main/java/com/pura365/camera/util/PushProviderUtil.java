@@ -32,16 +32,34 @@ public final class PushProviderUtil {
                                                   String channel,
                                                   String configuredProvider,
                                                   String configuredIosProvider) {
-        String resolved = normalizeProvider(provider);
-        if (resolved != null) {
-            return resolved;
+        return resolvePreferredProvider(deviceType, provider, channel, configuredProvider, configuredIosProvider, true);
+    }
+
+    public static String resolvePreferredProvider(String deviceType,
+                                                  String provider,
+                                                  String channel,
+                                                  String configuredProvider,
+                                                  String configuredIosProvider,
+                                                  boolean allowClientProvider) {
+        if (allowClientProvider) {
+            String resolved = normalizeProvider(provider);
+            if (resolved != null) {
+                return resolved;
+            }
+
+            resolved = normalizeProvider(channel);
+            if (resolved != null) {
+                return resolved;
+            }
         }
 
-        resolved = normalizeProvider(channel);
-        if (resolved != null) {
-            return resolved;
-        }
+        return resolveConfiguredProvider(deviceType, configuredProvider, configuredIosProvider);
+    }
 
+    public static String resolveConfiguredProvider(String deviceType,
+                                                   String configuredProvider,
+                                                   String configuredIosProvider) {
+        String resolved;
         if ("ios".equals(normalizeDeviceType(deviceType))) {
             resolved = normalizeProvider(configuredIosProvider);
             if (resolved != null) {
