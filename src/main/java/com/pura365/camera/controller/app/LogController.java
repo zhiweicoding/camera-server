@@ -1,9 +1,12 @@
 package com.pura365.camera.controller.app;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pura365.camera.domain.AppLog;
+import com.pura365.camera.domain.User;
 import com.pura365.camera.model.ApiResponse;
 import com.pura365.camera.repository.AppLogRepository;
+import com.pura365.camera.repository.UserRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
@@ -28,6 +31,9 @@ public class LogController {
 
     @Autowired
     private AppLogRepository appLogRepository;
+
+    @Autowired
+    private UserRepository userRepository;
 
     /**
      * 批量上传日志
@@ -54,15 +60,7 @@ public class LogController {
     public ApiResponse<Map<String, Object>> uploadLogs(@RequestBody Map<String, Object> body) {
         try {
             String deviceId = (String) body.get("device_id");
-            Object userIdObj = body.get("user_id");
-            Long userId = null;
-            if (userIdObj != null) {
-                if (userIdObj instanceof Number) {
-                    userId = ((Number) userIdObj).longValue();
-                } else if (userIdObj instanceof String && !((String) userIdObj).isEmpty()) {
-                    userId = Long.parseLong((String) userIdObj);
-                }
-            }
+            Long userId = resolveUserId(body.get("user_id"));
             String appVersion = (String) body.get("app_version");
             String deviceModel = (String) body.get("device_model");
             String osVersion = (String) body.get("os_version");
@@ -138,6 +136,45 @@ public class LogController {
             logger.error("日志上传失败: {}", e.getMessage(), e);
             return ApiResponse.error(500, "日志上传失败: " + e.getMessage());
         }
+    }
+
+    private Long resolveUserId(Object userIdObj) {
+        if (userIdObj == null) {
+            return null;
+        }
+        if (userIdObj instanceof Number) {
+            return ((Number) userIdObj).longValue();
+        }
+        if (!(userIdObj instanceof String)) {
+            logger.warn("日志上传 user_id 类型不支持: type={}, value={}",
+                userIdObj.getClass().getName(), userIdObj);
+            return null;
+        }
+
+        String rawUserId = ((String) userIdObj).trim();
+        if (rawUserId.isEmpty()) {
+            return null;
+        }
+
+        try {
+            return Long.parseLong(rawUserId);
+        } catch (NumberFormatException ignored) {
+            // 兼容业务 UID，例如 user_1770205330900
+        }
+
+        try {
+            LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
+            wrapper.eq(User::getUid, rawUserId).last("LIMIT 1");
+            User user = userRepository.selectOne(wrapper);
+            if (user != null) {
+                return user.getId();
+            }
+            logger.warn("日志上传 user_id 未匹配到用户，按空值处理: {}", rawUserId);
+        } catch (Exception e) {
+            logger.warn("日志上传 user_id 解析失败，按空值处理: {}, error={}", rawUserId, e.getMessage());
+        }
+
+        return null;
     }
 
     /**
