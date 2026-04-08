@@ -115,8 +115,8 @@ public class DeviceController {
     @GetMapping
     public ApiResponse<List<DeviceListItemVO>> listDevices(
             @RequestAttribute("currentUserId") Long currentUserId,
-            @Parameter(description = "默认会短等当前离线设备的最新探测结果，传false可跳过等待")
-            @RequestParam(value = "forceRefresh", required = false, defaultValue = "true") Boolean forceRefresh,
+            @Parameter(description = "默认不等待离线设备探测结果，手动刷新时传true可短等最新探测结果")
+            @RequestParam(value = "forceRefresh", required = false, defaultValue = "false") Boolean forceRefresh,
             @Parameter(description = "forceRefresh 的兼容别名")
             @RequestParam(value = "refresh", required = false) Boolean refresh) {
         boolean shouldForceRefresh = Boolean.TRUE.equals(forceRefresh) || Boolean.TRUE.equals(refresh);

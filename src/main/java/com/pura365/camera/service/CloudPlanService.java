@@ -540,10 +540,14 @@ public class CloudPlanService {
             typeNameMap.put("motion", "动态录像");
             typeNameMap.put("fulltime", "全天录像");
             typeNameMap.put("traffic", "4G流量");
+            typeNameMap.put("traffic_cloud", "4G流量及动态云存");
+            typeNameMap.put("ai_alert", "AI告警服务");
         } else {
             typeNameMap.put("motion", "Motion Recording");
             typeNameMap.put("fulltime", "24/7 Recording");
             typeNameMap.put("traffic", "4G Data");
+            typeNameMap.put("traffic_cloud", "4G Data & Cloud Storage");
+            typeNameMap.put("ai_alert", "AI Alert Service");
         }
         return typeNameMap;
     }

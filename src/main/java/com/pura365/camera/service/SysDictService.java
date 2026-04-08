@@ -50,7 +50,7 @@ public class SysDictService {
      * 获取所有分类
      */
     public List<String> listCategories() {
-        return Arrays.asList("network_lens", "device_form", "special_req", "reserved", "assembler_code");
+        return Arrays.asList("network_lens", "device_form", "special_req", "reserved", "assembler_code", "app_config");
     }
 
     /**
@@ -110,6 +110,16 @@ public class SysDictService {
         qw.lambda().eq(SysDict::getCategory, category)
                 .eq(SysDict::getCode, code);
         return dictRepository.selectOne(qw);
+    }
+
+    /**
+     * 检查 app_config 分类下的开关是否启用
+     * @param code 配置代码，如 "ios_review_mode"
+     * @return true 表示启用，false 表示禁用或不存在
+     */
+    public boolean isAppConfigEnabled(String code) {
+        SysDict dict = getByCategoryAndCode("app_config", code);
+        return dict != null && dict.getStatus() == EnableStatus.ENABLED;
     }
 
     /**

@@ -99,8 +99,6 @@ public class MqttMessageService {
     
     private MqttClient mqttClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
-
-    private final String SSID = "SGhome";
     
     @PostConstruct
     public void init() {
@@ -1096,21 +1094,6 @@ public class MqttMessageService {
      */
     public void registerDeviceSsid(String deviceId, String ssid) {
         deviceSsidService.saveSsid(deviceId, ssid);
-    }
-
-    // 把你日志里的那串16进制粘过来
-    private static final String HEX = "3479 7bc3 bd97 30f5 b9bb f6dc 74ba 6273 3a64 81c6 5703 4f31 64ce d7b4 909c b03a cae1 228a 79fc 6a36 bbe9 0db3 88ee 1cc0 84eb 128f 5f06 b438 ffa4 9609 d41b 240e 43ae e6b9 b3ac 63e7 db29 a83a f3f7 e421";
-
-
-
-    private static byte[] hexToBytes(String hex) {
-        hex = hex.replace(" ", "").trim();
-        int len = hex.length();
-        byte[] out = new byte[len / 2];
-        for (int i = 0; i < len; i += 2) {
-            out[i / 2] = (byte) Integer.parseInt(hex.substring(i, i + 2), 16);
-        }
-        return out;
     }
 
 }

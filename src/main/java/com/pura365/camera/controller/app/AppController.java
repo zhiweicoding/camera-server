@@ -8,6 +8,7 @@ import com.pura365.camera.model.ApiResponse;
 import com.pura365.camera.repository.AppVersionRepository;
 import com.pura365.camera.repository.UserDeviceRepository;
 import com.pura365.camera.service.DeviceProductionService;
+import com.pura365.camera.service.SysDictService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -43,6 +44,9 @@ public class AppController {
 
     @Autowired
     private AppVersionRepository appVersionRepository;
+
+    @Autowired
+    private SysDictService sysDictService;
 
     @Value("${app.startup.firebase.android-enabled:false}")
     private boolean firebaseAndroidEnabled;
@@ -99,6 +103,7 @@ public class AppController {
             data.put("app_store_url", "");
             data.put("platform", normalizedPlatform);
             data.put("enable_firebase", enableFirebase);
+            data.put("ios_review_mode", isIosReviewMode(normalizedPlatform));
             return ApiResponse.success(data);
         }
 
@@ -133,6 +138,7 @@ public class AppController {
         data.put("release_date", releaseDate);
         data.put("platform", normalizedPlatform);
         data.put("enable_firebase", enableFirebase);
+        data.put("ios_review_mode", isIosReviewMode(normalizedPlatform));
         return ApiResponse.success(data);
     }
 
@@ -141,6 +147,13 @@ public class AppController {
             return firebaseIosEnabled;
         }
         return firebaseAndroidEnabled;
+    }
+
+    private boolean isIosReviewMode(String normalizedPlatform) {
+        if (!"ios".equals(normalizedPlatform)) {
+            return false;
+        }
+        return sysDictService.isAppConfigEnabled("ios_review_mode");
     }
 
     private String sanitizeVersion(String version, String fallback) {
