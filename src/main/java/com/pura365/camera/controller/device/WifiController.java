@@ -72,6 +72,10 @@ public class WifiController {
             BindingStatusVO result = wifiService.bindDevice(currentUserId, request);
             log.info("[WiFi] 设备绑定成功, userId={}, deviceId={}", currentUserId, result.getDeviceId());
             return ApiResponse.success(result);
+        } catch (IllegalStateException e) {
+            log.warn("[WiFi] 设备绑定冲突, userId={}, deviceSn={}, reason={}",
+                    currentUserId, request.getDeviceSn(), e.getMessage());
+            return ApiResponse.error(409, e.getMessage());
         } catch (Exception e) {
             log.error("[WiFi] 设备绑定失败, userId={}, deviceSn={}", 
                     currentUserId, request.getDeviceSn(), e);

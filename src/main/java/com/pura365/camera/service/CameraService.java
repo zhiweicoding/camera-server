@@ -280,6 +280,9 @@ public class CameraService {
         // 删除云视频数据库记录（cloud_video 表）
         int deletedVideos = deleteCloudVideos(deviceId);
         log.info("已删除云视频记录 - ID: {}, 删除数量: {}", deviceId, deletedVideos);
+
+        int deletedMessages = messageService.deleteMessagesByDevice(deviceId);
+        log.info("已删除设备消息记录 - ID: {}, 删除数量: {}", deviceId, deletedMessages);
     }
     
     /**

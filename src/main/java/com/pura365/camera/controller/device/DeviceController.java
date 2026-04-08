@@ -166,9 +166,14 @@ public class DeviceController {
             return ApiResponse.error(HTTP_BAD_REQUEST, MSG_DEVICE_ID_REQUIRED);
         }
 
-        DeviceVO device = deviceService.addDevice(currentUserId, request);
-        log.info("添加设备成功 - userId={}, deviceId={}", currentUserId, request.getDeviceId());
-        return ApiResponse.success(device);
+        try {
+            DeviceVO device = deviceService.addDevice(currentUserId, request);
+            log.info("添加设备成功 - userId={}, deviceId={}", currentUserId, request.getDeviceId());
+            return ApiResponse.success(device);
+        } catch (IllegalStateException e) {
+            log.warn("添加设备失败 - userId={}, deviceId={}, reason={}", currentUserId, request.getDeviceId(), e.getMessage());
+            return ApiResponse.error(409, e.getMessage());
+        }
     }
 
     /**
@@ -204,14 +209,19 @@ public class DeviceController {
             @Parameter(description = "设备ID") @PathVariable("id") String deviceId,
             @Valid @RequestBody UpdateDeviceRequest request) {
         log.info("更新设备 - userId={}, deviceId={}, request={}", currentUserId, deviceId, request);
-        DeviceVO device = deviceService.updateDevice(deviceId, request, currentUserId);
-        if (device == null) {
-            log.warn("更新设备失败，设备不存在 - userId={}, deviceId={}", currentUserId, deviceId);
-            return ApiResponse.error(HTTP_NOT_FOUND, MSG_DEVICE_NOT_FOUND);
-        }
+        try {
+            DeviceVO device = deviceService.updateDevice(deviceId, request, currentUserId);
+            if (device == null) {
+                log.warn("更新设备失败，设备不存在 - userId={}, deviceId={}", currentUserId, deviceId);
+                return ApiResponse.error(HTTP_NOT_FOUND, MSG_DEVICE_NOT_FOUND);
+            }
 
-        log.info("更新设备成功 - userId={}, deviceId={}", currentUserId, deviceId);
-        return ApiResponse.success(device);
+            log.info("更新设备成功 - userId={}, deviceId={}", currentUserId, deviceId);
+            return ApiResponse.success(device);
+        } catch (IllegalStateException e) {
+            log.warn("更新设备失败，无权限 - userId={}, deviceId={}, reason={}", currentUserId, deviceId, e.getMessage());
+            return ApiResponse.error(HTTP_FORBIDDEN, e.getMessage());
+        }
     }
 
     /**

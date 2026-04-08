@@ -22,10 +22,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.Date;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -78,6 +80,8 @@ public class WifiService {
         String deviceSn = request.getDeviceSn();
         log.info("开始设备绑定流程, userId={}, deviceSn={}, wifiSsid={}", 
                 userId, deviceSn, request.getWifiSsid());
+
+        ensureDeviceCanBindAsOwner(userId, deviceSn);
         
         // 1. 创建或更新设备
         Device device = createOrUpdateDevice(deviceSn, request);
@@ -203,6 +207,31 @@ public class WifiService {
         ud.setRole(UserDeviceRole.OWNER);
         ud.setPermission(DeviceSharePermission.FULL_CONTROL);
         userDeviceRepository.insert(ud);
+    }
+
+    private void ensureDeviceCanBindAsOwner(Long userId, String deviceSn) {
+        if (userId == null || !StringUtils.hasText(deviceSn)) {
+            return;
+        }
+
+        QueryWrapper<UserDevice> ownerQuery = new QueryWrapper<>();
+        ownerQuery.lambda()
+                .eq(UserDevice::getDeviceId, deviceSn.trim())
+                .eq(UserDevice::getRole, UserDeviceRole.OWNER);
+        List<UserDevice> ownerBindings = userDeviceRepository.selectList(ownerQuery);
+        if (ownerBindings == null || ownerBindings.isEmpty()) {
+            return;
+        }
+
+        boolean occupiedByOtherUser = ownerBindings.stream()
+                .map(UserDevice::getUserId)
+                .filter(Objects::nonNull)
+                .anyMatch(ownerUserId -> !ownerUserId.equals(userId));
+        if (!occupiedByOtherUser) {
+            return;
+        }
+
+        throw new IllegalStateException("设备已绑定其他账号，请先在原账号解绑或重置设备");
     }
 
     private DeviceBinding createDeviceBinding(Long userId, String deviceSn, BindDeviceRequest request) {

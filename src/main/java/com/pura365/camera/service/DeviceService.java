@@ -21,8 +21,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.text.SimpleDateFormat;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -62,12 +60,6 @@ public class DeviceService {
      */
     private static final int MQTT_CODE_PTZ = 99;
     
-
-    /**
-     * ISO8601 时间格式化器
-     */
-    private static final DateTimeFormatter ISO_FORMATTER =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC);
 
     @Autowired
     private DeviceRepository deviceRepository;
@@ -175,6 +167,7 @@ public class DeviceService {
      */
     public DeviceVO addDevice(Long userId, AddDeviceRequest request) {
         String deviceId = request.getDeviceId();
+        ensureDeviceCanBindAsOwner(userId, deviceId);
 
         // 创建或更新设备
         Device device = deviceRepository.selectById(deviceId);
@@ -217,6 +210,9 @@ public class DeviceService {
 
         log.info("用户 {} 解绑设备 {}", userId, deviceId);
 
+        int deletedMessages = messageService.deleteMessagesByUserAndDevice(userId, deviceId);
+        log.info("用户 {} 解绑设备 {} 后清理消息 {} 条", userId, deviceId, deletedMessages);
+
         // 仅当该设备已无任何用户绑定时，才删除设备表数据
         LambdaQueryWrapper<UserDevice> remainingBindingsQuery = new LambdaQueryWrapper<>();
         remainingBindingsQuery.eq(UserDevice::getDeviceId, deviceId);
@@ -243,6 +239,10 @@ public class DeviceService {
             return null;
         }
 
+        if (!hasUserDevice(userId, deviceId)) {
+            throw new IllegalStateException("无权操作该设备");
+        }
+
         boolean updated = false;
         if (StringUtils.hasText(request.getName())) {
             device.setName(request.getName());
@@ -262,22 +262,6 @@ public class DeviceService {
         if (updated) {
             deviceRepository.updateById(device);
         }
-        QueryWrapper<UserDevice> qw = new QueryWrapper<>();
-        qw.lambda().eq(UserDevice::getUserId, userId)
-                .eq(UserDevice::getDeviceId, deviceId);
-
-        if (userDeviceRepository.selectCount(qw) != 0) {
-            // 删除之前绑定关系 重新绑定
-            userDeviceRepository.delete(qw);
-            log.error("用户设备绑定关系已存在, userId={}, deviceSn={}", userId, deviceId);
-        }
-        log.info("创建用户设备绑定关系, userId={}, deviceSn={}", userId, deviceId);
-        UserDevice ud = new UserDevice();
-        ud.setUserId(userId);
-        ud.setDeviceId(deviceId);
-        ud.setRole(UserDeviceRole.OWNER);
-        ud.setPermission(DeviceSharePermission.FULL_CONTROL);
-        userDeviceRepository.insert(ud);
 
         return buildDeviceVO(device);
     }
@@ -576,6 +560,30 @@ public class DeviceService {
         ud.setRole(UserDeviceRole.OWNER);
         ud.setPermission(DeviceSharePermission.FULL_CONTROL);
         userDeviceRepository.insert(ud);
+    }
+
+    private void ensureDeviceCanBindAsOwner(Long userId, String deviceId) {
+        if (userId == null || !StringUtils.hasText(deviceId)) {
+            return;
+        }
+
+        LambdaQueryWrapper<UserDevice> ownerQuery = new LambdaQueryWrapper<>();
+        ownerQuery.eq(UserDevice::getDeviceId, deviceId.trim())
+                .eq(UserDevice::getRole, UserDeviceRole.OWNER);
+        List<UserDevice> ownerBindings = userDeviceRepository.selectList(ownerQuery);
+        if (ownerBindings == null || ownerBindings.isEmpty()) {
+            return;
+        }
+
+        boolean occupiedByOtherUser = ownerBindings.stream()
+                .map(UserDevice::getUserId)
+                .filter(Objects::nonNull)
+                .anyMatch(ownerUserId -> !ownerUserId.equals(userId));
+        if (!occupiedByOtherUser) {
+            return;
+        }
+
+        throw new IllegalStateException("设备已绑定其他账号，请先在原账号解绑或重置设备");
     }
 
     /**

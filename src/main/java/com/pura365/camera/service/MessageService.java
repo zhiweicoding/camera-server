@@ -4,17 +4,19 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.AppMessage;
 import com.pura365.camera.domain.Device;
+import com.pura365.camera.domain.UserDevice;
 import com.pura365.camera.enums.DeviceOnlineStatus;
 import com.pura365.camera.model.MessageListResponse;
 import com.pura365.camera.model.MessageVO;
 import com.pura365.camera.repository.AppMessageRepository;
 import com.pura365.camera.repository.DeviceRepository;
+import com.pura365.camera.repository.UserDeviceRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -27,8 +29,6 @@ import java.util.stream.Collectors;
 public class MessageService {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MessageService.class);
-    private static final DateTimeFormatter ISO_FORMATTER = 
-            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC);
     private static final String TYPE_DEVICE_STATUS = "device_status";
     private static final String TYPE_EVENT = "event";
     private static final Set<String> STATUS_NOTIFICATION_TITLES = Collections.unmodifiableSet(
@@ -37,20 +37,27 @@ public class MessageService {
 
     private final AppMessageRepository appMessageRepository;
     private final DeviceRepository deviceRepository;
+    private final UserDeviceRepository userDeviceRepository;
     private final JPushService jPushService;
     private final StringRedisTemplate stringRedisTemplate;
     private final long motionPushCooldownSeconds;
+    private final DateTimeFormatter messageTimeFormatter;
 
     public MessageService(AppMessageRepository appMessageRepository,
                           DeviceRepository deviceRepository,
+                          UserDeviceRepository userDeviceRepository,
                           JPushService jPushService,
                           StringRedisTemplate stringRedisTemplate,
-                          @Value("${push.motion.cooldown-seconds:20}") long motionPushCooldownSeconds) {
+                          @Value("${push.motion.cooldown-seconds:20}") long motionPushCooldownSeconds,
+                          @Value("${app.message.timezone:Asia/Shanghai}") String messageTimeZone) {
         this.appMessageRepository = appMessageRepository;
         this.deviceRepository = deviceRepository;
+        this.userDeviceRepository = userDeviceRepository;
         this.jPushService = jPushService;
         this.stringRedisTemplate = stringRedisTemplate;
         this.motionPushCooldownSeconds = motionPushCooldownSeconds;
+        this.messageTimeFormatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME
+                .withZone(resolveMessageZoneId(messageTimeZone));
     }
 
     /**
@@ -109,8 +116,37 @@ public class MessageService {
         wrapper.lambda()
                 .eq(AppMessage::getUserId, userId)
                 .eq(AppMessage::getIsRead, 0);
+        applyAccessibleDeviceFilter(wrapper, userId, null);
         excludeStatusNotifications(wrapper);
         return appMessageRepository.selectCount(wrapper).intValue();
+    }
+
+    /**
+     * 删除指定用户在某台设备下的消息，用于解绑后清理历史未读。
+     */
+    public int deleteMessagesByUserAndDevice(Long userId, String deviceId) {
+        if (userId == null || !StringUtils.hasText(deviceId)) {
+            return 0;
+        }
+
+        QueryWrapper<AppMessage> wrapper = new QueryWrapper<>();
+        wrapper.lambda()
+                .eq(AppMessage::getUserId, userId)
+                .eq(AppMessage::getDeviceId, deviceId.trim());
+        return appMessageRepository.delete(wrapper);
+    }
+
+    /**
+     * 删除某台设备的全部消息，用于 resetdevice 后全量清理。
+     */
+    public int deleteMessagesByDevice(String deviceId) {
+        if (!StringUtils.hasText(deviceId)) {
+            return 0;
+        }
+
+        QueryWrapper<AppMessage> wrapper = new QueryWrapper<>();
+        wrapper.lambda().eq(AppMessage::getDeviceId, deviceId.trim());
+        return appMessageRepository.delete(wrapper);
     }
 
     // ============== 私有方法 ==============
@@ -120,6 +156,7 @@ public class MessageService {
         LambdaQueryWrapper<AppMessage> lambda = qw.lambda();
 
         lambda.eq(AppMessage::getUserId, userId);
+        applyAccessibleDeviceFilter(qw, userId, deviceId);
 
         if (StringUtils.hasText(deviceId)) {
             lambda.eq(AppMessage::getDeviceId, deviceId);
@@ -137,6 +174,24 @@ public class MessageService {
         qw.orderByDesc("created_at");
 
         return qw;
+    }
+
+    private void applyAccessibleDeviceFilter(QueryWrapper<AppMessage> queryWrapper, Long userId, String deviceId) {
+        Set<String> boundDeviceIds = loadBoundDeviceIds(userId);
+
+        if (StringUtils.hasText(deviceId)) {
+            if (!boundDeviceIds.contains(deviceId.trim())) {
+                queryWrapper.apply("1 = 0");
+            }
+            return;
+        }
+
+        queryWrapper.and(w -> {
+            w.isNull("device_id").or().eq("device_id", "");
+            if (!boundDeviceIds.isEmpty()) {
+                w.or().in("device_id", boundDeviceIds);
+            }
+        });
     }
 
     private boolean isDeviceStatusType(String type) {
@@ -207,9 +262,39 @@ public class MessageService {
         vo.setIsRead(message.getIsRead() != null && message.getIsRead() == 1);
 
         if (message.getCreatedAt() != null) {
-            vo.setCreatedAt(ISO_FORMATTER.format(message.getCreatedAt().toInstant()));
+            vo.setCreatedAt(messageTimeFormatter.format(message.getCreatedAt().toInstant()));
         }
         return vo;
+    }
+
+    private Set<String> loadBoundDeviceIds(Long userId) {
+        if (userId == null) {
+            return Collections.emptySet();
+        }
+
+        LambdaQueryWrapper<UserDevice> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(UserDevice::getUserId, userId);
+        List<UserDevice> bindings = userDeviceRepository.selectList(wrapper);
+        if (bindings == null || bindings.isEmpty()) {
+            return Collections.emptySet();
+        }
+
+        return bindings.stream()
+                .map(UserDevice::getDeviceId)
+                .filter(StringUtils::hasText)
+                .map(String::trim)
+                .collect(Collectors.toSet());
+    }
+
+    private ZoneId resolveMessageZoneId(String messageTimeZone) {
+        if (StringUtils.hasText(messageTimeZone)) {
+            try {
+                return ZoneId.of(messageTimeZone.trim());
+            } catch (Exception e) {
+                log.warn("消息时间配置非法，回退 Asia/Shanghai - timezone={}", messageTimeZone, e);
+            }
+        }
+        return ZoneId.of("Asia/Shanghai");
     }
 
     /**
