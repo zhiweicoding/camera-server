@@ -78,6 +78,9 @@ public class DeviceService {
 
     @Autowired
     private MqttMessageService mqttMessageService;
+
+    @Autowired
+    private MessageService messageService;
     
     @Autowired
     private NetworkPairingStatusService pairingStatusService;
