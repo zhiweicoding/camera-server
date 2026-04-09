@@ -54,20 +54,25 @@ public class TrafficController {
             @RequestAttribute("currentUserId") Long currentUserId,
             @PathVariable("id") String deviceId) {
 
+        log.info("查询设备4G实时剩余流量 - userId={}, deviceId={}", currentUserId, deviceId);
         if (!StringUtils.hasText(deviceId)) {
+            log.warn("查询设备4G实时剩余流量失败 - deviceId为空, userId={}", currentUserId);
             return ApiResponse.error(400, "device_id 不能为空");
         }
         if (!hasUserDevice(currentUserId, deviceId)) {
+            log.warn("查询设备4G实时剩余流量失败 - 无权限, userId={}, deviceId={}", currentUserId, deviceId);
             return ApiResponse.error(403, "无权查看该设备");
         }
 
         Device device = deviceRepository.selectById(deviceId);
         if (device == null) {
+            log.warn("查询设备4G实时剩余流量失败 - 设备不存在, userId={}, deviceId={}", currentUserId, deviceId);
             return ApiResponse.error(404, "设备不存在");
         }
 
         String simId = findSimId(deviceId);
         if (!StringUtils.hasText(simId)) {
+            log.warn("查询设备4G实时剩余流量失败 - 未配置simId, userId={}, deviceId={}", currentUserId, deviceId);
             return ApiResponse.error(400, "该设备未配置 sim_id");
         }
 
@@ -88,6 +93,8 @@ public class TrafficController {
             } else {
                 responseData.put("raw", thirdResult);
             }
+            log.info("查询设备4G实时剩余流量成功 - userId={}, deviceId={}, simId={}, response={}",
+                    currentUserId, deviceId, simId, responseData);
             return ApiResponse.success(responseData);
         } catch (Exception e) {
             log.error("查询设备4G流量失败 - userId={}, deviceId={}", currentUserId, deviceId, e);
@@ -101,11 +108,16 @@ public class TrafficController {
             @RequestAttribute("currentUserId") Long currentUserId,
             @PathVariable("id") String deviceId) {
 
+        log.info("查询设备预览流量策略 - userId={}, deviceId={}", currentUserId, deviceId);
         TrafficPreviewPolicyService.PolicyEvaluation evaluation =
                 trafficPreviewPolicyService.evaluate(currentUserId, deviceId);
         if (!evaluation.isOk()) {
+            log.warn("查询设备预览流量策略失败 - userId={}, deviceId={}, httpStatus={}, error={}",
+                    currentUserId, deviceId, evaluation.getHttpStatus(), evaluation.getErrorMessage());
             return ApiResponse.error(evaluation.getHttpStatus(), evaluation.getErrorMessage());
         }
+        log.info("查询设备预览流量策略成功 - userId={}, deviceId={}, policy={}",
+                currentUserId, deviceId, evaluation.getPolicy());
         return ApiResponse.success(evaluation.getPolicy());
     }
 

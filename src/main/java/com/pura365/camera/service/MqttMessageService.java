@@ -3,11 +3,15 @@ package com.pura365.camera.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pura365.camera.domain.Device;
+import com.pura365.camera.domain.DeviceTrafficSim;
+import com.pura365.camera.domain.UserDevice;
 import com.pura365.camera.enums.DeviceOnlineStatus;
 import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.enums.SdCardStatus;
 import com.pura365.camera.model.mqtt.*;
 import com.pura365.camera.repository.DeviceRepository;
+import com.pura365.camera.repository.DeviceTrafficSimRepository;
+import com.pura365.camera.repository.UserDeviceRepository;
 import com.pura365.camera.util.TimeValidator;
 import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
@@ -22,6 +26,7 @@ import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import java.time.LocalDateTime;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -78,12 +83,21 @@ public class MqttMessageService {
     
     @Autowired
     private DeviceRepository deviceRepository;
+
+    @Autowired
+    private DeviceTrafficSimRepository deviceTrafficSimRepository;
     
     @Autowired
     private NetworkPairingStatusService pairingStatusService;
 
     @Autowired
     private RegionRoutingService regionRoutingService;
+
+    @Autowired
+    private UserDeviceRepository userDeviceRepository;
+
+    @Autowired
+    private MessageService messageService;
     
     // 缓存 WebRTC Offer：sid -> WebRtcMessage（最近一次）
     private final Map<String, WebRtcMessage> webrtcOfferCache = new ConcurrentHashMap<>();
@@ -268,6 +282,11 @@ public class MqttMessageService {
             case 148: // CODE 20 + 128: 遗言消息（设备断开连接）
                 handleDeviceWill(deviceId);
                 break;
+            case 147: // CODE 19 + 128: 固件升级状态响应
+                MqttFirmwareUpdateStatusMessage firmwareMsg =
+                        objectMapper.readValue(json, MqttFirmwareUpdateStatusMessage.class);
+                handleFirmwareUpdateStatus(firmwareMsg, deviceId);
+                break;
             case 157: // CODE 29 + 128: 灯泡配置设置响应
                 MqttBulbConfigMessage code29Resp = objectMapper.readValue(json, MqttBulbConfigMessage.class);
                 handleBulbConfigSetResponse(code29Resp, deviceId);
@@ -339,8 +358,8 @@ public class MqttMessageService {
      * 更新设备的完整状态信息到数据库，同时作为心跳响应更新在线状态
      */
     private void handleDeviceInfo(MqttDeviceInfoMessage msg, String deviceId) {
-        log.info("收到设备信息 - 设备: {}, WiFi: {}, RSSI: {}, 版本: {}, TF卡: {}", 
-                deviceId, msg.getWifiname(), msg.getWifirssi(), msg.getVer(), 
+        log.info("收到设备信息 - 设备: {}, WiFi: {}, RSSI: {}, 版本: {}, ICCID: {}, TF卡: {}",
+                deviceId, msg.getWifiname(), msg.getWifirssi(), msg.getVer(), msg.getIccid(),
                 msg.getSdstate() == 1 ? "有" : "无");
         
         // 设备响应了CODE11，从pending列表移除
@@ -369,8 +388,10 @@ public class MqttMessageService {
             if (msg.getVer() != null) {
                 device.setFirmwareVersion(msg.getVer());
             }
+            String iccid = null;
             if (msg.getIccid() != null && !msg.getIccid().trim().isEmpty()) {
-                device.setIccid(msg.getIccid().trim());
+                iccid = msg.getIccid().trim();
+                device.setIccid(iccid);
             }
             
             // 更新WiFi信号强度
@@ -418,8 +439,12 @@ public class MqttMessageService {
                 log.info("已创建设备 {} 信息记录", deviceId);
             } else {
                 deviceRepository.updateById(device);
-            log.info("已更新设备 {} 状态: SSID={}, RSSI={}, 版本={}, TF卡状态={}", 
-                        deviceId, msg.getWifiname(), msg.getWifirssi(), msg.getVer(), msg.getSdstate());
+                log.info("已更新设备 {} 状态: SSID={}, RSSI={}, 版本={}, ICCID={}, TF卡状态={}",
+                        deviceId, msg.getWifiname(), msg.getWifirssi(), msg.getVer(), iccid, msg.getSdstate());
+            }
+
+            if (iccid != null) {
+                syncTrafficSimMapping(deviceId, iccid);
             }
             
             // 通知等待者设备已响应
@@ -437,6 +462,35 @@ public class MqttMessageService {
             
         } catch (Exception e) {
             log.error("更新设备 {} 信息失败", deviceId, e);
+        }
+    }
+
+    private void syncTrafficSimMapping(String deviceId, String iccid) {
+        try {
+            LambdaQueryWrapper<DeviceTrafficSim> query = new LambdaQueryWrapper<>();
+            query.eq(DeviceTrafficSim::getDeviceId, deviceId);
+            DeviceTrafficSim existing = deviceTrafficSimRepository.selectOne(query);
+
+            Date now = new Date();
+            if (existing == null) {
+                DeviceTrafficSim mapping = new DeviceTrafficSim();
+                mapping.setDeviceId(deviceId);
+                mapping.setSimId(iccid);
+                mapping.setCreatedAt(now);
+                mapping.setUpdatedAt(now);
+                deviceTrafficSimRepository.insert(mapping);
+                log.info("已同步设备4G SIM映射 - deviceId={}, simId={}, action=insert", deviceId, iccid);
+                return;
+            }
+
+            boolean changed = existing.getSimId() == null || !iccid.equals(existing.getSimId().trim());
+            existing.setSimId(iccid);
+            existing.setUpdatedAt(now);
+            deviceTrafficSimRepository.updateById(existing);
+            log.info("已同步设备4G SIM映射 - deviceId={}, simId={}, action={}",
+                    deviceId, iccid, changed ? "update" : "refresh");
+        } catch (Exception e) {
+            log.error("同步设备4G SIM映射失败 - deviceId={}, simId={}", deviceId, iccid, e);
         }
     }
     
@@ -506,6 +560,69 @@ public class MqttMessageService {
         pendingProbeDevices.remove(deviceId);
         log.info("收到设备 {} 遗言消息，立即标记为离线", deviceId);
         markDeviceOffline(deviceId);
+    }
+
+    /**
+     * 处理固件升级状态响应(CODE 147)
+     * status=0 升级失败
+     * status=1 开始升级，设备随后会自动重启
+     */
+    private void handleFirmwareUpdateStatus(MqttFirmwareUpdateStatusMessage msg, String deviceId) {
+        log.info("收到设备 {} 固件升级状态响应 - uid={}, status={}",
+                deviceId, msg.getUid(), msg.getStatus());
+
+        touchDeviceHeartbeat(deviceId);
+
+        if (msg.getStatus() != null && msg.getStatus() == 0) {
+            notifyFirmwareUpdateFailed(deviceId);
+        }
+    }
+
+    private void touchDeviceHeartbeat(String deviceId) {
+        try {
+            Device device = deviceRepository.selectById(deviceId);
+            if (device == null) {
+                return;
+            }
+
+            LocalDateTime now = LocalDateTime.now();
+            device.setStatus(DeviceOnlineStatus.ONLINE);
+            device.setLastOnlineTime(now);
+            device.setLastHeartbeatTime(now);
+            device.setUpdatedAt(now);
+            deviceRepository.updateById(device);
+        } catch (Exception e) {
+            log.error("更新设备 {} 心跳时间失败", deviceId, e);
+        }
+    }
+
+    private void notifyFirmwareUpdateFailed(String deviceId) {
+        try {
+            LambdaQueryWrapper<UserDevice> wrapper = new LambdaQueryWrapper<>();
+            wrapper.eq(UserDevice::getDeviceId, deviceId);
+            List<UserDevice> relations = userDeviceRepository.selectList(wrapper);
+            if (relations == null || relations.isEmpty()) {
+                return;
+            }
+
+            for (UserDevice relation : relations) {
+                if (relation.getUserId() == null) {
+                    continue;
+                }
+                messageService.createMessageAndPush(
+                        relation.getUserId(),
+                        deviceId,
+                        "event",
+                        "固件升级失败",
+                        "设备固件升级失败，请稍后重试",
+                        null,
+                        null,
+                        true
+                );
+            }
+        } catch (Exception e) {
+            log.error("发送设备 {} 固件升级失败通知失败", deviceId, e);
+        }
     }
     
     /**
@@ -986,6 +1103,21 @@ public class MqttMessageService {
         
         sendToDevice(deviceId, msg, null);
         log.info("已发送WebRTC Candidate159到设备 {} - SID: {}", deviceId, sid);
+    }
+
+    /**
+     * 发送固件升级命令（CODE 19）
+     */
+    public void sendFirmwareUpdateCommand(String deviceId, String version, String path, String md5) throws Exception {
+        Map<String, Object> msg = new HashMap<>();
+        msg.put("code", 19);
+        msg.put("time", TimeValidator.getCurrentTimestamp());
+        msg.put("versoin", version);
+        msg.put("path", path);
+        msg.put("md5", md5);
+
+        sendToDevice(deviceId, msg, null);
+        log.info("已发送固件升级命令到设备 {} - version={}, path={}", deviceId, version, path);
     }
     
     /**

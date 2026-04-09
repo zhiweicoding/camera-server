@@ -4,6 +4,8 @@ import com.pura365.camera.model.ApiResponse;
 import com.pura365.camera.service.TrafficPreviewPolicyService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -38,6 +40,8 @@ import java.util.Map;
 @RequestMapping("/api/app/traffic")
 public class AppTrafficController {
 
+    private static final Logger log = LoggerFactory.getLogger(AppTrafficController.class);
+
     @Autowired
     private TrafficPreviewPolicyService trafficPreviewPolicyService;
 
@@ -56,11 +60,16 @@ public class AppTrafficController {
             @RequestAttribute("currentUserId") Long currentUserId,
             @PathVariable("id") String deviceId) {
 
+        log.info("查询设备4G套餐策略 - userId={}, deviceId={}", currentUserId, deviceId);
         TrafficPreviewPolicyService.PolicyEvaluation evaluation =
                 trafficPreviewPolicyService.evaluate(currentUserId, deviceId);
         if (!evaluation.isOk()) {
+            log.warn("查询设备4G套餐策略失败 - userId={}, deviceId={}, httpStatus={}, error={}",
+                    currentUserId, deviceId, evaluation.getHttpStatus(), evaluation.getErrorMessage());
             return ApiResponse.error(evaluation.getHttpStatus(), evaluation.getErrorMessage());
         }
+        log.info("查询设备4G套餐策略成功 - userId={}, deviceId={}, policy={}",
+                currentUserId, deviceId, evaluation.getPolicy());
         return ApiResponse.success(evaluation.getPolicy());
     }
 }

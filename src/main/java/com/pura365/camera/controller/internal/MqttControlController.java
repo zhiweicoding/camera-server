@@ -9,6 +9,7 @@ import com.pura365.camera.dto.BulbConfigResponse;
 import com.pura365.camera.model.ApiResponse;
 import com.pura365.camera.model.mqtt.MqttBulbConfigMessage;
 import com.pura365.camera.repository.DeviceRepository;
+import com.pura365.camera.service.FirmwareUpdateService;
 import com.pura365.camera.service.MqttMessageService;
 import com.pura365.camera.util.TimeValidator;
 import org.slf4j.Logger;
@@ -41,6 +42,9 @@ public class MqttControlController {
 
     @Autowired
     private DeviceRepository deviceRepository;
+
+    @Autowired
+    private FirmwareUpdateService firmwareUpdateService;
 
     /**
      * 请求设备信息（CODE 11）
@@ -128,6 +132,43 @@ public class MqttControlController {
             result.put("success", false);
             result.put("message", e.getMessage());
             return ResponseEntity.badRequest().body(result);
+        }
+    }
+
+    /**
+     * 固件 OTA 升级（CODE 19）
+     */
+    @Operation(summary = "升级设备固件", description = "自动选择同型号最新固件，通过 MQTT 下发 OTA 升级命令")
+    @PostMapping("/device/{deviceId}/ota")
+    public ApiResponse<Map<String, Object>> otaUpgradeDevice(@PathVariable String deviceId) {
+        log.info("请求升级设备 {} 固件", deviceId);
+
+        try {
+            FirmwareUpdateService.FirmwareUpgradeCommand command =
+                    firmwareUpdateService.prepareUpgradeCommand(deviceId);
+
+            mqttMessageService.sendFirmwareUpdateCommand(
+                    command.getDeviceId(),
+                    command.getTargetVersion(),
+                    command.getPath(),
+                    command.getMd5()
+            );
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("device_id", command.getDeviceId());
+            result.put("current_version", command.getCurrentVersion());
+            result.put("target_version", command.getTargetVersion());
+            result.put("path", command.getPath());
+            return ApiResponse.success("已发送固件升级指令", result);
+        } catch (IllegalArgumentException e) {
+            log.warn("设备 {} 固件升级参数错误: {}", deviceId, e.getMessage());
+            return ApiResponse.error(400, e.getMessage());
+        } catch (IllegalStateException e) {
+            log.warn("设备 {} 固件升级被拒绝: {}", deviceId, e.getMessage());
+            return ApiResponse.error(400, e.getMessage());
+        } catch (Exception e) {
+            log.error("设备 {} 固件升级失败", deviceId, e);
+            return ApiResponse.error(500, "固件升级失败，请稍后重试");
         }
     }
 
