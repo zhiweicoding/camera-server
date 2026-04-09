@@ -243,7 +243,14 @@ public class DeviceService {
         }
 
         if (!hasUserDevice(userId, deviceId)) {
-            throw new IllegalStateException("无权操作该设备");
+            if (request == null || !StringUtils.hasText(request.getName())) {
+                throw new IllegalStateException("无权操作该设备");
+            }
+
+            // 兼容旧版 App 的新增流程：命名页先于正式绑定落库。
+            ensureDeviceCanBindAsOwner(userId, deviceId);
+            bindUserDevice(userId, deviceId);
+            log.info("兼容模式下自动补绑设备 - userId={}, deviceId={}", userId, deviceId);
         }
 
         boolean updated = false;

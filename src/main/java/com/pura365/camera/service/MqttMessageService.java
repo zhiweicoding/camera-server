@@ -20,7 +20,6 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.HashMap;
@@ -46,6 +45,12 @@ public class MqttMessageService {
     
     @Value("${mqtt.broker.url:tcp://cam.pura365.cn:1883}")
     private String brokerUrl;
+
+    @Value("${mqtt.cn.broker.url:tcp://cam.pura365.cn:1883}")
+    private String chinaBrokerUrl;
+
+    @Value("${mqtt.oversea.broker.url:tcp://sp.pura365.cn:1883}")
+    private String overseaBrokerUrl;
     
     @Value("${mqtt.client.id:local-camera-server}")
     private String clientId;
@@ -55,9 +60,6 @@ public class MqttMessageService {
     
     @Value("${mqtt.password:123456}")
     private String password;
-
-    @Value("${device.health.offline-threshold:90}")
-    private long offlineThresholdSeconds;
 
     @Value("${device.probe.min-interval-ms:10000}")
     private long probeMinIntervalMs;
@@ -79,6 +81,9 @@ public class MqttMessageService {
     
     @Autowired
     private NetworkPairingStatusService pairingStatusService;
+
+    @Autowired
+    private RegionRoutingService regionRoutingService;
     
     // 缓存 WebRTC Offer：sid -> WebRtcMessage（最近一次）
     private final Map<String, WebRtcMessage> webrtcOfferCache = new ConcurrentHashMap<>();
@@ -127,7 +132,8 @@ public class MqttMessageService {
      * 连接到MQTT Broker
      */
     private void connectToMqtt() throws Exception {
-        mqttClient = new MqttClient(brokerUrl, clientId);
+        String activeBrokerUrl = resolveBrokerUrl();
+        mqttClient = new MqttClient(activeBrokerUrl, clientId);
         
         MqttConnectOptions options = new MqttConnectOptions();
         options.setCleanSession(true);
@@ -143,7 +149,9 @@ public class MqttMessageService {
         }
         
         mqttClient.connect(options);
-        log.info("已连接到MQTT Broker: {}", brokerUrl);
+        log.info("已连接到MQTT Broker: {}, regionOverride={}",
+                activeBrokerUrl,
+                regionRoutingService != null ? regionRoutingService.getOverrideRegion() : "unknown");
         
         // 设置消息回调
         mqttClient.setCallback(new org.eclipse.paho.client.mqttv3.MqttCallback() {
@@ -166,6 +174,14 @@ public class MqttMessageService {
         // 订阅所有设备主题（使用通配符）
         mqttClient.subscribe("camera/pura365/+/device", 0);
         log.info("已订阅主题: camera/pura365/+/device");
+    }
+
+    private String resolveBrokerUrl() {
+        if (regionRoutingService != null && regionRoutingService.hasExplicitOverride()) {
+            String overrideRegion = regionRoutingService.getOverrideRegion();
+            return regionRoutingService.isChina(overrideRegion) ? chinaBrokerUrl : overseaBrokerUrl;
+        }
+        return brokerUrl;
     }
     
     /**
@@ -680,15 +696,9 @@ public class MqttMessageService {
 
     /**
      * 处理一次探测超时。
-     * 近期有成功响应时忽略本次失败；否则累计失败次数，达到阈值后再标记离线。
+     * 直接累计失败次数，达到阈值后再标记离线。
      */
     public void handleProbeTimeout(String deviceId, String source) {
-        Device device = deviceRepository.selectById(deviceId);
-        if (device != null && wasSeenRecently(device)) {
-            log.info("设备 {} {}超时，但最近 {} 秒内有成功响应，忽略本次失败", deviceId, source, offlineThresholdSeconds);
-            return;
-        }
-
         int threshold = getOfflineFailureThreshold();
         int failureCount = probeFailureCounts.merge(deviceId, 1, Integer::sum);
         if (failureCount > threshold) {
@@ -738,22 +748,6 @@ public class MqttMessageService {
 
         Long lastProbeAt = lastProbeTimestamps.get(deviceId);
         return lastProbeAt != null && (System.currentTimeMillis() - lastProbeAt) < probeMinIntervalMs;
-    }
-
-    private boolean wasSeenRecently(Device device) {
-        if (offlineThresholdSeconds <= 0) {
-            return false;
-        }
-
-        LocalDateTime lastSeenAt = device.getLastHeartbeatTime();
-        if (lastSeenAt == null) {
-            lastSeenAt = device.getLastOnlineTime();
-        }
-        if (lastSeenAt == null) {
-            return false;
-        }
-
-        return Duration.between(lastSeenAt, LocalDateTime.now()).getSeconds() < offlineThresholdSeconds;
     }
 
     private int getOfflineFailureThreshold() {
