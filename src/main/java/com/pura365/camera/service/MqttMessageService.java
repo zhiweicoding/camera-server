@@ -64,7 +64,7 @@ public class MqttMessageService {
     @Value("${device.probe.min-interval-ms:10000}")
     private long probeMinIntervalMs;
 
-    @Value("${device.probe.offline-failure-threshold:3}")
+    @Value("${device.probe.offline-failure-threshold:2}")
     private int offlineFailureThreshold;
 
     @Value("${device.probe.response-timeout-ms:5000}")
