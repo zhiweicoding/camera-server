@@ -18,10 +18,16 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.util.Date;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 
 /**
  * 4G 流量接口（后端代理 LinksField）
@@ -32,6 +38,10 @@ import java.time.LocalDateTime;
 public class TrafficController {
 
     private static final Logger log = LoggerFactory.getLogger(TrafficController.class);
+    private static final long BYTES_PER_KB = 1024L;
+    private static final long BYTES_PER_MB = BYTES_PER_KB * 1024L;
+    private static final long BYTES_PER_GB = BYTES_PER_MB * 1024L;
+    private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'");
 
     @Autowired
     private UserDeviceRepository userDeviceRepository;
@@ -78,21 +88,7 @@ public class TrafficController {
 
         try {
             Map<String, Object> thirdResult = linksFieldTrafficService.queryRemainingData(simId);
-            Map<String, Object> responseData = new LinkedHashMap<String, Object>();
-            responseData.put("device_id", deviceId);
-            responseData.put("sim_id", simId);
-
-            Object thirdData = thirdResult.get("data");
-            if (thirdData instanceof Map<?, ?>) {
-                Map<?, ?> mapData = (Map<?, ?>) thirdData;
-                for (Map.Entry<?, ?> entry : mapData.entrySet()) {
-                    if (entry.getKey() != null) {
-                        responseData.put(String.valueOf(entry.getKey()), entry.getValue());
-                    }
-                }
-            } else {
-                responseData.put("raw", thirdResult);
-            }
+            Map<String, Object> responseData = buildTrafficResponse(deviceId, simId, thirdResult);
             log.info("查询设备4G实时剩余流量成功 - userId={}, deviceId={}, simId={}, response={}",
                     currentUserId, deviceId, simId, responseData);
             return ApiResponse.success(responseData);
@@ -190,5 +186,183 @@ public class TrafficController {
         query.lambda().eq(DeviceTrafficSim::getDeviceId, deviceId);
         DeviceTrafficSim mapping = deviceTrafficSimRepository.selectOne(query);
         return mapping == null ? null : mapping.getSimId();
+    }
+
+    private Map<String, Object> buildTrafficResponse(String deviceId,
+                                                     String simId,
+                                                     Map<String, Object> thirdResult) {
+        Map<String, Object> responseData = new LinkedHashMap<String, Object>();
+        responseData.put("device_id", deviceId);
+        responseData.put("sim_id", simId);
+
+        Object thirdData = thirdResult.get("data");
+        if (thirdData instanceof Map<?, ?>) {
+            responseData.put("query_source", "remaining_data");
+            Map<?, ?> mapData = (Map<?, ?>) thirdData;
+            for (Map.Entry<?, ?> entry : mapData.entrySet()) {
+                if (entry.getKey() != null) {
+                    responseData.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+            }
+            return responseData;
+        }
+
+        if (thirdData instanceof Iterable<?>) {
+            responseData.put("query_source", "bundles");
+            normalizeBundleData((Iterable<?>) thirdData, responseData);
+            responseData.put("raw", thirdResult);
+            return responseData;
+        }
+
+        responseData.put("query_source", "unknown");
+        responseData.put("raw", thirdResult);
+        return responseData;
+    }
+
+    private void normalizeBundleData(Iterable<?> bundles, Map<String, Object> responseData) {
+        long totalBytes = 0L;
+        long usedBytes = 0L;
+        int packageCount = 0;
+        boolean hasTotal = false;
+        boolean hasUsed = false;
+        Long startAt = null;
+        Long expireAt = null;
+
+        for (Object item : bundles) {
+            if (!(item instanceof Map<?, ?>)) {
+                continue;
+            }
+            packageCount++;
+            Map<?, ?> bundle = (Map<?, ?>) item;
+
+            if (packageCount == 1) {
+                copyBundleField(bundle, responseData, "id", "bundle_id");
+                copyBundleField(bundle, responseData, "order_id", "order_id");
+                copyBundleField(bundle, responseData, "status", "status");
+                copyBundleField(bundle, responseData, "type", "type");
+                copyBundleField(bundle, responseData, "use", "use");
+                copyBundleField(bundle, responseData, "period_unit", "period_unit");
+                copyBundleField(bundle, responseData, "period_number", "period_number");
+                copyBundleField(bundle, responseData, "current_cycle", "current_cycle");
+            }
+
+            Long limit = toLong(bundle.get("data_limit"));
+            if (limit != null && limit >= 0) {
+                totalBytes += limit;
+                hasTotal = true;
+            }
+
+            Long usage = toLong(bundle.get("current_cycle_usage"));
+            if (usage != null && usage >= 0) {
+                usedBytes += usage;
+                hasUsed = true;
+            }
+
+            Long bundleStartAt = firstPositiveLong(bundle.get("current_cycle_start_at"), bundle.get("start_at"));
+            if (bundleStartAt != null && (startAt == null || bundleStartAt < startAt.longValue())) {
+                startAt = bundleStartAt;
+            }
+
+            Long bundleExpireAt = firstPositiveLong(bundle.get("current_cycle_end_at"), bundle.get("end_at"));
+            if (bundleExpireAt != null && (expireAt == null || bundleExpireAt > expireAt.longValue())) {
+                expireAt = bundleExpireAt;
+            }
+        }
+
+        responseData.put("package_count", packageCount);
+        if (startAt != null) {
+            responseData.put("start_at", formatEpochMillis(startAt.longValue()));
+        }
+        if (expireAt != null) {
+            responseData.put("expire_at", formatEpochMillis(expireAt.longValue()));
+        }
+
+        if (hasTotal) {
+            responseData.put("total_data_bytes", totalBytes);
+            responseData.put("total_data", formatBytes(totalBytes));
+        }
+
+        if (hasUsed) {
+            responseData.put("used_data_bytes", usedBytes);
+            responseData.put("used_data", formatBytes(usedBytes));
+        }
+
+        if (hasTotal) {
+            long remainingBytes = hasUsed ? Math.max(0L, totalBytes - usedBytes) : totalBytes;
+            responseData.put("remaining_data_bytes", remainingBytes);
+            responseData.put("remaining_data", formatBytes(remainingBytes));
+            if (hasUsed && totalBytes > 0) {
+                responseData.put("usage_percent", round2(usedBytes * 100.0 / totalBytes));
+            }
+        }
+    }
+
+    private void copyBundleField(Map<?, ?> source, Map<String, Object> target, String sourceKey, String targetKey) {
+        Object value = source.get(sourceKey);
+        if (value != null) {
+            target.put(targetKey, value);
+        }
+    }
+
+    private Long firstPositiveLong(Object... values) {
+        if (values == null) {
+            return null;
+        }
+        for (Object value : values) {
+            Long parsed = toLong(value);
+            if (parsed != null && parsed.longValue() > 0L) {
+                return parsed;
+            }
+        }
+        return null;
+    }
+
+    private Long toLong(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        try {
+            return Long.parseLong(String.valueOf(value).trim());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String formatEpochMillis(long epochMillis) {
+        try {
+            return ISO_FORMATTER.format(Instant.ofEpochMilli(epochMillis).atZone(ZoneOffset.UTC));
+        } catch (Exception e) {
+            return String.valueOf(epochMillis);
+        }
+    }
+
+    private String formatBytes(long bytes) {
+        if (bytes < 0) {
+            return "--";
+        }
+
+        double value = bytes;
+        String unit = "B";
+        if (bytes >= BYTES_PER_GB) {
+            value = value / BYTES_PER_GB;
+            unit = "GB";
+        } else if (bytes >= BYTES_PER_MB) {
+            value = value / BYTES_PER_MB;
+            unit = "MB";
+        } else if (bytes >= BYTES_PER_KB) {
+            value = value / BYTES_PER_KB;
+            unit = "KB";
+        }
+
+        DecimalFormatSymbols symbols = DecimalFormatSymbols.getInstance(Locale.US);
+        DecimalFormat format = value >= 100 ? new DecimalFormat("0", symbols) : new DecimalFormat("0.##", symbols);
+        return format.format(value) + " " + unit;
+    }
+
+    private Double round2(double value) {
+        return Math.round(value * 100.0) / 100.0;
     }
 }

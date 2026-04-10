@@ -76,7 +76,13 @@ public class LinksFieldTrafficService {
             return queryRemainingDataByPath(client, simId, "remaining_data");
         } catch (RuntimeException e) {
             remainingError = e;
-            log.warn("LinksField remaining_data query failed, fallback to bundles, simId={}", simId, e);
+            if (shouldFallbackQuietly(e)) {
+                log.info("LinksField remaining_data unavailable, fallback to bundles, simId={}, reason={}",
+                        simId, abbreviate(e.getMessage(), 200));
+            } else {
+                log.warn("LinksField remaining_data query failed, fallback to bundles, simId={}, reason={}",
+                        simId, abbreviate(e.getMessage(), 200), e);
+            }
         }
 
         try {
@@ -273,6 +279,14 @@ public class LinksFieldTrafficService {
                 || "success".equalsIgnoreCase(normalized)
                 || "ok".equalsIgnoreCase(normalized)
                 || "CB-00-0000".equalsIgnoreCase(normalized);
+    }
+
+    private boolean shouldFallbackQuietly(RuntimeException e) {
+        if (e == null || !StringUtils.hasText(e.getMessage())) {
+            return false;
+        }
+        String message = e.getMessage();
+        return message.contains("CB-99-9404") || message.contains("企业未授权");
     }
 
     private String abbreviate(String text, int maxLength) {
