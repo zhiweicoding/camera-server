@@ -1112,7 +1112,7 @@ public class MqttMessageService {
         Map<String, Object> msg = new HashMap<>();
         msg.put("code", 19);
         msg.put("time", TimeValidator.getCurrentTimestamp());
-        msg.put("versoin", version);
+        msg.put("version", version);
         msg.put("path", path);
         msg.put("md5", md5);
 
