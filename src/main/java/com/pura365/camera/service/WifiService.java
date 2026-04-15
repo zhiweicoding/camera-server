@@ -3,6 +3,7 @@ package com.pura365.camera.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.Device;
 import com.pura365.camera.domain.DeviceBinding;
+import com.pura365.camera.domain.ManufacturedDevice;
 import com.pura365.camera.domain.UserDevice;
 import com.pura365.camera.domain.WifiHistory;
 import com.pura365.camera.enums.DeviceBindingStatus;
@@ -15,6 +16,7 @@ import com.pura365.camera.model.wifi.BindingStatusVO;
 import com.pura365.camera.model.wifi.WifiInfoVO;
 import com.pura365.camera.repository.DeviceBindingRepository;
 import com.pura365.camera.repository.DeviceRepository;
+import com.pura365.camera.repository.ManufacturedDeviceRepository;
 import com.pura365.camera.repository.UserDeviceRepository;
 import com.pura365.camera.repository.WifiHistoryRepository;
 import lombok.RequiredArgsConstructor;
@@ -43,6 +45,7 @@ public class WifiService {
     private final DeviceRepository deviceRepository;
     private final UserDeviceRepository userDeviceRepository;
     private final DeviceBindingRepository deviceBindingRepository;
+    private final ManufacturedDeviceRepository manufacturedDeviceRepository;
 
     /**
      * 获取用户WiFi历史记录
@@ -91,6 +94,7 @@ public class WifiService {
         
         // 3. 创建绑定记录
         DeviceBinding binding = createDeviceBinding(userId, deviceSn, request);
+        markManufacturedDeviceActivatedIfAbsent(deviceSn);
         
         // 4. 保存WiFi历史
         saveWifiHistory(userId, request.getWifiSsid());
@@ -249,6 +253,26 @@ public class WifiService {
         log.info("绑定记录创建成功, userId={}, deviceSn={}, bindingId={}", 
                 userId, deviceSn, binding.getId());
         return binding;
+    }
+
+    private void markManufacturedDeviceActivatedIfAbsent(String deviceSn) {
+        if (!StringUtils.hasText(deviceSn)) {
+            return;
+        }
+
+        QueryWrapper<ManufacturedDevice> queryWrapper = new QueryWrapper<>();
+        queryWrapper.lambda()
+                .eq(ManufacturedDevice::getDeviceId, deviceSn)
+                .last("LIMIT 1");
+        ManufacturedDevice manufacturedDevice = manufacturedDeviceRepository.selectOne(queryWrapper);
+        if (manufacturedDevice == null || manufacturedDevice.getActivatedAt() != null) {
+            return;
+        }
+
+        Date now = new Date();
+        manufacturedDevice.setActivatedAt(now);
+        manufacturedDevice.setUpdatedAt(now);
+        manufacturedDeviceRepository.updateById(manufacturedDevice);
     }
 
     private void saveWifiHistory(Long userId, String wifiSsid) {

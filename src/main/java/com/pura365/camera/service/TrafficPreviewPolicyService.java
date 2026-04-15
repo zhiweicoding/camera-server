@@ -4,12 +4,15 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.CloudPlan;
 import com.pura365.camera.domain.CloudSubscription;
 import com.pura365.camera.domain.Device;
+import com.pura365.camera.domain.DeviceBinding;
 import com.pura365.camera.domain.DeviceTrafficSim;
 import com.pura365.camera.domain.ManufacturedDevice;
 import com.pura365.camera.domain.UserDevice;
+import com.pura365.camera.enums.DeviceBindingStatus;
 import com.pura365.camera.enums.DeviceOnlineStatus;
 import com.pura365.camera.repository.CloudPlanRepository;
 import com.pura365.camera.repository.CloudSubscriptionRepository;
+import com.pura365.camera.repository.DeviceBindingRepository;
 import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.repository.DeviceTrafficSimRepository;
 import com.pura365.camera.repository.ManufacturedDeviceRepository;
@@ -63,6 +66,9 @@ public class TrafficPreviewPolicyService {
 
     @Autowired
     private CloudPlanRepository cloudPlanRepository;
+
+    @Autowired
+    private DeviceBindingRepository deviceBindingRepository;
 
     @Autowired
     private ManufacturedDeviceRepository manufacturedDeviceRepository;
@@ -456,8 +462,15 @@ public class TrafficPreviewPolicyService {
     }
 
     private LocalDateTime resolveTrialStartAt(String deviceId, Device device, ManufacturedDevice manufacturedDevice) {
+        LocalDateTime firstSuccessfulBindingAt = findFirstSuccessfulBindingAt(deviceId);
+        if (firstSuccessfulBindingAt != null) {
+            backfillActivatedAtIfAbsent(manufacturedDevice, firstSuccessfulBindingAt);
+            return firstSuccessfulBindingAt;
+        }
+
         LocalDateTime firstBindAt = findFirstBindAt(deviceId);
         if (firstBindAt != null) {
+            backfillActivatedAtIfAbsent(manufacturedDevice, firstBindAt);
             return firstBindAt;
         }
         if (manufacturedDevice != null && manufacturedDevice.getActivatedAt() != null) {
@@ -467,6 +480,35 @@ public class TrafficPreviewPolicyService {
             return device.getCreatedAt();
         }
         return null;
+    }
+
+    private LocalDateTime findFirstSuccessfulBindingAt(String deviceId) {
+        if (!StringUtils.hasText(deviceId)) {
+            return null;
+        }
+
+        QueryWrapper<DeviceBinding> query = new QueryWrapper<>();
+        query.lambda()
+                .eq(DeviceBinding::getDeviceId, deviceId)
+                .eq(DeviceBinding::getStatus, DeviceBindingStatus.SUCCESS)
+                .orderByAsc(DeviceBinding::getCreatedAt)
+                .last("LIMIT 1");
+        DeviceBinding firstBinding = deviceBindingRepository.selectOne(query);
+        if (firstBinding == null || firstBinding.getCreatedAt() == null) {
+            return null;
+        }
+        return toLocalDateTime(firstBinding.getCreatedAt());
+    }
+
+    private void backfillActivatedAtIfAbsent(ManufacturedDevice manufacturedDevice, LocalDateTime trialStartAt) {
+        if (manufacturedDevice == null || manufacturedDevice.getActivatedAt() != null || trialStartAt == null) {
+            return;
+        }
+
+        Date activatedAt = toDate(trialStartAt);
+        manufacturedDevice.setActivatedAt(activatedAt);
+        manufacturedDevice.setUpdatedAt(new Date());
+        manufacturedDeviceRepository.updateById(manufacturedDevice);
     }
 
     private LocalDateTime findFirstBindAt(String deviceId) {

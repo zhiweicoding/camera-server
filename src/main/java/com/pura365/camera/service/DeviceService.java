@@ -35,6 +35,8 @@ import java.util.stream.Collectors;
 public class DeviceService {
 
     private static final Logger log = LoggerFactory.getLogger(DeviceService.class);
+    private static final String FREE_TRIAL_PLAN_ID = "free-trial-7d";
+    private static final String FREE_TRIAL_PLAN_NAME = "7天免费试用";
 
     @Value("${device.list.refresh-wait-timeout-ms:5000}")
     private long listRefreshWaitTimeoutMs;
@@ -75,6 +77,9 @@ public class DeviceService {
 
     @Autowired
     private DeviceBindingRepository deviceBindingRepository;
+
+    @Autowired
+    private ManufacturedDeviceRepository manufacturedDeviceRepository;
 
     @Autowired
     private MqttMessageService mqttMessageService;
@@ -187,6 +192,7 @@ public class DeviceService {
 
         // 记录绑定信息
         saveDeviceBinding(userId, request);
+        markManufacturedDeviceActivatedIfAbsent(deviceId);
 
         // 构建响应
         return buildDeviceVO(device);
@@ -468,7 +474,7 @@ public class DeviceService {
                 device.getLastOnlineTime().toString() : null);
         vo.setLastHeartbeatAt(device.getLastHeartbeatTime() != null ?
                 device.getLastHeartbeatTime().toString() : null);
-        vo.setFreeCloudClaimed(device.getFreeCloudClaimed() != null && device.getFreeCloudClaimed() == 1);
+        vo.setFreeCloudClaimed(hasClaimedFreeCloud(device));
 
         return vo;
     }
@@ -617,6 +623,24 @@ public class DeviceService {
         }
     }
 
+    private void markManufacturedDeviceActivatedIfAbsent(String deviceId) {
+        if (!StringUtils.hasText(deviceId)) {
+            return;
+        }
+
+        LambdaQueryWrapper<ManufacturedDevice> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(ManufacturedDevice::getDeviceId, deviceId).last("LIMIT 1");
+        ManufacturedDevice manufacturedDevice = manufacturedDeviceRepository.selectOne(queryWrapper);
+        if (manufacturedDevice == null || manufacturedDevice.getActivatedAt() != null) {
+            return;
+        }
+
+        Date now = new Date();
+        manufacturedDevice.setActivatedAt(now);
+        manufacturedDevice.setUpdatedAt(now);
+        manufacturedDeviceRepository.updateById(manufacturedDevice);
+    }
+
     /**
      * 查询设备的有效云存储订阅（云存跟着设备走，不区分用户）
      */
@@ -626,6 +650,24 @@ public class DeviceService {
                 .orderByDesc(CloudSubscription::getExpireAt)
                 .last("LIMIT 1");
         return cloudSubscriptionRepository.selectOne(queryWrapper);
+    }
+
+    private boolean hasClaimedFreeCloud(Device device) {
+        if (device == null || !StringUtils.hasText(device.getId())) {
+            return false;
+        }
+        if (device.getFreeCloudClaimed() != null && device.getFreeCloudClaimed() == 1) {
+            return true;
+        }
+
+        QueryWrapper<CloudSubscription> queryWrapper = new QueryWrapper<>();
+        queryWrapper.lambda()
+                .eq(CloudSubscription::getDeviceId, device.getId())
+                .and(wrapper -> wrapper.eq(CloudSubscription::getPlanId, FREE_TRIAL_PLAN_ID)
+                        .or()
+                        .eq(CloudSubscription::getPlanName, FREE_TRIAL_PLAN_NAME))
+                .last("LIMIT 1");
+        return cloudSubscriptionRepository.selectOne(queryWrapper) != null;
     }
 
     /**

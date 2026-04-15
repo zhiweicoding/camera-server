@@ -9,6 +9,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pura365.camera.domain.CloudPlan;
 import com.pura365.camera.domain.CloudSubscription;
+import com.pura365.camera.domain.Device;
 import com.pura365.camera.domain.UserDevice;
 import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.model.ApiResponse;
@@ -50,6 +51,8 @@ public class CloudController {
     private static final String USD_CURRENCY = "USD";
     private static final String LANG_ZH = "zh";
     private static final String LANG_EN = "en";
+    private static final String FREE_TRIAL_PLAN_ID = "free-trial-7d";
+    private static final String FREE_TRIAL_PLAN_NAME = "7天免费试用";
 
     @Autowired
     private CloudPlanRepository cloudPlanRepository;
@@ -452,12 +455,12 @@ public class CloudController {
         }
         
         // 检查设备是否已领取
-        com.pura365.camera.domain.Device device = deviceRepository.selectById(deviceId);
+        Device device = deviceRepository.selectById(deviceId);
         if (device == null) {
             return ApiResponse.error(404, "设备不存在");
         }
-        
-        if (device.getFreeCloudClaimed() != null && device.getFreeCloudClaimed() == 1) {
+
+        if (hasClaimedFreeTrial(deviceId, device)) {
             return ApiResponse.error(400, "该设备已领取过免费云存储");
         }
         
@@ -465,8 +468,8 @@ public class CloudController {
         CloudSubscription subscription = new CloudSubscription();
         subscription.setUserId(currentUserId);
         subscription.setDeviceId(deviceId);
-        subscription.setPlanId("free-trial-7d");
-        subscription.setPlanName("7天免费试用");
+        subscription.setPlanId(FREE_TRIAL_PLAN_ID);
+        subscription.setPlanName(FREE_TRIAL_PLAN_NAME);
         
         // 设置7天后过期
         Calendar calendar = Calendar.getInstance();
@@ -487,6 +490,30 @@ public class CloudController {
         response.setExpireAt(formatIsoTime(subscription.getExpireAt()));
         
         return ApiResponse.success(response);
+    }
+
+    private boolean hasClaimedFreeTrial(String deviceId, Device device) {
+        if (device != null && device.getFreeCloudClaimed() != null && device.getFreeCloudClaimed() == 1) {
+            return true;
+        }
+
+        QueryWrapper<CloudSubscription> query = new QueryWrapper<>();
+        query.lambda()
+                .eq(CloudSubscription::getDeviceId, deviceId)
+                .and(wrapper -> wrapper.eq(CloudSubscription::getPlanId, FREE_TRIAL_PLAN_ID)
+                        .or()
+                        .eq(CloudSubscription::getPlanName, FREE_TRIAL_PLAN_NAME))
+                .last("LIMIT 1");
+        CloudSubscription historicalTrial = cloudSubscriptionRepository.selectOne(query);
+        if (historicalTrial == null) {
+            return false;
+        }
+
+        if (device != null && (device.getFreeCloudClaimed() == null || device.getFreeCloudClaimed() != 1)) {
+            device.setFreeCloudClaimed(1);
+            deviceRepository.updateById(device);
+        }
+        return true;
     }
 
     // ===== 云存储清理测试接口 =====
