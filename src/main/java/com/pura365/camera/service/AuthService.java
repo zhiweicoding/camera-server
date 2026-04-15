@@ -382,9 +382,12 @@ public class AuthService {
             // Apple 首次登录时可能返回用户名称
             String nickname = null;
             if (userInfo != null) {
+                String fullName = userInfo.get("fullName");
                 String firstName = userInfo.get("firstName");
                 String lastName = userInfo.get("lastName");
-                if (firstName != null || lastName != null) {
+                if (fullName != null && !fullName.trim().isEmpty()) {
+                    nickname = fullName.trim();
+                } else if (firstName != null || lastName != null) {
                     nickname = ((firstName != null ? firstName : "") + " " + (lastName != null ? lastName : "")).trim();
                 }
                 // 首次登录时 email 可能在 userInfo 中

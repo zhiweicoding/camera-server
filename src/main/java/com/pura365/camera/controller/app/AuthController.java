@@ -180,21 +180,25 @@ public class AuthController {
     public ApiResponse<?> loginByApple(@RequestBody Map<String, String> body) {
         try {
             String identityToken = body.get("identity_token");
-            if (identityToken == null) {
+            if (!StringUtils.hasText(identityToken)) {
                 return ApiResponse.error(400, "identity_token 不能为空");
             }
+            String fullName = body.get("full_name");
             String firstName = body.get("first_name");
             String lastName = body.get("last_name");
             String email = body.get("email");
 
             Map<String, String> userInfo = new HashMap<>();
-            if (firstName != null) {
+            if (StringUtils.hasText(fullName)) {
+                userInfo.put("fullName", fullName.trim());
+            }
+            if (StringUtils.hasText(firstName)) {
                 userInfo.put("firstName", firstName);
             }
-            if (lastName != null) {
+            if (StringUtils.hasText(lastName)) {
                 userInfo.put("lastName", lastName);
             }
-            if (email != null) {
+            if (StringUtils.hasText(email)) {
                 userInfo.put("email", email);
             }
 

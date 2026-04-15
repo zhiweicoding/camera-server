@@ -20,6 +20,7 @@ import com.pura365.camera.repository.CloudVideoRepository;
 import com.pura365.camera.repository.UserDeviceRepository;
 import com.pura365.camera.service.CloudStorageService;
 import com.pura365.camera.service.CloudVideoCleanupService;
+import com.pura365.camera.util.CloudTrialUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,8 +52,6 @@ public class CloudController {
     private static final String USD_CURRENCY = "USD";
     private static final String LANG_ZH = "zh";
     private static final String LANG_EN = "en";
-    private static final String FREE_TRIAL_PLAN_ID = "free-trial-7d";
-    private static final String FREE_TRIAL_PLAN_NAME = "7天免费试用";
 
     @Autowired
     private CloudPlanRepository cloudPlanRepository;
@@ -330,8 +329,8 @@ public class CloudController {
         response.setIsSubscribed(isSubscribed);
         response.setAutoRenew(sub != null && sub.getAutoRenew() != null && sub.getAutoRenew() == 1);
         if (isSubscribed && sub != null) {
-            response.setPlanId(sub.getPlanId());
-            response.setPlanName(sub.getPlanName());
+            response.setPlanId(CloudTrialUtils.normalizePlanId(sub.getPlanId(), sub.getPlanName()));
+            response.setPlanName(CloudTrialUtils.normalizePlanName(sub.getPlanId(), sub.getPlanName()));
             response.setExpireAt(sub.getExpireAt() != null ? formatIsoTime(sub.getExpireAt()) : null);
         } else {
             response.setPlanId(null);
@@ -436,9 +435,9 @@ public class CloudController {
     }
 
     /**
-     * 领取免费7天云存储 - POST /cloud/claim-free
+     * 领取免费7天动态录像云存储 - POST /cloud/claim-free
      */
-    @Operation(summary = "领取免费7天云存储", description = "用户首次领取7天免费云存储，每台设备只能领取一次")
+    @Operation(summary = "领取免费7天云存储", description = "用户首次领取7天免费动态录像云存储，每台设备只能领取一次")
     @PostMapping("/claim-free")
     public ApiResponse<ClaimFreeCloudResponse> claimFreeTrial(@RequestAttribute("currentUserId") Long currentUserId,
                                                               @RequestBody ClaimFreeCloudRequest request) {
@@ -468,8 +467,8 @@ public class CloudController {
         CloudSubscription subscription = new CloudSubscription();
         subscription.setUserId(currentUserId);
         subscription.setDeviceId(deviceId);
-        subscription.setPlanId(FREE_TRIAL_PLAN_ID);
-        subscription.setPlanName(FREE_TRIAL_PLAN_NAME);
+        subscription.setPlanId(CloudTrialUtils.MOTION_FREE_TRIAL_PLAN_ID);
+        subscription.setPlanName(CloudTrialUtils.MOTION_FREE_TRIAL_PLAN_NAME);
         
         // 设置7天后过期
         Calendar calendar = Calendar.getInstance();
@@ -500,9 +499,9 @@ public class CloudController {
         QueryWrapper<CloudSubscription> query = new QueryWrapper<>();
         query.lambda()
                 .eq(CloudSubscription::getDeviceId, deviceId)
-                .and(wrapper -> wrapper.eq(CloudSubscription::getPlanId, FREE_TRIAL_PLAN_ID)
+                .and(wrapper -> wrapper.in(CloudSubscription::getPlanId, CloudTrialUtils.freeTrialPlanIds())
                         .or()
-                        .eq(CloudSubscription::getPlanName, FREE_TRIAL_PLAN_NAME))
+                        .in(CloudSubscription::getPlanName, CloudTrialUtils.freeTrialPlanNames()))
                 .last("LIMIT 1");
         CloudSubscription historicalTrial = cloudSubscriptionRepository.selectOne(query);
         if (historicalTrial == null) {

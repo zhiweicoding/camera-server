@@ -10,6 +10,7 @@ import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.enums.UserDeviceRole;
 import com.pura365.camera.model.device.*;
 import com.pura365.camera.repository.*;
+import com.pura365.camera.util.CloudTrialUtils;
 import com.pura365.camera.util.TimeValidator;
 import com.pura365.camera.service.NetworkPairingStatusService;
 import org.slf4j.Logger;
@@ -35,8 +36,6 @@ import java.util.stream.Collectors;
 public class DeviceService {
 
     private static final Logger log = LoggerFactory.getLogger(DeviceService.class);
-    private static final String FREE_TRIAL_PLAN_ID = "free-trial-7d";
-    private static final String FREE_TRIAL_PLAN_NAME = "7天免费试用";
 
     @Value("${device.list.refresh-wait-timeout-ms:5000}")
     private long listRefreshWaitTimeoutMs;
@@ -663,9 +662,9 @@ public class DeviceService {
         QueryWrapper<CloudSubscription> queryWrapper = new QueryWrapper<>();
         queryWrapper.lambda()
                 .eq(CloudSubscription::getDeviceId, device.getId())
-                .and(wrapper -> wrapper.eq(CloudSubscription::getPlanId, FREE_TRIAL_PLAN_ID)
+                .and(wrapper -> wrapper.in(CloudSubscription::getPlanId, CloudTrialUtils.freeTrialPlanIds())
                         .or()
-                        .eq(CloudSubscription::getPlanName, FREE_TRIAL_PLAN_NAME))
+                        .in(CloudSubscription::getPlanName, CloudTrialUtils.freeTrialPlanNames()))
                 .last("LIMIT 1");
         return cloudSubscriptionRepository.selectOne(queryWrapper) != null;
     }

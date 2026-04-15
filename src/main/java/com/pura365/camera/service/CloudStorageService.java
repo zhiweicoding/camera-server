@@ -11,6 +11,7 @@ import com.pura365.camera.repository.CloudSubscriptionRepository;
 import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.domain.CloudPlan;
 import com.pura365.camera.domain.CloudSubscription;
+import com.pura365.camera.util.CloudTrialUtils;
 import com.qiniu.util.Auth;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -638,6 +639,11 @@ public class CloudStorageService {
         CloudPlan plan = cloudPlanRepository.selectOne(planWrapper);
         
         if (plan == null || plan.getStorageDays() == null) {
+            if (CloudTrialUtils.isFreeTrialPlan(subscription)) {
+                log.info("设备 {} 使用免费7天动态录像试用，按 {} 天存储处理",
+                        deviceId, CloudTrialUtils.FREE_TRIAL_STORAGE_DAYS);
+                return CloudTrialUtils.FREE_TRIAL_STORAGE_DAYS;
+            }
             log.warn("设备 {} 的套餐 {} 不存在或没有设置存储天数", deviceId, subscription.getPlanId());
             return 0;
         }

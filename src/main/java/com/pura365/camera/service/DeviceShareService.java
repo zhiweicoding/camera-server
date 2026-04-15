@@ -1,5 +1,6 @@
 package com.pura365.camera.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.EncodeHintType;
@@ -21,6 +22,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -55,14 +57,10 @@ public class DeviceShareService {
      * 检查用户是否是设备的拥有者
      */
     public boolean isDeviceOwner(Long userId, String deviceId) {
-        QueryWrapper<UserDevice> qw = new QueryWrapper<>();
-        qw.lambda().eq(UserDevice::getUserId, userId)
-                .eq(UserDevice::getDeviceId, deviceId)
-                .eq(UserDevice::getRole, UserDeviceRole.OWNER);
-        return userDeviceRepository.selectCount(qw) > 0;
+        return "owner".equals(checkPermission(userId, deviceId));
     }
 
-/**
+    /**
      * 生成分享码
      * @param ownerUserId 设备拥有者ID
      * @param deviceId 设备ID
@@ -292,18 +290,21 @@ public class DeviceShareService {
         }
 
         // 更新权限
-        QueryWrapper<UserDevice> qw = new QueryWrapper<>();
-        qw.lambda().eq(UserDevice::getUserId, targetUserId)
-                .eq(UserDevice::getDeviceId, deviceId)
-                .eq(UserDevice::getRole, UserDeviceRole.VIEWER);
-        UserDevice ud = userDeviceRepository.selectOne(qw);
-
-        if (ud == null) {
+        List<UserDevice> viewerBindings = listUserDeviceBindings(targetUserId, deviceId, UserDeviceRole.VIEWER);
+        if (viewerBindings.isEmpty()) {
             throw new RuntimeException("分享记录不存在");
         }
 
-        ud.setPermission(DeviceSharePermission.fromCode(permission));
-        userDeviceRepository.updateById(ud);
+        if (viewerBindings.size() > 1) {
+            log.warn("更新分享权限时检测到重复 viewer 绑定，userId={}, deviceId={}, count={}",
+                    targetUserId, deviceId, viewerBindings.size());
+        }
+
+        DeviceSharePermission updatedPermission = DeviceSharePermission.fromCode(permission);
+        for (UserDevice ud : viewerBindings) {
+            ud.setPermission(updatedPermission);
+            userDeviceRepository.updateById(ud);
+        }
 
         log.info("更新分享权限 - deviceId: {}, targetUserId: {}, permission: {}",
                 deviceId, targetUserId, permission);
@@ -316,20 +317,55 @@ public class DeviceShareService {
      * @return permission: view_only, full_control, owner, null(无权限)
      */
     public String checkPermission(Long userId, String deviceId) {
-        QueryWrapper<UserDevice> qw = new QueryWrapper<>();
-        qw.lambda().eq(UserDevice::getUserId, userId)
-                .eq(UserDevice::getDeviceId, deviceId);
-        UserDevice ud = userDeviceRepository.selectOne(qw);
-
-        if (ud == null) {
+        List<UserDevice> bindings = listUserDeviceBindings(userId, deviceId, null);
+        if (bindings.isEmpty()) {
             return null;
         }
 
-        if (UserDeviceRole.OWNER == ud.getRole()) {
+        if (bindings.size() > 1) {
+            log.warn("检测到重复设备绑定，按最高权限兜底判定，userId={}, deviceId={}, count={}",
+                    userId, deviceId, bindings.size());
+        }
+
+        boolean hasOwnerBinding = bindings.stream()
+                .anyMatch(binding -> UserDeviceRole.OWNER == binding.getRole());
+        if (hasOwnerBinding) {
             return "owner";
         }
 
-        return ud.getPermission() != null ? ud.getPermission().getCode() : null;
+        boolean hasFullControlBinding = bindings.stream()
+                .anyMatch(binding -> DeviceSharePermission.FULL_CONTROL == binding.getPermission());
+        if (hasFullControlBinding) {
+            return DeviceSharePermission.FULL_CONTROL.getCode();
+        }
+
+        boolean hasViewOnlyBinding = bindings.stream()
+                .anyMatch(binding -> DeviceSharePermission.VIEW_ONLY == binding.getPermission());
+        if (hasViewOnlyBinding) {
+            return DeviceSharePermission.VIEW_ONLY.getCode();
+        }
+
+        return bindings.stream()
+                .map(UserDevice::getPermission)
+                .filter(Objects::nonNull)
+                .map(DeviceSharePermission::getCode)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private List<UserDevice> listUserDeviceBindings(Long userId, String deviceId, UserDeviceRole role) {
+        if (userId == null || !StringUtils.hasText(deviceId)) {
+            return Collections.emptyList();
+        }
+
+        LambdaQueryWrapper<UserDevice> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(UserDevice::getUserId, userId)
+                .eq(UserDevice::getDeviceId, deviceId.trim());
+        if (role != null) {
+            queryWrapper.eq(UserDevice::getRole, role);
+        }
+        queryWrapper.orderByDesc(UserDevice::getId);
+        return userDeviceRepository.selectList(queryWrapper);
     }
 
     /**
