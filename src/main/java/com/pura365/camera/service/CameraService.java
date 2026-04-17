@@ -452,24 +452,7 @@ public class CameraService {
      */
     private boolean checkCloudStorageSubscription(String deviceId) {
         try {
-            QueryWrapper<CloudSubscription> qw = new QueryWrapper<>();
-            qw.lambda().eq(CloudSubscription::getDeviceId, deviceId)
-                    .orderByDesc(CloudSubscription::getExpireAt)
-                    .last("limit 1");
-            CloudSubscription subscription = cloudSubscriptionRepository.selectOne(qw);
-            
-            if (subscription == null) {
-                return false;
-            }
-            
-            // 检查是否过期
-            Date expireAt = subscription.getExpireAt();
-            if (expireAt == null) {
-                // 无过期时间，视为永久有效
-                return true;
-            }
-            
-            return expireAt.after(new Date());
+            return cloudStorageService.hasActiveSubscription(deviceId);
         } catch (Exception e) {
             log.error("检查云存储订阅状态失败 - deviceId: {}", deviceId, e);
             return false;
@@ -479,7 +462,8 @@ public class CameraService {
     /**
      * 配置云存储和S3凭证
      * 根据设备region选择七牛云（国内）或Vultr（国外）
-     * 注意：无论是否有订阅，都需要返回S3配置信息
+     * 仅在存在有效云存订阅时返回S3凭证。
+     * 设备页面已经显示过期时，继续下发凭证会导致摄像头仍然向云端写录像。
      */
     private void configureCloudStorage(Device device, GetInfoResponse response) {
         // 检查是否有有效订阅
@@ -492,9 +476,12 @@ public class CameraService {
             response.setCloudStorage(1);
         } else {
             response.setCloudStorage(0); // 未启用
+            clearCloudStorageCredentials(response);
+            log.info("设备 {} 云存储未启用或已过期，不再下发 S3 凭证", device.getId());
+            return;
         }
         
-        // 无论是否有订阅，都返回S3配置信息
+        // 仅对有效订阅设备返回S3配置信息
         // 判断设备区域
         boolean isChina = regionRoutingService.isChina(device.getRegion());
         
@@ -521,6 +508,14 @@ public class CameraService {
             
             log.info("配置Vultr S3凭证 - deviceId: {}, hasSubscription: {}", device.getId(), hasSubscription);
         }
+    }
+
+    private void clearCloudStorageCredentials(GetInfoResponse response) {
+        response.setS3Hostname(null);
+        response.setS3Region(null);
+        response.setS3Bucket(null);
+        response.setS3AccessKey(null);
+        response.setS3SecretKey(null);
     }
     
     /**

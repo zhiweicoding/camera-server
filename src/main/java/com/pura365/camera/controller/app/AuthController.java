@@ -193,13 +193,13 @@ public class AuthController {
                 userInfo.put("fullName", fullName.trim());
             }
             if (StringUtils.hasText(firstName)) {
-                userInfo.put("firstName", firstName);
+                userInfo.put("firstName", firstName.trim());
             }
             if (StringUtils.hasText(lastName)) {
-                userInfo.put("lastName", lastName);
+                userInfo.put("lastName", lastName.trim());
             }
             if (StringUtils.hasText(email)) {
-                userInfo.put("email", email);
+                userInfo.put("email", email.trim());
             }
 
             Map<String, Object> data = authService.loginByApple(identityToken, userInfo);

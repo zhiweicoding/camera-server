@@ -58,6 +58,11 @@ public class NetworkConfigController {
         try {
             // 1. 创建或更新设备记录（根据主键 deviceId）
             Device device = deviceRepository.selectById(request.getDeviceId());
+            String currentPairingStatus = pairingStatusService.getStatus(request.getDeviceId());
+            boolean deviceAlreadyOnline = device != null
+                    && DeviceOnlineStatus.ONLINE.equals(device.getStatus());
+            boolean keepSuccess = NetworkPairingStatusService.STATUS_SUCCESS.equals(currentPairingStatus)
+                    || deviceAlreadyOnline;
             if (device == null) {
                 device = new Device();
                 device.setId(request.getDeviceId());
@@ -81,14 +86,22 @@ public class NetworkConfigController {
             config.setRegion(request.getRegion());
             config.setConfigMethod(request.getConfigMethod());
             config.setConfigSource(request.getConfigSource());
-            config.setConfigStatus(0); // 0-配网中 1-成功 2-失败
+            config.setConfigStatus(keepSuccess ? 1 : 0); // 0-配网中 1-成功 2-失败
             networkConfigRepository.insert(config);
 
             // 3. 保存 SSID 到缓存，便于后续使用
             deviceSsidService.saveSsid(request.getDeviceId(), request.getSsid());
 
-            // 4. 设置配网状态为"配网中"（存储到Redis）
-            pairingStatusService.setPairing(request.getDeviceId());
+            // 4. 更新配网状态（存储到Redis）
+            // 4G 设备可能先连上 MQTT，再晚一点由 APP 提交配网信息。
+            // 此时如果无条件回写 PAIRING，会把已经成功的状态倒退，导致轮询超时。
+            if (keepSuccess) {
+                pairingStatusService.setSuccess(request.getDeviceId());
+                log.info("设备 {} 已处于成功状态（redisStatus={}, deviceOnline={}），保留SUCCESS，不回退到PAIRING",
+                        request.getDeviceId(), currentPairingStatus, deviceAlreadyOnline);
+            } else {
+                pairingStatusService.setPairing(request.getDeviceId());
+            }
 
             log.info("配网信息已保存 - 设备: {}", request.getDeviceId());
 

@@ -12,6 +12,7 @@ import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.domain.CloudPlan;
 import com.pura365.camera.domain.CloudSubscription;
 import com.pura365.camera.util.CloudTrialUtils;
+import com.pura365.camera.util.SubscriptionPlanUtils;
 import com.qiniu.util.Auth;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,6 +50,9 @@ import java.net.URI;
 import java.text.SimpleDateFormat;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.regex.Matcher;
@@ -62,6 +66,9 @@ import java.util.regex.Pattern;
 public class CloudStorageService {
 
     private static final Logger log = LoggerFactory.getLogger(CloudStorageService.class);
+    private static final Pattern DATE_FOLDER_PATTERN = Pattern.compile("/(\\d{4}-\\d{2}-\\d{2})/");
+    private static final Pattern FILE_TIME_PATTERN = Pattern.compile("^(\\d{2})(\\d{2})(\\d{2}).*");
+    private static final DateTimeFormatter DATE_FOLDER_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
     @Autowired
     private StorageConfig.QiniuConfig qiniuConfig;
@@ -189,6 +196,45 @@ public class CloudStorageService {
         }
         return trimmed.replaceAll("/$", "");
     }
+
+    /**
+     * 查询设备最新一条云存订阅（不区分用户，云存跟设备走）
+     */
+    public CloudSubscription getLatestSubscription(String deviceId) {
+        if (deviceId == null || deviceId.trim().isEmpty()) {
+            return null;
+        }
+
+        QueryWrapper<CloudSubscription> wrapper = new QueryWrapper<>();
+        wrapper.eq("device_id", deviceId)
+                .orderByDesc("expire_at")
+                .last("LIMIT 50");
+        List<CloudSubscription> subscriptions = cloudSubscriptionRepository.selectList(wrapper);
+        if (subscriptions == null || subscriptions.isEmpty()) {
+            return null;
+        }
+
+        for (CloudSubscription subscription : subscriptions) {
+            CloudPlan plan = findPlanByPlanId(subscription.getPlanId());
+            if (SubscriptionPlanUtils.grantsCloudStorage(subscription, plan)) {
+                return subscription;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 判断设备是否存在有效云存订阅
+     */
+    public boolean hasActiveSubscription(String deviceId) {
+        CloudSubscription subscription = getLatestSubscription(deviceId);
+        if (subscription == null) {
+            return false;
+        }
+
+        Date expireAt = subscription.getExpireAt();
+        return expireAt == null || expireAt.after(new Date());
+    }
     
     /**
      * 获取设备的云存储配置
@@ -198,6 +244,11 @@ public class CloudStorageService {
         Device device = deviceRepository.selectById(deviceId);
         if (device == null) {
             log.warn("设备不存在: {}", deviceId);
+            return null;
+        }
+
+        if (!hasActiveSubscription(deviceId)) {
+            log.warn("设备 {} 云存储已过期或未开通，拒绝返回云存储配置", deviceId);
             return null;
         }
 
@@ -233,6 +284,11 @@ public class CloudStorageService {
         Device device = deviceRepository.selectById(deviceId);
         if (device == null) {
             log.warn("设备不存在: {}", deviceId);
+            return null;
+        }
+
+        if (!hasActiveSubscription(deviceId)) {
+            log.warn("设备 {} 云存储已过期或未开通，拒绝生成上传凭证", deviceId);
             return null;
         }
 
@@ -304,6 +360,12 @@ public class CloudStorageService {
      */
     public boolean recordVideoUpload(String deviceId, VideoUploadNotifyRequest request) {
         try {
+            if (!hasActiveSubscription(deviceId)) {
+                log.warn("设备 {} 云存储已过期或未开通，忽略云录像入库 - key: {}",
+                    deviceId, request != null ? request.getKey() : null);
+                return false;
+            }
+
             CloudVideo video = new CloudVideo();
             
             // 生成视频ID
@@ -333,7 +395,11 @@ public class CloudStorageService {
                 video.setThumbnail(request.getThumbnail());
             }
             
-            video.setCreatedAt(new Date());
+            if (request.getStartTime() != null && request.getStartTime() > 0) {
+                video.setCreatedAt(new Date(request.getStartTime() * 1000L));
+            } else {
+                video.setCreatedAt(new Date());
+            }
             
             cloudVideoRepository.insert(video);
             
@@ -518,16 +584,22 @@ public class CloudStorageService {
         }
         video.put("video_url", videoUrl);
 
-        // 从文件名解析时间（假设文件名格式：1702012345678_xxx.mp4）
-        Date createdAt = obj.lastModified() != null
-            ? Date.from(obj.lastModified())
-            : parseTimeFromFileName(fileName);
+        ParsedVideoTime parsedVideoTime = parseRecordingStartTime(key, fileName);
+        // 优先使用录像开始时间；没有再回退到对象修改时间
+        Date createdAt = parsedVideoTime != null && parsedVideoTime.recordingStartAt != null
+            ? parsedVideoTime.recordingStartAt
+            : (obj.lastModified() != null ? Date.from(obj.lastModified()) : parseTimeFromFileName(fileName));
         video.put("created_at_date", createdAt);
 
         if (createdAt != null) {
             SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'");
             sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
             video.put("created_at", sdf.format(createdAt));
+        }
+        if (parsedVideoTime != null && parsedVideoTime.startTimeLocalText != null) {
+            // 录像开始时间用无时区本地格式返回，App 解析后会直接按该墙上时间显示，
+            // 避免再被手机时区换算成上传时间附近的其它时区时刻。
+            video.put("start_time", parsedVideoTime.startTimeLocalText);
         }
 
         // 默认值
@@ -586,6 +658,64 @@ public class CloudStorageService {
         }
         return new Date();
     }
+
+    private ParsedVideoTime parseRecordingStartTime(String key, String fileName) {
+        if (key == null || fileName == null) {
+            return null;
+        }
+
+        Date timestampDate = parseTimestampPrefixFromFileName(fileName);
+        if (timestampDate != null) {
+            ParsedVideoTime result = new ParsedVideoTime();
+            result.recordingStartAt = timestampDate;
+            result.startTimeLocalText = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss").format(timestampDate);
+            return result;
+        }
+
+        Matcher dateMatcher = DATE_FOLDER_PATTERN.matcher("/" + key);
+        Matcher fileTimeMatcher = FILE_TIME_PATTERN.matcher(fileName);
+        if (dateMatcher.find() && fileTimeMatcher.find()) {
+            try {
+                LocalDate date = LocalDate.parse(dateMatcher.group(1), DATE_FOLDER_FORMATTER);
+                int hour = Integer.parseInt(fileTimeMatcher.group(1));
+                int minute = Integer.parseInt(fileTimeMatcher.group(2));
+                int second = Integer.parseInt(fileTimeMatcher.group(3));
+                LocalDateTime localDateTime = LocalDateTime.of(date, LocalTime.of(hour, minute, second));
+
+                ParsedVideoTime result = new ParsedVideoTime();
+                result.recordingStartAt = Date.from(localDateTime.atZone(ZoneId.systemDefault()).toInstant());
+                result.startTimeLocalText = localDateTime.toString();
+                return result;
+            } catch (Exception e) {
+                log.debug("从文件路径解析录像开始时间失败 - key={}, fileName={}", key, fileName, e);
+            }
+        }
+
+        // 兼容旧格式：文件名前缀直接带 13 位时间戳
+        return null;
+    }
+
+    private Date parseTimestampPrefixFromFileName(String fileName) {
+        if (fileName == null || fileName.isEmpty()) {
+            return null;
+        }
+        Pattern pattern = Pattern.compile("^(\\d{13})_");
+        Matcher matcher = pattern.matcher(fileName);
+        if (!matcher.find()) {
+            return null;
+        }
+        try {
+            long timestamp = Long.parseLong(matcher.group(1));
+            return new Date(timestamp);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static class ParsedVideoTime {
+        private Date recordingStartAt;
+        private String startTimeLocalText;
+    }
     
     /**
      * 判断是否为视频文件
@@ -620,23 +750,19 @@ public class CloudStorageService {
      * @return 循环天数，如果没有订阅则返回0
      */
     public int getStorageDaysForDevice(String deviceId) {
-        // 查询设备的有效订阅
-        QueryWrapper<CloudSubscription> subWrapper = new QueryWrapper<>();
-        subWrapper.eq("device_id", deviceId)
-                .gt("expire_at", new Date()) // 未过期
-                .orderByDesc("expire_at")
-                .last("LIMIT 1");
-        CloudSubscription subscription = cloudSubscriptionRepository.selectOne(subWrapper);
-        
+        CloudSubscription subscription = getLatestSubscription(deviceId);
         if (subscription == null) {
             log.info("设备 {} 没有有效的云存储订阅", deviceId);
             return 0;
         }
+
+        if (subscription.getExpireAt() != null && !subscription.getExpireAt().after(new Date())) {
+            log.info("设备 {} 的云存储订阅已过期", deviceId);
+            return 0;
+        }
         
         // 查询套餐的存储天数
-        QueryWrapper<CloudPlan> planWrapper = new QueryWrapper<>();
-        planWrapper.eq("plan_id", subscription.getPlanId());
-        CloudPlan plan = cloudPlanRepository.selectOne(planWrapper);
+        CloudPlan plan = findPlanByPlanId(subscription.getPlanId());
         
         if (plan == null || plan.getStorageDays() == null) {
             if (CloudTrialUtils.isFreeTrialPlan(subscription)) {
@@ -649,6 +775,23 @@ public class CloudStorageService {
         }
         
         return plan.getStorageDays();
+    }
+
+    private CloudPlan findPlanByPlanId(String planId) {
+        if (planId == null || planId.trim().isEmpty()) {
+            return null;
+        }
+        QueryWrapper<CloudPlan> planWrapper = new QueryWrapper<>();
+        planWrapper.eq("plan_id", planId).last("LIMIT 1");
+        CloudPlan plan = cloudPlanRepository.selectOne(planWrapper);
+        if (plan != null) {
+            return plan;
+        }
+        try {
+            return cloudPlanRepository.selectById(Long.parseLong(planId));
+        } catch (Exception ignore) {
+            return null;
+        }
     }
 
     /**

@@ -21,6 +21,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.util.Date;
 import java.util.HashMap;
@@ -42,6 +43,7 @@ public class AuthService {
     private static final String AUTH_TYPE_WECHAT = "wechat";
     private static final String AUTH_TYPE_APPLE = "apple";
     private static final String AUTH_TYPE_GOOGLE = "google";
+    private static final int MAX_USERNAME_LENGTH = 50;
 
     @Autowired
     private UserRepository userRepository;
@@ -349,6 +351,7 @@ public class AuthService {
                 AUTH_TYPE_WECHAT, 
                 wechatUser.getOpenId(), 
                 wechatUser.getUnionId(), 
+                null,
                 wechatUser.getNickname(), 
                 wechatUser.getAvatar(), 
                 null, 
@@ -396,8 +399,19 @@ public class AuthService {
                 }
             }
 
+            String preferredUsername = buildApplePreferredUsername(nickname, email);
+
             // 查找或创建用户
-            User user = findOrCreateUserByOAuth(AUTH_TYPE_APPLE, openId, null, nickname, null, email, extraInfo);
+            User user = findOrCreateUserByOAuth(
+                    AUTH_TYPE_APPLE,
+                    openId,
+                    null,
+                    preferredUsername,
+                    nickname,
+                    null,
+                    email,
+                    extraInfo
+            );
 
             return buildLoginResult(user);
         } catch (RuntimeException e) {
@@ -426,7 +440,16 @@ public class AuthService {
             String extraInfo = googleUser.get("extraInfo");
 
             // 查找或创建用户
-            User user = findOrCreateUserByOAuth(AUTH_TYPE_GOOGLE, openId, null, nickname, avatar, email, extraInfo);
+            User user = findOrCreateUserByOAuth(
+                    AUTH_TYPE_GOOGLE,
+                    openId,
+                    null,
+                    null,
+                    nickname,
+                    avatar,
+                    email,
+                    extraInfo
+            );
 
             return buildLoginResult(user);
         } catch (RuntimeException e) {
@@ -454,7 +477,16 @@ public class AuthService {
             String extraInfo = googleUser.get("extraInfo");
 
             // 查找或创建用户
-            User user = findOrCreateUserByOAuth(AUTH_TYPE_GOOGLE, openId, null, nickname, avatar, email, extraInfo);
+            User user = findOrCreateUserByOAuth(
+                    AUTH_TYPE_GOOGLE,
+                    openId,
+                    null,
+                    null,
+                    nickname,
+                    avatar,
+                    email,
+                    extraInfo
+            );
 
             return buildLoginResult(user);
         } catch (RuntimeException e) {
@@ -469,8 +501,8 @@ public class AuthService {
      * 通过第三方登录查找或创建用户
      */
     private User findOrCreateUserByOAuth(String authType, String openId, String unionId,
-                                          String nickname, String avatar, String email,
-                                          String extraInfo) {
+                                         String preferredUsername, String nickname, String avatar, String email,
+                                         String extraInfo) {
         // 查找已有的第三方登录记录
         QueryWrapper<UserAuth> authQw = new QueryWrapper<>();
         authQw.lambda().eq(UserAuth::getAuthType, authType).eq(UserAuth::getOpenId, openId);
@@ -486,16 +518,7 @@ public class AuthService {
                 // 继续执行下面创建新用户的逻辑
             } else {
                 // 更新用户信息（如果有新的）
-                boolean needUpdate = false;
-                if (nickname != null && !nickname.isEmpty() && (user.getNickname() == null || user.getNickname().isEmpty())) {
-                    user.setNickname(nickname);
-                    needUpdate = true;
-                }
-                if (avatar != null && !avatar.isEmpty() && (user.getAvatar() == null || user.getAvatar().isEmpty())) {
-                    user.setAvatar(avatar);
-                    needUpdate = true;
-                }
-                if (needUpdate) {
+                if (fillOAuthUserProfileIfMissing(user, preferredUsername, nickname, avatar)) {
                     userRepository.updateById(user);
                 }
                 return user;
@@ -515,12 +538,17 @@ public class AuthService {
             user = new User();
             user.setUid("user_" + System.currentTimeMillis());
             user.setEmail(email);
+            if (StringUtils.hasText(preferredUsername)) {
+                user.setUsername(resolveAvailableUsername(preferredUsername, null));
+            }
             user.setNickname(nickname);
             user.setAvatar(avatar);
             // 第三方登录新建用户默认角色也是 1-流通用户
             user.setRole(1);
             userRepository.insert(user);
             log.info("创建新用户: id={}, authType={}, openId={}", user.getId(), authType, openId);
+        } else if (fillOAuthUserProfileIfMissing(user, preferredUsername, nickname, avatar)) {
+            userRepository.updateById(user);
         }
 
         // 创建第三方登录绑定记录
@@ -534,5 +562,87 @@ public class AuthService {
         log.info("创建第三方登录绑定: userId={}, authType={}, openId={}", user.getId(), authType, openId);
 
         return user;
+    }
+
+    private boolean fillOAuthUserProfileIfMissing(User user, String preferredUsername, String nickname, String avatar) {
+        boolean needUpdate = false;
+
+        if (StringUtils.hasText(preferredUsername) && !StringUtils.hasText(user.getUsername())) {
+            user.setUsername(resolveAvailableUsername(preferredUsername, user.getId()));
+            needUpdate = true;
+        }
+        if (StringUtils.hasText(nickname) && !StringUtils.hasText(user.getNickname())) {
+            user.setNickname(nickname.trim());
+            needUpdate = true;
+        }
+        if (StringUtils.hasText(avatar) && !StringUtils.hasText(user.getAvatar())) {
+            user.setAvatar(avatar.trim());
+            needUpdate = true;
+        }
+
+        if (needUpdate) {
+            user.setUpdatedAt(new Date());
+        }
+        return needUpdate;
+    }
+
+    private String buildApplePreferredUsername(String nickname, String email) {
+        if (StringUtils.hasText(nickname)) {
+            return nickname.trim();
+        }
+        if (StringUtils.hasText(email) && email.contains("@")) {
+            String localPart = email.substring(0, email.indexOf('@')).trim();
+            if (StringUtils.hasText(localPart)) {
+                return localPart;
+            }
+        }
+        return "apple_user";
+    }
+
+    private String resolveAvailableUsername(String preferredUsername, Long excludeUserId) {
+        String baseUsername = normalizeUsername(preferredUsername);
+        if (!StringUtils.hasText(baseUsername)) {
+            baseUsername = "user";
+        }
+
+        if (!usernameExists(baseUsername, excludeUserId)) {
+            return baseUsername;
+        }
+
+        for (int i = 1; i <= 9999; i++) {
+            String suffix = "_" + i;
+            String candidate = trimToMaxLength(baseUsername, MAX_USERNAME_LENGTH - suffix.length()) + suffix;
+            if (!usernameExists(candidate, excludeUserId)) {
+                return candidate;
+            }
+        }
+
+        String randomSuffix = "_" + UUID.randomUUID().toString().replace("-", "").substring(0, 6);
+        return trimToMaxLength(baseUsername, MAX_USERNAME_LENGTH - randomSuffix.length()) + randomSuffix;
+    }
+
+    private boolean usernameExists(String username, Long excludeUserId) {
+        QueryWrapper<User> queryWrapper = new QueryWrapper<>();
+        queryWrapper.lambda().eq(User::getUsername, username);
+        if (excludeUserId != null) {
+            queryWrapper.lambda().ne(User::getId, excludeUserId);
+        }
+        Long count = userRepository.selectCount(queryWrapper);
+        return count != null && count > 0;
+    }
+
+    private String normalizeUsername(String preferredUsername) {
+        if (!StringUtils.hasText(preferredUsername)) {
+            return null;
+        }
+        String normalized = preferredUsername.trim().replaceAll("\\s+", " ");
+        return trimToMaxLength(normalized, MAX_USERNAME_LENGTH);
+    }
+
+    private String trimToMaxLength(String value, int maxLength) {
+        if (value == null || maxLength <= 0) {
+            return "";
+        }
+        return value.length() <= maxLength ? value : value.substring(0, maxLength);
     }
 }

@@ -10,6 +10,7 @@ import cn.jpush.api.push.model.Platform;
 import cn.jpush.api.push.model.PushPayload;
 import cn.jpush.api.push.model.audience.Audience;
 import cn.jpush.api.push.model.notification.AndroidNotification;
+import cn.jpush.api.push.model.notification.IosAlert;
 import cn.jpush.api.push.model.notification.IosNotification;
 import cn.jpush.api.push.model.notification.Notification;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -279,7 +280,9 @@ public class JPushService {
                                 .addExtras(extras)
                                 .build())
                         .addPlatformNotification(IosNotification.newBuilder()
-                                .setAlert(content)
+                                .setAlert(IosAlert.newBuilder()
+                                        .setTitleAndBody(title, null, content)
+                                        .build())
                                 .setSound("default")
                                 .addExtras(extras)
                                 .build())

@@ -290,6 +290,8 @@ public class CloudController {
                     vo.setDuration(null);
                 }
 
+                Object startTimeObj = video.get("start_time");
+                vo.setStartTime(startTimeObj != null ? String.valueOf(startTimeObj) : null);
                 vo.setCreatedAt((String) video.get("created_at"));
                 videoList.add(vo);
             }
@@ -317,12 +319,8 @@ public class CloudController {
             log.warn("获取云存订阅状态 - 无权查看, userId={}, deviceId={}", currentUserId, deviceId);
             return ApiResponse.error(403, "无权查看该设备");
         }
-        // 查询设备的云存订阅（不区分用户，云存跟着设备走）
-        QueryWrapper<CloudSubscription> qw = new QueryWrapper<>();
-        qw.lambda().eq(CloudSubscription::getDeviceId, deviceId)
-                .orderByDesc(CloudSubscription::getExpireAt)
-                .last("limit 1");
-        CloudSubscription sub = cloudSubscriptionRepository.selectOne(qw);
+        // 查询设备当前生效的云存订阅（纯4G流量套餐不算云存）
+        CloudSubscription sub = cloudStorageService.getLatestSubscription(deviceId);
 
         CloudSubscriptionVO response = new CloudSubscriptionVO();
         boolean isSubscribed = sub != null && (sub.getExpireAt() == null || sub.getExpireAt().after(new Date()));
@@ -359,11 +357,7 @@ public class CloudController {
             return ApiResponse.error(403, "no permission for this device");
         }
 
-        QueryWrapper<CloudSubscription> qw = new QueryWrapper<>();
-        qw.lambda().eq(CloudSubscription::getDeviceId, deviceId)
-                .orderByDesc(CloudSubscription::getExpireAt)
-                .last("limit 1");
-        CloudSubscription sub = cloudSubscriptionRepository.selectOne(qw);
+        CloudSubscription sub = cloudStorageService.getLatestSubscription(deviceId);
         if (sub == null) {
             return ApiResponse.error(404, "cloud subscription not found for device");
         }

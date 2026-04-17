@@ -7,6 +7,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.pura365.camera.domain.*;
 import com.pura365.camera.model.ApiResponse;
 import com.pura365.camera.repository.*;
+import com.pura365.camera.service.CloudStorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,10 +39,10 @@ public class VideoPlaybackController {
     private DeviceRecordRepository deviceRecordRepository;
 
     @Autowired
-    private CloudSubscriptionRepository cloudSubscriptionRepository;
+    private UserDeviceRepository userDeviceRepository;
 
     @Autowired
-    private UserDeviceRepository userDeviceRepository;
+    private CloudStorageService cloudStorageService;
 
     /**
      * 获取回放视频流信息 - GET /videos/{id}/playback
@@ -127,12 +128,7 @@ public class VideoPlaybackController {
     }
 
     private Date findCloudExpireAt(Long userId, String deviceId) {
-        QueryWrapper<CloudSubscription> qw = new QueryWrapper<>();
-        qw.lambda().eq(CloudSubscription::getUserId, userId)
-                .eq(CloudSubscription::getDeviceId, deviceId)
-                .orderByDesc(CloudSubscription::getExpireAt)
-                .last("limit 1");
-        CloudSubscription sub = cloudSubscriptionRepository.selectOne(qw);
+        CloudSubscription sub = cloudStorageService.getLatestSubscription(deviceId);
         return sub != null ? sub.getExpireAt() : null;
     }
 

@@ -155,6 +155,7 @@ public class TrafficPreviewPolicyService {
         }
 
         policy.put("activated_at", formatIsoTime(toDate(trialStartAt)));
+        policy.put("expire_at", formatIsoTime(toDate(trialStartAt.plusDays(TRIAL_DAYS))));
 
         long elapsedHours = Duration.between(trialStartAt, LocalDateTime.now()).toHours();
         long remainingHours = (TRIAL_DAYS * 24L) - elapsedHours;

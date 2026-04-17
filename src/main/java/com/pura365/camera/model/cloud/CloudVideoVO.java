@@ -61,6 +61,13 @@ public class CloudVideoVO {
     private Integer duration;
 
     /**
+     * 录像开始时间
+     */
+    @JsonProperty("start_time")
+    @Schema(description = "录像开始时间（优先用于列表和时间轴显示）", example = "2023-12-13T12:00:00")
+    private String startTime;
+
+    /**
      * 创建时间
      */
     @JsonProperty("created_at")

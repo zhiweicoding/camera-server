@@ -79,7 +79,9 @@ public class CloudVideoCleanupService {
         // 提取唯一的设备ID
         Set<String> deviceIds = new HashSet<>();
         for (CloudSubscription sub : subscriptions) {
-            deviceIds.add(sub.getDeviceId());
+            if (sub != null && cloudStorageService.hasActiveSubscription(sub.getDeviceId())) {
+                deviceIds.add(sub.getDeviceId());
+            }
         }
         
         log.info("共找到 {} 个设备有云存储订阅，开始异步清理...", deviceIds.size());

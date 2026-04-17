@@ -5,12 +5,12 @@ import com.pura365.camera.domain.CloudPlan;
 import com.pura365.camera.domain.CloudSubscription;
 import com.pura365.camera.domain.Device;
 import com.pura365.camera.domain.PaymentOrder;
-import com.pura365.camera.enums.CloudPlanType;
 import com.pura365.camera.enums.PaymentOrderStatus;
 import com.pura365.camera.repository.CloudPlanRepository;
 import com.pura365.camera.repository.CloudSubscriptionRepository;
 import com.pura365.camera.repository.DeviceRepository;
 import com.pura365.camera.repository.PaymentOrderRepository;
+import com.pura365.camera.util.SubscriptionPlanUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -108,10 +108,12 @@ public class PaymentCallbackService {
         
         paymentOrderRepository.updateById(order);
 
+        CloudPlan plan = findPlanByPlanId(order.getProductId());
+
         // 根据商品类型处理业务逻辑
         boolean success = false;
-        if (requiresCloudStorageActivation(order)) {
-            success = activateCloudStorage(order);
+        if (requiresSubscriptionActivation(order, plan)) {
+            success = activateSubscription(order, plan);
         }
 
         if (success) {
@@ -143,37 +145,36 @@ public class PaymentCallbackService {
             logger.warn("Repair skipped, order is not paid yet: orderId={}, status={}", orderId, order.getStatus());
             return false;
         }
-        if (!requiresCloudStorageActivation(order)) {
+        CloudPlan plan = findPlanByPlanId(order.getProductId());
+        if (!requiresCloudStorageActivation(order, plan)) {
             logger.warn("Repair skipped, unsupported product type: orderId={}, productType={}",
                     orderId, order.getProductType());
             return false;
         }
 
-        return activateCloudStorage(order);
+        return activateSubscription(order, plan);
     }
 
-    private boolean requiresCloudStorageActivation(PaymentOrder order) {
+    private boolean requiresSubscriptionActivation(PaymentOrder order, CloudPlan plan) {
         if (order == null) {
             return false;
         }
-        if (isCloudStorageProductType(order.getProductType())) {
-            return true;
-        }
-
-        CloudPlan plan = findPlanByPlanId(order.getProductId());
-        return plan != null && isCloudStorageProductType(plan.getType());
+        return SubscriptionPlanUtils.grantsAnySubscription(
+                plan != null ? plan.getType() : order.getProductType(),
+                order.getProductId(),
+                plan != null ? plan.getName() : null
+        );
     }
 
-    private boolean isCloudStorageProductType(String productType) {
-        if (productType == null) {
+    private boolean requiresCloudStorageActivation(PaymentOrder order, CloudPlan plan) {
+        if (order == null) {
             return false;
         }
-        if ("cloud_storage".equalsIgnoreCase(productType)) {
-            return true;
-        }
-
-        CloudPlanType planType = CloudPlanType.fromCode(productType);
-        return planType == CloudPlanType.MOTION || planType == CloudPlanType.FULLTIME;
+        return SubscriptionPlanUtils.grantsCloudStorage(
+                plan != null ? plan.getType() : order.getProductType(),
+                order.getProductId(),
+                plan != null ? plan.getName() : null
+        );
     }
 
     private CloudPlan findPlanByPlanId(String planId) {
@@ -188,18 +189,9 @@ public class PaymentCallbackService {
     /**
      * 激活云存储套餐
      */
-    private boolean activateCloudStorage(PaymentOrder order) {
+    private boolean activateSubscription(PaymentOrder order, CloudPlan plan) {
         try {
-            // 查询套餐信息以获取周期
-            CloudPlan plan = findPlanByPlanId(order.getProductId());
-
-            // 查询现有订阅，如果存在则延长有效期（按到期时间降序取最新的一条）
-            LambdaQueryWrapper<CloudSubscription> subWrapper = new LambdaQueryWrapper<>();
-            subWrapper.eq(CloudSubscription::getDeviceId, order.getDeviceId())
-                    .eq(CloudSubscription::getUserId, order.getUserId())
-                    .orderByDesc(CloudSubscription::getExpireAt)
-                    .last("LIMIT 1");
-            CloudSubscription existingSubscription = cloudSubscriptionRepository.selectOne(subWrapper);
+            CloudSubscription existingSubscription = findReusableSubscription(order, plan);
 
             // 计算到期时间：根据套餐周期
             Date baseTime;
@@ -215,15 +207,15 @@ public class PaymentCallbackService {
             Date expireAt = calculateExpireTime(baseTime, plan);
             
             if (existingSubscription != null) {
-                // 更新现有订阅
+                // 更新同类权益的现有订阅，避免纯4G套餐覆盖云存套餐，或反过来串改。
                 existingSubscription.setPlanId(order.getProductId());
                 existingSubscription.setPlanName(plan != null ? plan.getName() : null);
                 existingSubscription.setExpireAt(expireAt);
                 existingSubscription.setUpdatedAt(new Date());
                 cloudSubscriptionRepository.updateById(existingSubscription);
-                logger.info("已延长设备 {} 的云存储订阅至 {}", order.getDeviceId(), expireAt);
+                logger.info("已延长设备 {} 的套餐订阅至 {}", order.getDeviceId(), expireAt);
             } else {
-                // 创建新的云存储订阅记录
+                // 创建新的套餐订阅记录
                 CloudSubscription subscription = new CloudSubscription();
                 subscription.setUserId(order.getUserId());
                 subscription.setDeviceId(order.getDeviceId());
@@ -235,12 +227,12 @@ public class PaymentCallbackService {
                 subscription.setCreatedAt(new Date());
                 subscription.setUpdatedAt(new Date());
                 cloudSubscriptionRepository.insert(subscription);
-                logger.info("已创建设备 {} 的云存储订阅，到期时间 {}", order.getDeviceId(), expireAt);
+                logger.info("已创建设备 {} 的套餐订阅，到期时间 {}", order.getDeviceId(), expireAt);
             }
 
             // 更新设备云存储配置
             Device device = deviceRepository.selectById(order.getDeviceId());
-            if (device != null) {
+            if (device != null && requiresCloudStorageActivation(order, plan)) {
                 device.setCloudStorage(1); // 启用云存储
                 device.setUpdatedAt(LocalDateTime.now());
                 deviceRepository.updateById(device);
@@ -249,9 +241,42 @@ public class PaymentCallbackService {
 
             return true;
         } catch (Exception e) {
-            logger.error("激活云存储套餐失败: orderId={}", order.getOrderId(), e);
+            logger.error("激活套餐订阅失败: orderId={}", order.getOrderId(), e);
             return false;
         }
+    }
+
+    private CloudSubscription findReusableSubscription(PaymentOrder order, CloudPlan targetPlan) {
+        LambdaQueryWrapper<CloudSubscription> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(CloudSubscription::getDeviceId, order.getDeviceId())
+                .eq(CloudSubscription::getUserId, order.getUserId())
+                .orderByDesc(CloudSubscription::getExpireAt)
+                .last("LIMIT 50");
+        java.util.List<CloudSubscription> subscriptions = cloudSubscriptionRepository.selectList(wrapper);
+        if (subscriptions == null || subscriptions.isEmpty()) {
+            return null;
+        }
+
+        boolean targetCloud = SubscriptionPlanUtils.grantsCloudStorage(
+                targetPlan != null ? targetPlan.getType() : order.getProductType(),
+                order.getProductId(),
+                targetPlan != null ? targetPlan.getName() : null
+        );
+        boolean targetTraffic = SubscriptionPlanUtils.grantsTraffic(
+                targetPlan != null ? targetPlan.getType() : order.getProductType(),
+                order.getProductId(),
+                targetPlan != null ? targetPlan.getName() : null
+        );
+
+        for (CloudSubscription subscription : subscriptions) {
+            CloudPlan existingPlan = findPlanByPlanId(subscription.getPlanId());
+            boolean existingCloud = SubscriptionPlanUtils.grantsCloudStorage(subscription, existingPlan);
+            boolean existingTraffic = SubscriptionPlanUtils.grantsTraffic(subscription, existingPlan);
+            if (existingCloud == targetCloud && existingTraffic == targetTraffic) {
+                return subscription;
+            }
+        }
+        return null;
     }
 
     /**
