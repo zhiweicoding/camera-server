@@ -1,7 +1,12 @@
 package com.pura365.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.pura365.camera.domain.*;
+import com.pura365.camera.domain.CloudPlan;
+import com.pura365.camera.domain.Dealer;
+import com.pura365.camera.domain.Installer;
+import com.pura365.camera.domain.ManufacturedDevice;
+import com.pura365.camera.domain.PaymentOrder;
+import com.pura365.camera.domain.UserDevice;
 import com.pura365.camera.enums.EnableStatus;
 import com.pura365.camera.enums.PaymentOrderStatus;
 import com.pura365.camera.model.payment.*;
@@ -49,9 +54,6 @@ public class PaymentService {
     private PaymentOrderRepository paymentOrderRepository;
 
     @Autowired
-    private PaymentWechatRepository paymentWechatRepository;
-
-    @Autowired
     private CloudPlanRepository cloudPlanRepository;
 
     @Autowired
@@ -68,6 +70,9 @@ public class PaymentService {
 
     @Autowired
     private PaypalService paypalService;
+
+    @Autowired
+    private WechatPayService wechatPayService;
 
     @Autowired
     private ApplePayService applePayService;
@@ -291,24 +296,7 @@ public class PaymentService {
             return null;
         }
 
-        // 创建微信预支付记录 (mock)
-        PaymentWechat pw = new PaymentWechat();
-        pw.setOrderId(order.getOrderId());
-        pw.setPrepayId("mock_prepay_" + order.getOrderId());
-        pw.setRawResponse("{}");
-        pw.setCreatedAt(new Date());
-        paymentWechatRepository.insert(pw);
-
-        // 返回支付参数
-        WechatPayVO vo = new WechatPayVO();
-        vo.setAppid("wx_app_id_mock");
-        vo.setPartnerid("partner_mock");
-        vo.setPrepayid(pw.getPrepayId());
-        vo.setPackageValue("Sign=WXPay");
-        vo.setNoncestr(UUID.randomUUID().toString().replace("-", ""));
-        vo.setTimestamp(String.valueOf(System.currentTimeMillis() / 1000));
-        vo.setSign("mock_sign_" + order.getOrderId());
-        return vo;
+        return wechatPayService.createAppOrder(order);
     }
 
     /**

@@ -206,6 +206,12 @@
         -->
         <!-- 注: Google Play验证当前使用mock模式,无需额外依赖 -->
 
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
     <build>
