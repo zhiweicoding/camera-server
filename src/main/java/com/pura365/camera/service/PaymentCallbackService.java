@@ -233,10 +233,20 @@ public class PaymentCallbackService {
             // 更新设备云存储配置
             Device device = deviceRepository.selectById(order.getDeviceId());
             if (device != null && requiresCloudStorageActivation(order, plan)) {
-                device.setCloudStorage(1); // 启用云存储
+                int cloudStorageMode = SubscriptionPlanUtils.resolveCloudStorageMode(
+                        plan != null ? plan.getType() : null,
+                        order.getProductId(),
+                        plan != null ? plan.getName() : null
+                );
+                if (cloudStorageMode == SubscriptionPlanUtils.CLOUD_STORAGE_DISABLED) {
+                    cloudStorageMode = device.getCloudStorage() != null && device.getCloudStorage() > 0
+                            ? device.getCloudStorage()
+                            : SubscriptionPlanUtils.CLOUD_STORAGE_CONTINUOUS;
+                }
+                device.setCloudStorage(cloudStorageMode);
                 device.setUpdatedAt(LocalDateTime.now());
                 deviceRepository.updateById(device);
-                logger.info("已激活设备 {} 的云存储套餐", order.getDeviceId());
+                logger.info("已激活设备 {} 的云存储套餐, mode={}", order.getDeviceId(), cloudStorageMode);
             }
 
             return true;

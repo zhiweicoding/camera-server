@@ -235,6 +235,35 @@ public class CloudStorageService {
         Date expireAt = subscription.getExpireAt();
         return expireAt == null || expireAt.after(new Date());
     }
+
+    public int getCloudStorageMode(String deviceId) {
+        CloudSubscription subscription = getLatestSubscription(deviceId);
+        if (subscription == null) {
+            return SubscriptionPlanUtils.CLOUD_STORAGE_DISABLED;
+        }
+
+        Date expireAt = subscription.getExpireAt();
+        if (expireAt != null && !expireAt.after(new Date())) {
+            return SubscriptionPlanUtils.CLOUD_STORAGE_DISABLED;
+        }
+
+        CloudPlan plan = findPlanByPlanId(subscription.getPlanId());
+        int mode = SubscriptionPlanUtils.resolveCloudStorageMode(subscription, plan);
+        if (mode != SubscriptionPlanUtils.CLOUD_STORAGE_DISABLED) {
+            return mode;
+        }
+
+        Device device = deviceRepository.selectById(deviceId);
+        if (device != null && device.getCloudStorage() != null && device.getCloudStorage() > 0) {
+            log.warn("设备 {} 的套餐 {} 无法解析云存模式，回退使用设备表 cloud_storage={}",
+                    deviceId, subscription.getPlanId(), device.getCloudStorage());
+            return device.getCloudStorage();
+        }
+
+        log.warn("设备 {} 的套餐 {} 无法解析云存模式，回退为连续存储",
+                deviceId, subscription.getPlanId());
+        return SubscriptionPlanUtils.CLOUD_STORAGE_CONTINUOUS;
+    }
     
     /**
      * 获取设备的云存储配置

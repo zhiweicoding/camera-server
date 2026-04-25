@@ -470,10 +470,9 @@ public class CameraService {
         boolean hasSubscription = checkCloudStorageSubscription(device.getId());
         
         if (hasSubscription) {
-            // 有订阅，设置为连续存储模式
-            // TODO: 后续可从 CloudSubscription 表或 设备设置中读取具体模式
-            // 1 = 连续存储, 2 = 事件存储
-            response.setCloudStorage(1);
+            int cloudStorageMode = cloudStorageService.getCloudStorageMode(device.getId());
+            response.setCloudStorage(cloudStorageMode);
+            log.info("设备 {} 云存储已启用，下发模式={}", device.getId(), cloudStorageMode);
         } else {
             response.setCloudStorage(0); // 未启用
             clearCloudStorageCredentials(response);

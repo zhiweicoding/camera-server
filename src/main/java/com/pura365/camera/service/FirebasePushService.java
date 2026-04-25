@@ -188,9 +188,7 @@ public class FirebasePushService {
         }
 
         if (extras != null && !extras.isEmpty()) {
-            Map<String, String> data = extras.entrySet().stream()
-                    .filter(e -> StringUtils.hasText(e.getKey()) && e.getValue() != null)
-                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (a, b) -> a, LinkedHashMap::new));
+            Map<String, String> data = sanitizeExtrasForFcm(extras);
             if (!data.isEmpty()) {
                 message.put("data", data);
             }
@@ -199,6 +197,42 @@ public class FirebasePushService {
         Map<String, Object> wrapper = new HashMap<>();
         wrapper.put("message", message);
         return objectMapper.writeValueAsString(wrapper);
+    }
+
+    private Map<String, String> sanitizeExtrasForFcm(Map<String, String> extras) {
+        Map<String, String> data = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : extras.entrySet()) {
+            String rawKey = entry.getKey();
+            String value = entry.getValue();
+            if (!StringUtils.hasText(rawKey) || value == null) {
+                continue;
+            }
+
+            String key = rawKey.trim();
+            String normalizedKey = normalizeFcmDataKey(key);
+            if (!StringUtils.hasText(normalizedKey)) {
+                logger.warn("Firebase data payload key dropped key={}", key);
+                continue;
+            }
+            if (!key.equals(normalizedKey)) {
+                logger.info("Firebase data payload key remapped from {} to {}", key, normalizedKey);
+            }
+            if (!data.containsKey(normalizedKey)) {
+                data.put(normalizedKey, value);
+            }
+        }
+        return data;
+    }
+
+    private String normalizeFcmDataKey(String key) {
+        if ("message_type".equals(key)) {
+            return "type";
+        }
+        if ("from".equals(key) || "google".equals(key) || "gcm".equals(key)
+                || key.startsWith("google.") || key.startsWith("gcm.")) {
+            return null;
+        }
+        return key;
     }
 
     private String getAccessToken(ServiceAccount account, boolean forceRefresh) {

@@ -408,7 +408,7 @@ public class MessageService {
             }
             extras.put("message_id", String.valueOf(messageId));
             if (StringUtils.hasText(type)) {
-                extras.put("message_type", type);
+                extras.put("type", type);
             }
 
             log.info("开始执行消息推送 - messageId={}, userId={}, deviceId={}, type={}, title={}, extrasKeys={}",
