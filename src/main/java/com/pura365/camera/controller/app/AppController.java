@@ -242,9 +242,9 @@ public class AppController {
     /**
      * 检查设备是否在库中
      * GET /api/app/device/exists?device_id=xxx
-     * 用于APP扫描机身码时判断设备是否在manufactured_device表中
+     * 用于APP扫描机身码时判断设备是否在manufactured_device表中，以及是否已被绑定
      */
-    @Operation(summary = "检查设备是否在库中", description = "根据设备ID判断设备是否已入库(manufactured_device表)")
+    @Operation(summary = "检查设备是否在库中", description = "根据设备ID判断设备是否已入库，并返回是否已绑定")
     @GetMapping("/device/exists")
     public ApiResponse<Map<String, Object>> checkDeviceExists(
             @Parameter(description = "设备ID(机身码)") @RequestParam(name = "device_id") String deviceId) {
@@ -256,26 +256,26 @@ public class AppController {
             return ApiResponse.error(400, "device_id 不能为空");
         }
 
-        ManufacturedDevice device = deviceProductionService.getDevice(deviceId.trim());
+        String normalizedDeviceId = deviceId.trim();
+        ManufacturedDevice device = deviceProductionService.getDevice(normalizedDeviceId);
         boolean exists = device != null;
+        Long bindCount = userDeviceRepository.selectCount(
+                new LambdaQueryWrapper<UserDevice>().eq(UserDevice::getDeviceId, normalizedDeviceId));
+        boolean bound = bindCount != null && bindCount > 0;
 
         Map<String, Object> data = new HashMap<>();
         data.put("exists", exists);
-        data.put("device_id", deviceId);
+        data.put("device_id", normalizedDeviceId);
         if (exists) {
             data.put("status", device.getStatus() != null ? device.getStatus().getCode() : null);
         }
 
-//        // 检查设备是否已被绑定
-//        Long bindCount = userDeviceRepository.selectCount(
-//                new LambdaQueryWrapper<UserDevice>().eq(UserDevice::getDeviceId, deviceId.trim()));
-//        boolean bound = bindCount != null && bindCount > 0;
-        data.put("bound", false);
-//        if (bound) {
-//            log.info("设备已被绑定 deviceId={}", deviceId);
-//        }
+        data.put("bound", bound);
+        if (bound) {
+            log.info("设备已被绑定 deviceId={}", normalizedDeviceId);
+        }
 
-        log.info("检查设备结果 deviceId={}, exists={}", deviceId, exists);
+        log.info("检查设备结果 deviceId={}, exists={}, bound={}", normalizedDeviceId, exists, bound);
         return ApiResponse.success(data);
     }
 }
