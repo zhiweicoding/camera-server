@@ -137,28 +137,18 @@ public class JPushService {
         String pushRegion = regionRoutingService.resolveRegion();
         String routePolicy = resolveRoutePolicy();
         if (regionRoutingService.hasExplicitOverride()) {
-            if ("jpush-only".equals(routePolicy)) {
+            if (regionRoutingService.isChina()) {
                 if (!fcmTokens.isEmpty()) {
                     logger.info("Push region policy active region={}, policy={}, skipFirebaseTargets={}",
                             pushRegion, routePolicy, summarizeRegistrationIds(fcmTokens));
                 }
-                if (!apnsTokens.isEmpty()) {
-                    logger.info("Push region policy active region={}, policy={}, skipApnsTargets={}",
-                            pushRegion, routePolicy, summarizeRegistrationIds(apnsTokens));
-                }
                 fcmTokens = Collections.emptyList();
-                apnsTokens = Collections.emptyList();
-            } else if ("fcm-only".equals(routePolicy)) {
+            } else {
                 if (!jpushRegistrationIds.isEmpty()) {
                     logger.info("Push region policy active region={}, policy={}, skipJPushTargets={}",
                             pushRegion, routePolicy, summarizeRegistrationIds(jpushRegistrationIds));
                 }
-                if (!apnsTokens.isEmpty()) {
-                    logger.info("Push region policy active region={}, policy={}, skipApnsTargets={}",
-                            pushRegion, routePolicy, summarizeRegistrationIds(apnsTokens));
-                }
                 jpushRegistrationIds = Collections.emptyList();
-                apnsTokens = Collections.emptyList();
             }
         }
 
@@ -387,6 +377,6 @@ public class JPushService {
         if (!regionRoutingService.hasExplicitOverride()) {
             return "token-provider";
         }
-        return regionRoutingService.isChina() ? "jpush-only" : "fcm-only";
+        return regionRoutingService.isChina() ? "jpush+apns" : "fcm+apns";
     }
 }

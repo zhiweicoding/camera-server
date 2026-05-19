@@ -16,6 +16,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.interceptor.TransactionAspectSupport;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.Calendar;
@@ -78,9 +80,22 @@ public class PaymentCallbackService {
             return false;
         }
 
-        // 防止重复处理
+        CloudPlan plan = findPlanByPlanId(order.getProductId());
+
+        // 防止重复处理，同时允许修复“订单已支付但订阅未激活”的历史/异常状态。
         if (PaymentOrderStatus.PAID == order.getStatus()) {
-            logger.warn("订单已支付,跳过处理: orderId={}", orderId);
+            if (requiresSubscriptionActivation(order, plan)
+                    && !hasSubscriptionActivationForOrder(order, plan)) {
+                logger.warn("订单已支付但订阅未激活，尝试补写订阅: orderId={}", orderId);
+                boolean repaired = activateSubscription(order, plan);
+                if (!repaired) {
+                    logger.error("已支付订单补写订阅失败: orderId={}", orderId);
+                    return false;
+                }
+                logger.info("已支付订单补写订阅成功: orderId={}", orderId);
+            } else {
+                logger.warn("订单已支付,跳过处理: orderId={}", orderId);
+            }
             return true;
         }
 
@@ -108,10 +123,8 @@ public class PaymentCallbackService {
         
         paymentOrderRepository.updateById(order);
 
-        CloudPlan plan = findPlanByPlanId(order.getProductId());
-
         // 根据商品类型处理业务逻辑
-        boolean success = false;
+        boolean success = true;
         if (requiresSubscriptionActivation(order, plan)) {
             success = activateSubscription(order, plan);
         }
@@ -120,6 +133,8 @@ public class PaymentCallbackService {
             logger.info("支付回调处理成功: orderId={}", orderId);
         } else {
             logger.error("支付回调处理失败: orderId={}", orderId);
+            // 订单和订阅必须保持一致。若订阅激活失败，回滚本次 paid 状态，便于后续收据/回调重试。
+            TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
         }
 
         return success;
@@ -182,8 +197,16 @@ public class PaymentCallbackService {
             return null;
         }
         LambdaQueryWrapper<CloudPlan> planWrapper = new LambdaQueryWrapper<>();
-        planWrapper.eq(CloudPlan::getPlanId, planId);
-        return cloudPlanRepository.selectOne(planWrapper);
+        planWrapper.eq(CloudPlan::getPlanId, planId).last("LIMIT 1");
+        CloudPlan plan = cloudPlanRepository.selectOne(planWrapper);
+        if (plan != null) {
+            return plan;
+        }
+        try {
+            return cloudPlanRepository.selectById(Long.parseLong(planId));
+        } catch (Exception ignore) {
+            return null;
+        }
     }
 
     /**
@@ -287,6 +310,38 @@ public class PaymentCallbackService {
             }
         }
         return null;
+    }
+
+    private boolean hasSubscriptionActivationForOrder(PaymentOrder order, CloudPlan targetPlan) {
+        CloudSubscription subscription = findReusableSubscription(order, targetPlan);
+        if (subscription == null) {
+            return false;
+        }
+        if (!samePlan(subscription.getPlanId(), order.getProductId())) {
+            return false;
+        }
+
+        Date paidAt = order.getPaidAt() != null ? order.getPaidAt() : order.getCreatedAt();
+        if (paidAt == null) {
+            return true;
+        }
+
+        Date activationMarker = subscription.getUpdatedAt() != null
+                ? subscription.getUpdatedAt()
+                : subscription.getCreatedAt();
+        if (activationMarker != null) {
+            return !activationMarker.before(paidAt);
+        }
+
+        // Fallback for older rows without timestamps.
+        return subscription.getExpireAt() != null && subscription.getExpireAt().after(paidAt);
+    }
+
+    private boolean samePlan(String left, String right) {
+        if (!StringUtils.hasText(left) || !StringUtils.hasText(right)) {
+            return false;
+        }
+        return left.trim().equals(right.trim());
     }
 
     /**

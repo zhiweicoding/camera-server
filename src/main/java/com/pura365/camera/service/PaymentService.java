@@ -664,7 +664,11 @@ public class PaymentService {
             return result;
         }
 
-        ApplePayService.AppleReceiptVerifyResult verifyResult = applePayService.verifyReceipt(request.getReceiptData());
+        ApplePayService.AppleReceiptVerifyResult verifyResult = applePayService.verifyReceipt(
+                request.getReceiptData(),
+                appleProductId,
+                request.getTransactionId()
+        );
         if (!verifyResult.isSuccess()) {
             result.setErrorCode(400);
             result.setErrorMessage("Apple receipt verify failed: " + verifyResult.getErrorMessage());
@@ -677,9 +681,9 @@ public class PaymentService {
             return result;
         }
 
-        String transactionId = request.getTransactionId();
+        String transactionId = verifyResult.getTransactionId();
         if (!StringUtils.hasText(transactionId)) {
-            transactionId = verifyResult.getTransactionId();
+            transactionId = request.getTransactionId();
         }
         if (!StringUtils.hasText(transactionId)) {
             transactionId = "apple_" + order.getOrderId();
