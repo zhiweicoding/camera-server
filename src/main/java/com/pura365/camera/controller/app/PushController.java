@@ -1,5 +1,6 @@
 package com.pura365.camera.controller.app;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.pura365.camera.domain.UserPushToken;
 import com.pura365.camera.enums.EnableStatus;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.sql.SQLIntegrityConstraintViolationException;
 import java.util.Date;
+import java.util.List;
 
 /**
  * 推送管理接口
@@ -87,6 +89,7 @@ public class PushController {
             log.info("更新推送Token成功 - userId={}, affectedRows={}, provider={}, registrationId={}",
                     currentUserId, affectedRows, normalizedProvider,
                     PushProviderUtil.maskToken(normalizedRegistrationId));
+            logTokenSnapshot(currentUserId, "update");
             return ApiResponse.success("注册成功", null);
         }
 
@@ -113,6 +116,8 @@ public class PushController {
                     currentUserId, fallbackRows, normalizedProvider,
                     PushProviderUtil.maskToken(normalizedRegistrationId));
         }
+
+        logTokenSnapshot(currentUserId, "insert");
 
         return ApiResponse.success("注册成功", null);
     }
@@ -238,6 +243,25 @@ public class PushController {
             current = current.getCause();
         }
         return false;
+    }
+
+    private void logTokenSnapshot(Long userId, String stage) {
+        LambdaQueryWrapper<UserPushToken> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(UserPushToken::getUserId, userId);
+        List<UserPushToken> tokens = userPushTokenRepository.selectList(wrapper);
+        String snapshot = tokens.stream()
+                .map(token -> "id=" + token.getId()
+                        + ",provider=" + token.getProvider()
+                        + ",channel=" + token.getChannel()
+                        + ",deviceType=" + token.getDeviceType()
+                        + ",enabled=" + token.getEnabled()
+                        + ",appVersion=" + token.getAppVersion()
+                        + ",deviceModel=" + token.getDeviceModel()
+                        + ",osVersion=" + token.getOsVersion()
+                        + ",registrationId=" + PushProviderUtil.maskToken(token.getRegistrationId()))
+                .reduce((left, right) -> left + "; " + right)
+                .orElse("EMPTY");
+        log.info("注册推送Token后快照 - userId={}, stage={}, tokens=[{}]", userId, stage, snapshot);
     }
 
     /**

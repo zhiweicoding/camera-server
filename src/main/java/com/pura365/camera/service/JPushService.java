@@ -134,6 +134,15 @@ public class JPushService {
         fcmTokens = new ArrayList<>(new LinkedHashSet<>(fcmTokens));
         apnsTokens = new ArrayList<>(new LinkedHashSet<>(apnsTokens));
 
+        logger.info("Push provider buckets {}, jpushCount={}, firebaseCount={}, apnsCount={}, jpushTargets={}, firebaseTargets={}, apnsTargets={}",
+                context,
+                jpushRegistrationIds.size(),
+                fcmTokens.size(),
+                apnsTokens.size(),
+                summarizeRegistrationIds(jpushRegistrationIds),
+                summarizeRegistrationIds(fcmTokens),
+                summarizeRegistrationIds(apnsTokens));
+
         String pushRegion = regionRoutingService.resolveRegion();
         String routePolicy = resolveRoutePolicy();
         if (regionRoutingService.hasExplicitOverride()) {

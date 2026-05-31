@@ -117,6 +117,8 @@ public class FirebasePushService {
 
             try (Response response = sendFcmRequest(projectId, targetToken, title, content, extras, accessToken)) {
                 if (response != null && response.isSuccessful()) {
+                    logger.info("Firebase push success token={}, title={}, hasExtras={}",
+                            maskToken(targetToken), title, extras != null && !extras.isEmpty());
                     return true;
                 }
 
@@ -187,6 +189,8 @@ public class FirebasePushService {
             message.put("notification", notification);
         }
 
+        message.put("android", buildAndroidConfig());
+
         if (extras != null && !extras.isEmpty()) {
             Map<String, String> data = sanitizeExtrasForFcm(extras);
             if (!data.isEmpty()) {
@@ -197,6 +201,18 @@ public class FirebasePushService {
         Map<String, Object> wrapper = new HashMap<>();
         wrapper.put("message", message);
         return objectMapper.writeValueAsString(wrapper);
+    }
+
+    private Map<String, Object> buildAndroidConfig() {
+        Map<String, Object> notification = new HashMap<>();
+        notification.put("channel_id", "default_channel");
+        notification.put("default_sound", true);
+        notification.put("default_vibrate_timings", true);
+
+        Map<String, Object> android = new HashMap<>();
+        android.put("priority", "HIGH");
+        android.put("notification", notification);
+        return android;
     }
 
     private Map<String, String> sanitizeExtrasForFcm(Map<String, String> extras) {
