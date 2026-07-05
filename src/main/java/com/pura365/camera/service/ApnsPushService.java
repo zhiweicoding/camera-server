@@ -1,5 +1,7 @@
 package com.pura365.camera.service;
 
+import com.eatthepath.pushy.apns.DeliveryPriority;
+import com.eatthepath.pushy.apns.PushType;
 import com.eatthepath.pushy.apns.ApnsClient;
 import com.eatthepath.pushy.apns.ApnsClientBuilder;
 import com.eatthepath.pushy.apns.PushNotificationResponse;
@@ -16,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.io.File;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -97,13 +100,20 @@ public class ApnsPushService implements DisposableBean {
 
             String payload = buildPayload(title, content, extras);
             SimpleApnsPushNotification notification =
-                    new SimpleApnsPushNotification(deviceToken, topic, payload);
+                    new SimpleApnsPushNotification(
+                            deviceToken,
+                            topic,
+                            payload,
+                            Instant.now().plus(SimpleApnsPushNotification.DEFAULT_EXPIRATION_PERIOD),
+                            DeliveryPriority.IMMEDIATE,
+                            PushType.ALERT);
 
             PushNotificationResponse<SimpleApnsPushNotification> response =
                     client.sendNotification(notification).get(15, TimeUnit.SECONDS);
 
             if (response.isAccepted()) {
-                logger.info("APNs success token={}, topic={}", maskToken(deviceToken), topic);
+                logger.info("APNs success token={}, topic={}, apnsId={}",
+                        maskToken(deviceToken), topic, response.getApnsId());
                 return true;
             }
 

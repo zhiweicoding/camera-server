@@ -65,6 +65,7 @@ public final class PushProviderUtil {
             if (resolved != null) {
                 return resolved;
             }
+            return "apns";
         }
 
         resolved = normalizeProvider(configuredProvider);
